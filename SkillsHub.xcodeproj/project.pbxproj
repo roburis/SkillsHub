@@ -1,0 +1,614 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		D70000012FE4AFF60029CD95 /* Yams in Frameworks */ = {isa = PBXBuildFile; productRef = D70000022FE4AFF60029CD95 /* Yams */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A19499332FE4AFF60029CD95 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A194991B2FE4AFF60029CD95 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A19499222FE4AFF60029CD95;
+			remoteInfo = SkillsHub;
+		};
+		A194993D2FE4AFF60029CD95 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A194991B2FE4AFF60029CD95 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A19499222FE4AFF60029CD95;
+			remoteInfo = SkillsHub;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A19499232FE4AFF60029CD95 /* SkillsHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SkillsHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A19499322FE4AFF60029CD95 /* SkillsHubTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SkillsHubTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A194993C2FE4AFF60029CD95 /* SkillsHubUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SkillsHubUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A19499252FE4AFF60029CD95 /* SkillsHub */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SkillsHub;
+			sourceTree = "<group>";
+		};
+		A19499352FE4AFF60029CD95 /* SkillsHubTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SkillsHubTests;
+			sourceTree = "<group>";
+		};
+		A194993F2FE4AFF60029CD95 /* SkillsHubUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SkillsHubUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A19499202FE4AFF60029CD95 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D70000012FE4AFF60029CD95 /* Yams in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A194992F2FE4AFF60029CD95 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A19499392FE4AFF60029CD95 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A194991A2FE4AFF60029CD95 = {
+			isa = PBXGroup;
+			children = (
+				A19499252FE4AFF60029CD95 /* SkillsHub */,
+				A19499352FE4AFF60029CD95 /* SkillsHubTests */,
+				A194993F2FE4AFF60029CD95 /* SkillsHubUITests */,
+				A19499242FE4AFF60029CD95 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A19499242FE4AFF60029CD95 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A19499232FE4AFF60029CD95 /* SkillsHub.app */,
+				A19499322FE4AFF60029CD95 /* SkillsHubTests.xctest */,
+				A194993C2FE4AFF60029CD95 /* SkillsHubUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A19499222FE4AFF60029CD95 /* SkillsHub */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A19499462FE4AFF60029CD95 /* Build configuration list for PBXNativeTarget "SkillsHub" */;
+			buildPhases = (
+				A194991F2FE4AFF60029CD95 /* Sources */,
+				A19499202FE4AFF60029CD95 /* Frameworks */,
+				A19499212FE4AFF60029CD95 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A19499252FE4AFF60029CD95 /* SkillsHub */,
+			);
+			name = SkillsHub;
+			packageProductDependencies = (
+				D70000022FE4AFF60029CD95 /* Yams */,
+			);
+			productName = SkillsHub;
+			productReference = A19499232FE4AFF60029CD95 /* SkillsHub.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A19499312FE4AFF60029CD95 /* SkillsHubTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A19499492FE4AFF60029CD95 /* Build configuration list for PBXNativeTarget "SkillsHubTests" */;
+			buildPhases = (
+				A194992E2FE4AFF60029CD95 /* Sources */,
+				A194992F2FE4AFF60029CD95 /* Frameworks */,
+				A19499302FE4AFF60029CD95 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A19499342FE4AFF60029CD95 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A19499352FE4AFF60029CD95 /* SkillsHubTests */,
+			);
+			name = SkillsHubTests;
+			packageProductDependencies = (
+			);
+			productName = SkillsHubTests;
+			productReference = A19499322FE4AFF60029CD95 /* SkillsHubTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A194993B2FE4AFF60029CD95 /* SkillsHubUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A194994C2FE4AFF60029CD95 /* Build configuration list for PBXNativeTarget "SkillsHubUITests" */;
+			buildPhases = (
+				A19499382FE4AFF60029CD95 /* Sources */,
+				A19499392FE4AFF60029CD95 /* Frameworks */,
+				A194993A2FE4AFF60029CD95 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A194993E2FE4AFF60029CD95 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A194993F2FE4AFF60029CD95 /* SkillsHubUITests */,
+			);
+			name = SkillsHubUITests;
+			packageProductDependencies = (
+			);
+			productName = SkillsHubUITests;
+			productReference = A194993C2FE4AFF60029CD95 /* SkillsHubUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A194991B2FE4AFF60029CD95 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					A19499222FE4AFF60029CD95 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					A19499312FE4AFF60029CD95 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = A19499222FE4AFF60029CD95;
+					};
+					A194993B2FE4AFF60029CD95 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = A19499222FE4AFF60029CD95;
+					};
+				};
+			};
+			buildConfigurationList = A194991E2FE4AFF60029CD95 /* Build configuration list for PBXProject "SkillsHub" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A194991A2FE4AFF60029CD95;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A19499242FE4AFF60029CD95 /* Products */;
+			packageReferences = (
+				D70000032FE4AFF60029CD95 /* XCRemoteSwiftPackageReference "Yams" */,
+			);
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A19499222FE4AFF60029CD95 /* SkillsHub */,
+				A19499312FE4AFF60029CD95 /* SkillsHubTests */,
+				A194993B2FE4AFF60029CD95 /* SkillsHubUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A19499212FE4AFF60029CD95 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A19499302FE4AFF60029CD95 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A194993A2FE4AFF60029CD95 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A194991F2FE4AFF60029CD95 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A194992E2FE4AFF60029CD95 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A19499382FE4AFF60029CD95 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A19499342FE4AFF60029CD95 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A19499222FE4AFF60029CD95 /* SkillsHub */;
+			targetProxy = A19499332FE4AFF60029CD95 /* PBXContainerItemProxy */;
+		};
+		A194993E2FE4AFF60029CD95 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A19499222FE4AFF60029CD95 /* SkillsHub */;
+			targetProxy = A194993D2FE4AFF60029CD95 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D70000032FE4AFF60029CD95 /* XCRemoteSwiftPackageReference "Yams" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jpsim/Yams.git";
+			requirement = {
+				kind = exactVersion;
+				version = 6.0.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		D70000022FE4AFF60029CD95 /* Yams */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D70000032FE4AFF60029CD95 /* XCRemoteSwiftPackageReference "Yams" */;
+			productName = Yams;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A19499442FE4AFF60029CD95 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A19499452FE4AFF60029CD95 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		A19499472FE4AFF60029CD95 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Skills Hub";
+				INFOPLIST_KEY_CFBundleName = "Skills Hub";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.ledar.SkillsHub;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A19499482FE4AFF60029CD95 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Skills Hub";
+				INFOPLIST_KEY_CFBundleName = "Skills Hub";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.ledar.SkillsHub;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A194994A2FE4AFF60029CD95 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.ledar.SkillsHubTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SkillsHub.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SkillsHub";
+			};
+			name = Debug;
+		};
+		A194994B2FE4AFF60029CD95 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.ledar.SkillsHubTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SkillsHub.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SkillsHub";
+			};
+			name = Release;
+		};
+		A194994D2FE4AFF60029CD95 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.ledar.SkillsHubUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = SkillsHub;
+			};
+			name = Debug;
+		};
+		A194994E2FE4AFF60029CD95 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 53PW9396WT;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = me.ledar.SkillsHubUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = SkillsHub;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A194991E2FE4AFF60029CD95 /* Build configuration list for PBXProject "SkillsHub" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A19499442FE4AFF60029CD95 /* Debug */,
+				A19499452FE4AFF60029CD95 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A19499462FE4AFF60029CD95 /* Build configuration list for PBXNativeTarget "SkillsHub" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A19499472FE4AFF60029CD95 /* Debug */,
+				A19499482FE4AFF60029CD95 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A19499492FE4AFF60029CD95 /* Build configuration list for PBXNativeTarget "SkillsHubTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A194994A2FE4AFF60029CD95 /* Debug */,
+				A194994B2FE4AFF60029CD95 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A194994C2FE4AFF60029CD95 /* Build configuration list for PBXNativeTarget "SkillsHubUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A194994D2FE4AFF60029CD95 /* Debug */,
+				A194994E2FE4AFF60029CD95 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A194991B2FE4AFF60029CD95 /* Project object */;
+}

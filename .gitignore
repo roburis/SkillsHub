@@ -1,0 +1,14 @@
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+.skillshub.local.json
+.skillshub.operations.jsonl
+.scratch/
+.tmp/
+.agent-runs/
+/AGENTS.md
+/CLAUDE.md
+/docs/
+/specs/

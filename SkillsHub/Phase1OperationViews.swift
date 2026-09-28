@@ -1,0 +1,450 @@
+import SwiftUI
+
+struct Phase1OperationConfirmationSheet: View {
+    var plan: Phase1OperationPlan
+    var language: AppLanguage
+    var confirm: () -> Void
+    var cancel: () -> Void
+    @FocusState private var cancelFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label(title, systemImage: systemImage)
+                        .font(.title3.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityValue("\(title). \(localized("Operation")) \(plan.id.uuidString). \(localized("Target")) \(target). \(localized("Waiting for confirmation; no writes."))")
+                        .accessibilityIdentifier("phase1-operation-confirmation")
+
+                    LabeledContent(localized("Target")) {
+                        Text(target)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel(localized("Operation target"))
+                            .accessibilityValue(target)
+                            .accessibilityIdentifier("phase1-target-path")
+                    }
+
+                    GroupBox(localized("Immutable plan")) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(Array(plan.steps.enumerated()), id: \.offset) { index, step in
+                                Label("\(index + 1). \(localized(step))", systemImage: "circle")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 16) {
+                            boundaryBox(title: localized("Will write"), values: plan.expectedWrites, systemImage: "pencil.and.list.clipboard")
+                            boundaryBox(title: localized("Will not do"), values: plan.excludedActions, systemImage: "hand.raised", localizeValues: true)
+                        }
+                        VStack(alignment: .leading, spacing: 12) {
+                            boundaryBox(title: localized("Will write"), values: plan.expectedWrites, systemImage: "pencil.and.list.clipboard")
+                            boundaryBox(title: localized("Will not do"), values: plan.excludedActions, systemImage: "hand.raised", localizeValues: true)
+                        }
+                    }
+
+                    Text(localized("No business write occurs until this exact plan is confirmed."))
+                        .foregroundStyle(.secondary)
+
+                    Text("\(localized("Plan digest")): \(plan.planDigest)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("\(localized("Plan digest")) \(plan.planDigest)")
+
+                    Text("\(localized("Operation ID")): \(plan.id.uuidString)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .accessibilityLabel(localized("Operation ID"))
+                        .accessibilityValue(plan.id.uuidString)
+                        .accessibilityIdentifier("phase1-operation-id")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Divider()
+            HStack {
+                Button(localized("Cancel operation"), action: cancel)
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+                    .focused($cancelFocused)
+                Spacer()
+                Button(confirmTitle, action: confirm)
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityHint(localized("Consumes a one-time confirmation for this exact plan."))
+                    .disabled(plan.kind == .initializeRoot)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 700)
+        .onAppear { cancelFocused = true }
+    }
+
+    private var title: String {
+        switch plan.kind {
+        case .initializeRoot: return localized("Root establishment")
+        case .importLocalSource: return localized("Local source import in progress")
+        case .importGitHubSource: return localized("GitHub source import in progress")
+        case .registerLocalSource: return localized("Review source registration")
+        case .publishManagedCopy: return localized("Review managed-copy plan")
+        }
+    }
+
+    private var confirmTitle: String {
+        switch plan.kind {
+        case .initializeRoot: return localized("Start a new establishment action")
+        case .importLocalSource: return localized("Import already authorized")
+        case .importGitHubSource: return localized("Import already authorized")
+        case .registerLocalSource: return localized("Confirm source registration")
+        case .publishManagedCopy: return localized("Confirm managed copy")
+        }
+    }
+
+    private var target: String {
+        plan.targetPath ?? plan.source?.localPath ?? plan.source?.name ?? plan.rootPath
+    }
+
+    private var systemImage: String {
+        switch plan.kind {
+        case .initializeRoot: return "externaldrive.badge.plus"
+        case .importLocalSource: return "folder.badge.plus"
+        case .importGitHubSource: return "network.badge.shield.half.filled"
+        case .registerLocalSource: return "folder.badge.plus"
+        case .publishManagedCopy: return "square.and.arrow.down"
+        }
+    }
+
+    private func boundaryBox(title: String, values: [String], systemImage: String, localizeValues: Bool = false) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(values, id: \.self) { value in
+                    Label(localizeValues ? localized(value) : value, systemImage: "checkmark")
+                        .font(.caption)
+                        .accessibilityValue(value)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func localized(_ text: String) -> String {
+        SkillsHubLocalization().localized(text, language: language)
+    }
+}
+
+struct Phase1TasksView: View {
+    var tasks: [Phase1TaskRecord]
+    var language: AppLanguage = .english
+    @Binding var expandedTaskIDs: Set<UUID>
+    @Binding var scrollID: UUID?
+    var recheck: () -> Void = {}
+    var openObject: (Phase1TaskRecord) -> Void = { _ in }
+    var openAgent: ((String) -> Void)? = nil
+
+    var body: some View {
+        if tasks.isEmpty {
+            VStack(spacing: 12) {
+                ContentUnavailableView(
+                    localized("No pending operations"),
+                    systemImage: "checklist",
+                    description: Text(localized("No recovery record is pending. This does not assert that every managed object is healthy."))
+                )
+                Button(localized("Re-check current facts"), action: recheck)
+                    .accessibilityIdentifier("recheck-recovery-facts")
+            }
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Button(localized("Re-check current facts"), action: recheck)
+                            .accessibilityHint(localized("Reads current content, relationship, metadata, and retained-material facts without replaying an action."))
+                            .accessibilityIdentifier("recheck-recovery-facts")
+                        Spacer()
+                    }
+                    taskGroup("Waiting for confirmation", phase: .waitingConfirmation)
+                    taskGroup("Running", phases: [.preparing, .executing, .observing, .verifying])
+                    taskGroup("Needs attention", phase: .needsAttention)
+                    taskGroup("Recently completed", phase: .completed)
+                }
+                .scrollTargetLayout()
+                .padding(20)
+            }
+            .scrollPosition(id: $scrollID)
+            .accessibilityIdentifier("phase1-task-list")
+        }
+    }
+
+    private func localized(_ text: String) -> String {
+        SkillsHubLocalization().localized(text, language: language)
+    }
+
+    @ViewBuilder
+    private func taskGroup(_ title: String, phase: Phase1OperationPhase) -> some View {
+        taskGroup(title, phases: [phase])
+    }
+
+    @ViewBuilder
+    private func taskGroup(_ title: String, phases: Set<Phase1OperationPhase>) -> some View {
+        let records = tasks.filter { phases.contains($0.phase) }
+        if !records.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(SkillsHubLocalization().localized(title, language: language))
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(records) { task in
+                    Phase1TaskRow(
+                        task: task,
+                        language: language,
+                        isExpanded: expandedTaskIDs.contains(task.id),
+                        toggleExpanded: {
+                            if expandedTaskIDs.contains(task.id) {
+                                expandedTaskIDs.remove(task.id)
+                            } else {
+                                expandedTaskIDs.insert(task.id)
+                            }
+                        },
+                        openObject: openObject,
+                        openAgent: openAgent
+                    )
+                    .id(task.id)
+                }
+            }
+        }
+    }
+}
+
+struct Phase1TaskRow: View {
+    var task: Phase1TaskRecord
+    var language: AppLanguage
+    var isExpanded: Bool
+    var toggleExpanded: () -> Void
+    var openObject: (Phase1TaskRecord) -> Void
+    var openAgent: ((String) -> Void)?
+
+    var isDetailPage = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if isDetailPage {
+                taskLabel.padding(.bottom, 24)
+            } else {
+            Button {
+                toggleExpanded()
+            } label: {
+                HStack(alignment: .top) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .accessibilityHidden(true)
+                    taskLabel
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(accessibilitySummary)
+            .accessibilityValue(localized(isExpanded ? "Expanded" : "Collapsed"))
+            .accessibilityHint(localized("Press to show or hide the immutable action evidence and current-object links."))
+            .accessibilityIdentifier("phase1-task-\(task.id.uuidString)")
+            }
+            if isExpanded {
+                taskDetails
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        }
+    }
+
+    private var taskLabel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(localized(task.title), systemImage: icon)
+                Spacer()
+                Text(localized(task.phase.presentationLabel))
+                    .foregroundStyle(.secondary)
+                Text(task.updatedAt, style: .time)
+                    .foregroundStyle(.secondary)
+            }
+            Text(localized(task.result))
+                .font(.callout)
+                .foregroundStyle(task.phase == .needsAttention ? .primary : .secondary)
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var taskDetails: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let plan = task.operationPlan {
+                LabeledContent(localized("Operation kind"), value: plan.kind.rawValue)
+                LabeledContent(localized("Root"), value: plan.rootPath)
+                LabeledContent(localized("Generation"), value: String(plan.expectedGeneration))
+                if let schema = plan.initialMetadata?.schemaVersion {
+                    LabeledContent(localized("Schema"), value: String(schema))
+                }
+                Text(localized("Planned steps"))
+                    .font(.subheadline.weight(.semibold))
+                ForEach(Array(plan.steps.enumerated()), id: \.offset) { index, step in
+                    Text("\(index + 1). \(localized(step))").font(.caption)
+                }
+                Text(localized("Planned writes"))
+                    .font(.subheadline.weight(.semibold))
+                    .accessibilityIdentifier("task-planned-writes-\(task.id.uuidString)")
+                ForEach(plan.expectedWrites, id: \.self) { Text($0).font(.caption.monospaced()) }
+                Text(localized("Excluded actions"))
+                    .font(.subheadline.weight(.semibold))
+                ForEach(plan.excludedActions, id: \.self) { Text(localized($0)).font(.caption) }
+                Text(localized("Recorded steps and results"))
+                    .font(.subheadline.weight(.semibold))
+            }
+            if let evidence = task.relationEvidence {
+                relationEvidence(evidence)
+                Divider()
+            }
+            if let recovery = task.recoveryEvidence {
+                recoveryEvidence(recovery)
+                Divider()
+            }
+            ForEach(task.events) { event in
+                HStack(alignment: .firstTextBaseline) {
+                    Text(localized(event.phase.presentationLabel))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 132, alignment: .leading)
+                    Text(localized(event.message))
+                }
+            }
+            Text("\(localized("Evidence")): \(task.planDigest)")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(localized("Operation")) \(task.id.uuidString): \(localized(task.result))")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(localized(task.safeNextStep))
+                .accessibilityIdentifier("task-safe-next-step-\(task.id.uuidString)")
+            Button(localized(openObjectTitle)) {
+                openObject(task)
+            }
+            .accessibilityHint(openObjectHint)
+            .accessibilityIdentifier("task-open-skill-\(task.id.uuidString)")
+            if let evidence = task.relationEvidence, let openAgent {
+                Button("\(localized("View current")) \(evidence.agentDisplayName)") {
+                    openAgent(evidence.relation.agentID)
+                }
+                .accessibilityHint(localized("Navigates to the current Agent facts without replaying this task."))
+                .accessibilityIdentifier("task-open-agent-\(task.id.uuidString)")
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder
+    private func recoveryEvidence(_ evidence: Phase1RecoveryEvidence) -> some View {
+        Text(localized("Current facts"))
+            .font(.subheadline.weight(.semibold))
+        ForEach(Array(evidence.components.enumerated()), id: \.offset) { _, component in
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(localized(component.kind)): \(localized(component.state.presentationLabel))")
+                Text(component.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                Text(localized(component.detail))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(localized(component.kind)): \(localized(component.state.presentationLabel)). \(component.path). \(localized(component.detail))"
+            )
+            .accessibilityIdentifier("recovery-component-\(component.kind)")
+        }
+    }
+
+    @ViewBuilder
+    private func relationEvidence(_ evidence: Phase1RelationTaskEvidence) -> some View {
+        Group {
+            Text("\(localized("Target")): \(evidence.agentDisplayName) / \(evidence.skillName)")
+                .font(.headline)
+            Text("\(localized("Requested")): \(localized(evidence.desiredEnabled ? "Enabled" : "Disabled"))")
+            Text("\(localized("Outcome")): \(localized(evidence.outcome))")
+            Text("\(localized("Current conclusion")): \(localized(evidence.verification.presentationLabel))")
+            Text(localized("Actual delta"))
+                .font(.subheadline.weight(.semibold))
+            ForEach(evidence.actualDelta, id: \.self) { delta in
+                Text(localized(delta))
+            }
+            Text(localized("Evidence limitations"))
+                .font(.subheadline.weight(.semibold))
+            if evidence.limitations.isEmpty {
+                Text(localized("No recorded limitations."))
+            } else {
+                ForEach(evidence.limitations, id: \.self) { limitation in
+                    Text(localized(limitation))
+                }
+            }
+            Text("\(localized("Safe next step")): \(localized(evidence.safeNextStep))")
+        }
+        .font(.callout)
+    }
+
+    private var icon: String {
+        switch task.phase {
+        case .completed: "checkmark.circle"
+        case .needsAttention: "exclamationmark.triangle"
+        case .waitingConfirmation: "questionmark.circle"
+        default: "clock.arrow.circlepath"
+        }
+    }
+
+    private var openObjectTitle: String {
+        if task.relationEvidence != nil { return localized("View current Skill") }
+        switch task.kind {
+        case .initializeRoot: return localized("View current Root")
+        case .deleteBrokenLink: return localized("Return to Agent")
+        case .removeLocalSource, .updateSource: return localized("Return to Sources")
+        default: return localized("View authoritative object")
+        }
+    }
+
+    private var openObjectHint: String {
+        if task.relationEvidence != nil {
+            return localized("Navigates to the current Skill facts without replaying this task.")
+        }
+        if task.kind == .initializeRoot {
+            return localized("Returns to the current Root facts. Unknown operations are re-observed rather than replayed.")
+        } else if task.kind == .deleteBrokenLink {
+            return localized("Returns to the current Agent facts without replaying deletion.")
+        } else if task.kind == .removeLocalSource || task.kind == .updateSource {
+            return localized("Returns to the current source or parent list without replaying the recorded action.")
+        } else {
+            return localized("Navigates to the current source, candidate, or managed Skill facts.")
+        }
+    }
+
+    private var accessibilitySummary: String {
+        let base = "\(localized(task.title)). \(localized(task.phase.presentationLabel)). Operation \(task.id.uuidString). \(localized(task.result)). Object \(task.objectID). \(localized(task.safeNextStep))"
+        guard let evidence = task.relationEvidence else { return base }
+        return "\(base). Target \(evidence.agentDisplayName) and \(evidence.skillName). Requested \(evidence.desiredEnabled ? "enabled" : "disabled"). Outcome \(evidence.outcome). Current conclusion \(evidence.verification.presentationLabel). Actual delta \(evidence.actualDelta.joined(separator: " ")). Evidence limitations \(evidence.limitations.joined(separator: " ")). Safe next step \(evidence.safeNextStep)"
+    }
+
+    private func localized(_ text: String) -> String {
+        SkillsHubLocalization().localized(text, language: language)
+    }
+
+    private func localized(_ message: LocalizedMessage) -> String {
+        SkillsHubLocalization().localized(message, language: language)
+    }
+}
