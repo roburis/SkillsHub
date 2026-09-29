@@ -117,7 +117,7 @@ nonisolated struct Phase1RootPresentation: Hashable, Sendable {
         if let rootURL {
             self.init(
                 status: .authorized,
-                title: "SkillsHub Root connected",
+                title: "Management Directory connected",
                 detail: "The current Root was read back successfully. Source registration and managed-copy plans are available.",
                 statusLabel: "Authorized",
                 rootPath: rootURL.standardizedFileURL.path,
@@ -134,7 +134,7 @@ nonisolated struct Phase1RootPresentation: Hashable, Sendable {
             case .preparing, .executing, .observing, .verifying:
                 self.init(
                     status: .initializing(task.phase),
-                    title: "Initializing SkillsHub Root",
+                    title: "Initializing Management Directory",
                     detail: SkillsHubLocalization().localized(task.result, language: language),
                     statusLabel: task.phase.presentationLabel,
                     rootPath: task.objectID,
@@ -186,7 +186,7 @@ nonisolated struct Phase1RootPresentation: Hashable, Sendable {
         case .initializationRequired(let facts):
             self.init(
                 status: .initializationRequired,
-                title: "Directory can be established as a SkillsHub Root",
+                title: "Directory can be established as a Management Directory",
                 detail: "Selection and system authorization did not create content. Use Establish Management Directory to start one explicit action.",
                 statusLabel: "Ready for establishment · no writes",
                 rootPath: facts.url.path,
@@ -206,7 +206,7 @@ nonisolated struct Phase1RootPresentation: Hashable, Sendable {
         case .cancelled:
             self.init(
                 status: .unavailable,
-                title: "SkillsHub Root is not authorized",
+                title: "Management Directory is not authorized",
                 detail: "Root selection was canceled. No business write occurred; you can choose an exact directory when ready.",
                 statusLabel: "Selection canceled · no writes",
                 rootPath: nil,
@@ -226,8 +226,8 @@ nonisolated struct Phase1RootPresentation: Hashable, Sendable {
         case nil:
             self.init(
                 status: .unavailable,
-                title: "Authorize SkillsHub Root",
-                detail: "Manage one explicit Root. SkillsHub does not scan Home, common project folders, or the disk.",
+                title: "Authorize Management Directory",
+                detail: "Manage one explicit Root. Skills Hub does not scan Home, common project folders, or the disk.",
                 statusLabel: "Not authorized · source registration and managed copies are unavailable",
                 rootPath: nil,
                 primaryAction: .none,

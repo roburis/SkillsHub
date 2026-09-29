@@ -615,9 +615,9 @@ nonisolated final class AgentDirectoryAuditService {
         let summary: String
         switch type {
         case .localDirectoryNotManaged:
-            summary = "Local directory is not governed by SkillsHub."
+            summary = "Local directory is not governed by Skills Hub."
         case .externalSymlinkNotManaged:
-            summary = "Agent entry points outside the SkillsHub root."
+            summary = "Agent entry points outside the Management Directory."
         case .brokenSymlink:
             summary = "Agent entry is a broken symlink."
         case .duplicateWithHub:

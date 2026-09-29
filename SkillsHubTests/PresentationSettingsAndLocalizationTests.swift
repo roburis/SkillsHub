@@ -106,7 +106,7 @@ struct PresentationSettingsAndLocalizationTests {
         let service = AppSettingsService()
         let state = service.state(rootPath: "/custom/root", language: .chinese, cachePolicyName: "manual")
 
-        #expect(state.customRootWarning == "Custom root is only applied inside SkillsHub.")
+        #expect(state.customRootWarning == "Custom root is only applied inside Skills Hub.")
     }
 
     @Test func localizationCoversEnglishChineseAndJapaneseKeys() {
@@ -163,7 +163,7 @@ struct PresentationSettingsAndLocalizationTests {
             "Add Agent", "Agent Configuration", "Save name and abbreviation", "Custom Agent", "Built-in Agent",
             "Global skills directory", "Current directory", "Relationship management available", "Action in progress",
             "Expanded", "Collapsed", "Will clear", "Blocked", "Cancel Fetch", "Imported · Readable", "Imported · Needs Attention",
-            "Remove the verified SkillsHub-managed link and disable this relationship.",
+            "Remove the verified Skills Hub-managed link and disable this relationship.",
             "Disable this relationship; no link node is currently present.",
             "Agent configuration is unavailable; no cleanup was authorized.",
             "Current ownership is %@; the object remains unchanged.", "Current facts could not be verified: %@",
@@ -253,10 +253,32 @@ struct PresentationSettingsAndLocalizationTests {
         let preferences = AppLanguagePreferences(defaults: defaults)
         let controller = SkillsHubLibraryController(languagePreferences: preferences)
 
+        #expect(controller.language == .system)
+        #expect(SkillsHubLocalization().localized("Settings", language: controller.language, preferredLanguages: ["ja-JP"]) == "設定")
+
         controller.language = .japanese
 
         let restarted = SkillsHubLibraryController(languagePreferences: preferences)
         #expect(restarted.language == .japanese)
+    }
+
+    @Test func unconnectedRootStatesAndAgentGroupAreLocalized() {
+        let localization = SkillsHubLocalization()
+        let presentations = [
+            Phase1RootPresentation(rootURL: nil, inspectionResult: nil, pendingInitialization: nil, tasks: []),
+            Phase1RootPresentation(rootURL: nil, inspectionResult: .cancelled, pendingInitialization: nil, tasks: []),
+            Phase1RootPresentation(rootURL: nil, inspectionResult: .invalid(.unreadable(path: "/fixture/root")), pendingInitialization: nil, tasks: [])
+        ]
+        for language in [AppLanguage.chinese, .japanese] {
+            #expect(localization.localized("Agents", language: language) == "Agents")
+            #expect(localization.localized("Management Directory", language: language) != "Management Directory")
+            #expect(localization.localized("Managed by Skills Hub", language: language).contains("Skills Hub"))
+            for presentation in presentations {
+                #expect(localization.localized(presentation.title, language: language) != presentation.title)
+                #expect(localization.localized(presentation.detail, language: language) != presentation.detail)
+                #expect(localization.localized(presentation.statusLabel, language: language) != presentation.statusLabel)
+            }
+        }
     }
 
     @Test func rootPresentationProjectsUnavailableAndAuthorizedFacts() {

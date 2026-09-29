@@ -78,6 +78,7 @@ struct Phase1ProductShell: View {
     var addLocalSource: () -> Void
     var addGitHubSource: () -> Void
     var chooseAgentTarget: (AgentKind?, @escaping (URL) -> Void) -> Void
+    var chooseExactAgentTarget: (AgentKind, @escaping () -> Void) -> Void
     @State private var skillsWorkspaceStates: [String: SkillsWorkspaceState] = [:]
     @State private var sourceReturnDestination: Phase1NavigationDestination?
     @State private var selectedSkillID: String?
@@ -157,14 +158,7 @@ struct Phase1ProductShell: View {
                     workspace
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .navigationTitle(usesToolbarTitle ? "" : title)
-                .toolbar {
-                    if usesToolbarTitle {
-                        ToolbarItem(placement: .navigation) {
-                            Text(title).font(.headline).frame(height: 36)
-                        }
-                    }
-                }
+                .navigationTitle(title)
             }
             .onChange(of: columnVisibility) { _, value in
                 if value != .all { columnVisibility = .all }
@@ -236,7 +230,13 @@ struct Phase1ProductShell: View {
                 recheck: library.recheckRecoveryTasks,
                 openObject: openTaskObject,
                 openAgent: openTaskAgent
-            ))
+            ).toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button(appLocalized("Back to Settings", language: library.language), systemImage: "chevron.left") { requestNavigation(.settings) }
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("back-to-settings")
+                }
+            })
         case .managementDirectory:
             AnyView(Phase1FirstRunWorkspace(library: library, establishRoot: establishRoot, connectRoot: connectRoot,
                 openTasks: { requestNavigation(.tasks) })
@@ -275,6 +275,7 @@ struct Phase1ProductShell: View {
                 establishRoot: establishRoot,
                 connectRoot: connectRoot,
                 chooseAgentTarget: chooseAgentTarget,
+                chooseExactAgentTarget: chooseExactAgentTarget,
                 openAgent: { requestNavigation(.agent($0)) },
                 openTasks: { requestNavigation(.tasks) },
                 openManagementDirectory: { requestNavigation(.managementDirectory) },
@@ -307,10 +308,6 @@ struct Phase1ProductShell: View {
                 returnToSource: returnToSource, needsAttentionOnly: $skillNeedsAttentionOnly
             )
         }
-    }
-
-    private var usesToolbarTitle: Bool {
-        selection == .settings || selection == .tasks || (selection == .allSkills && !library.hasRoot)
     }
 
     private var title: String {
@@ -646,14 +643,14 @@ private struct Phase1FirstRunWorkspace: View {
                 .font(.title2)
                 .bold()
             Text(localized(rootPresentation.statusLabel))
-                .accessibilityLabel("\(localized("SkillsHub Root")). \(rootPresentation.accessibilityValue(language: library.language))")
+                .accessibilityLabel("\(localized("Management Directory")). \(rootPresentation.accessibilityValue(language: library.language))")
                 .accessibilityIdentifier("phase1-root-status")
             if let rootPath = rootPresentation.rootPath {
                 Text(rootPath)
                     .font(.system(.body, design: .monospaced))
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-                    .accessibilityLabel(localized("SkillsHub Root path"))
+                    .accessibilityLabel(localized("Management Directory path"))
                     .accessibilityValue(rootPath)
             }
             GroupBox(localized("Nothing runs automatically")) {
@@ -668,7 +665,7 @@ private struct Phase1FirstRunWorkspace: View {
                 .foregroundStyle(.secondary)
             if rootPresentation.primaryAction == .openTasks,
                let actionTitle = rootPresentation.primaryActionTitle {
-                Button(actionTitle, action: openTasks)
+                Button(localized(actionTitle), action: openTasks)
                     .buttonStyle(.bordered)
             } else {
                 HStack {
@@ -1627,7 +1624,7 @@ private struct Phase1AgentWorkspace: View {
                             Text(relation.skillName).font(.headline).lineLimit(1)
                             if relation.hasPresentationIssue { Image(systemName: "exclamationmark.triangle") }
                         }
-                        Text(localized(relation.verification == .verifiedConsistent ? "Managed by SkillsHub" : "Ownership needs verification")).font(.caption)
+                        Text(localized(relation.verification == .verifiedConsistent ? "Managed by Skills Hub" : "Ownership needs verification")).font(.caption)
                         Text(localized(relation.verification.presentationLabel)).font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 10)
@@ -1639,7 +1636,7 @@ private struct Phase1AgentWorkspace: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(finding.entryName).font(.headline).lineLimit(1)
                         Text(localized(finding.summary)).lineLimit(2).foregroundStyle(.secondary)
-                        Text(localized(agentOwnedFindings.contains { $0.id == finding.id } ? "Not managed by SkillsHub" : "Ownership needs verification")).font(.caption)
+                        Text(localized(agentOwnedFindings.contains { $0.id == finding.id } ? "Not managed by Skills Hub" : "Ownership needs verification")).font(.caption)
                     }
                     .padding(.vertical, 10)
                     .tag("finding:" + finding.id)
@@ -1663,7 +1660,7 @@ private struct Phase1AgentWorkspace: View {
                         Text(finding.entryName).font(.title2.bold())
                         Text(localized(finding.summary))
                         Phase1AgentFindingRow(finding: finding,
-                            classification: agentOwnedFindings.contains { $0.id == finding.id } ? "Not managed by SkillsHub" : "Ownership needs verification",
+                            classification: agentOwnedFindings.contains { $0.id == finding.id } ? "Not managed by Skills Hub" : "Ownership needs verification",
                             selection: "See relationship evidence",
                             copyToHub: agentOwnedFindings.contains { $0.id == finding.id } ? addLocalSource : nil,
                             deleteBrokenLink: finding.type == .brokenSymlink ? {
@@ -1775,7 +1772,7 @@ private struct Phase1AgentFindingRow: View {
             .accessibilityHint(localized("Expand to read current evidence and the read-only boundary."))
             .accessibilityIdentifier("agent-finding-\(finding.id)")
             if let copyToHub {
-                Button(localized("Copy into SkillsHub…"), action: copyToHub)
+                Button(localized("Copy into Skills Hub…"), action: copyToHub)
                     .accessibilityHint(localized("Choose and authorize the exact external source folder. The original remains, and the managed copy is not enabled for any Agent."))
                     .accessibilityIdentifier("copy-agent-entry-\(finding.id)")
                 Text(localized("Choose the exact external folder. The original stays in place, and the copy is not enabled for any Agent."))
@@ -1801,8 +1798,8 @@ private enum AgentWorkspaceOwnershipFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .all: "All ownership"
-        case .managed: "Managed by SkillsHub"
-        case .external: "Not managed by SkillsHub"
+        case .managed: "Managed by Skills Hub"
+        case .external: "Not managed by Skills Hub"
         case .unknown: "Ownership needs verification"
         }
     }
@@ -1834,6 +1831,7 @@ private struct Phase1SettingsWorkspace: View {
     var establishRoot: () -> Void
     var connectRoot: () -> Void
     var chooseAgentTarget: (AgentKind?, @escaping (URL) -> Void) -> Void
+    var chooseExactAgentTarget: (AgentKind, @escaping () -> Void) -> Void
     var openAgent: (String) -> Void
     var openTasks: () -> Void
     var openManagementDirectory: () -> Void
@@ -1853,6 +1851,43 @@ private struct Phase1SettingsWorkspace: View {
                     }
                 }
                 Section(localized("Agents")) {
+                    Button(localized("Refresh default Agent directories")) {
+                        library.refreshDefaultAgentDirectories()
+                    }
+                    .disabled(!library.hasRoot)
+                    .accessibilityIdentifier("refresh-default-agent-directories")
+                    if !library.hasRoot {
+                        Text(localized("Connect a Management Directory to refresh Agent directories."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach([AgentKind.codex, .claudeCode], id: \.self) { agent in
+                        if let status = library.defaultAgentDirectoryRefresh[agent] {
+                            LabeledContent(agent.displayName) {
+                                VStack(alignment: .trailing, spacing: 3) {
+                                    Text(localized(refreshDescription(for: status)))
+                                        .accessibilityIdentifier("default-agent-directory-status-\(agent.rawValue)")
+                                    Text(library.agentPathResolver.globalSkillsDirectory(
+                                        for: agent,
+                                        environment: library.agentEnvironment,
+                                        homeDirectory: library.agentHomeDirectory
+                                    ).path)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                }
+                            }
+                            if status == .authorizationRequired || status == .unverifiable {
+                                Button(localized("Authorize default directory…")) {
+                                    chooseExactAgentTarget(agent) {
+                                        library.refreshDefaultAgentDirectories()
+                                    }
+                                }
+                                .accessibilityLabel("\(localized("Authorize default directory…")) \(agent.displayName)")
+                                .accessibilityIdentifier("authorize-default-agent-directory-\(agent.rawValue)")
+                            }
+                        }
+                    }
                     ForEach(library.visibleInstalledAgentDescriptors) { descriptor in
                         Phase1AgentSettingsRow(
                             descriptor: descriptor,
@@ -1912,12 +1947,12 @@ private struct Phase1SettingsWorkspace: View {
                     .id(configuration.id)
                 }
                 Section(localized("Management Directory")) {
-                    LabeledContent(localized("SkillsHub Root")) {
+                    LabeledContent(localized("Management Directory")) {
                         HStack {
                             Text(library.rootURL?.path ?? localized("Not authorized"))
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
-                                .accessibilityLabel(localized("SkillsHub Root path"))
+                                .accessibilityLabel(localized("Management Directory path"))
                                 .accessibilityValue(library.rootURL?.path ?? localized("Not authorized"))
                             Button(localized("Manage Directory…"), action: openManagementDirectory)
                                 .accessibilityIdentifier("manage-root-settings")
@@ -1951,6 +1986,16 @@ private struct Phase1SettingsWorkspace: View {
             .formStyle(.grouped)
             .padding(20)
         .accessibilityIdentifier("settings-workspace")
+    }
+
+    private func refreshDescription(for status: AgentDefaultDirectoryRefreshStatus) -> String {
+        switch status {
+        case .manageable: "Manageable"
+        case .missing: "Directory does not exist"
+        case .authorizationRequired: "Authorization required"
+        case .unverifiable: "Unable to verify directory"
+        case .otherDirectoryConfigured: "Another directory is configured; default was skipped"
+        }
     }
 }
 

@@ -1,5 +1,14 @@
 import CryptoKit
+import Darwin
 import Foundation
+
+enum AgentDefaultDirectoryRefreshStatus: Equatable {
+    case manageable
+    case missing
+    case authorizationRequired
+    case unverifiable
+    case otherDirectoryConfigured
+}
 
 nonisolated struct AgentDirectoryChangeBlocker: Hashable, Identifiable, Sendable {
     enum Kind: String, Hashable, Sendable {
@@ -18,6 +27,69 @@ nonisolated struct AgentDirectoryChangeBlocker: Hashable, Identifiable, Sendable
 }
 
 extension SkillsHubLibraryController {
+    func refreshDefaultAgentDirectories() {
+        guard hasRoot else {
+            defaultAgentDirectoryRefresh = [:]
+            return
+        }
+        defaultAgentDirectoryRefresh = Dictionary(uniqueKeysWithValues: [AgentKind.codex, .claudeCode].map { agent in
+            (agent, inspectDefaultAgentDirectory(agent))
+        })
+    }
+
+    private func inspectDefaultAgentDirectory(_ agent: AgentKind) -> AgentDefaultDirectoryRefreshStatus {
+        let target = agentPathResolver.globalSkillsDirectory(
+            for: agent, environment: agentEnvironment, homeDirectory: agentHomeDirectory
+        ).standardizedFileURL
+        if resolvedAgentSkillsDirectory(for: agent).standardizedFileURL != target {
+            return .otherDirectoryConfigured
+        }
+        if let configured = agentConfigurations.first(where: { $0.id == agent.rawValue })?.skillsDirectory,
+           URL(fileURLWithPath: configured, isDirectory: true).standardizedFileURL != target {
+            return .otherDirectoryConfigured
+        }
+        let authorization: StartupAccessBookmarkResolution
+        do {
+            guard let resolved = try startupAccessStore.resolveAccess(to: target) else {
+                return .authorizationRequired
+            }
+            authorization = resolved
+        } catch {
+            return .unverifiable
+        }
+        guard !authorization.isStale,
+              authorization.url.standardizedFileURL == target else {
+            return .unverifiable
+        }
+        let lease: SecurityScopedAccessLease
+        do {
+            lease = try securityScopedAccessProvider.acquire(
+                url: authorization.url,
+                owner: .agentTarget(actionID: UUID(), agent: agent)
+            )
+        } catch {
+            return .unverifiable
+        }
+        defer { _ = lease.end(by: lease.owner) }
+        guard !FileAccessService(fileManager: fileManager).isSymlink(target) else {
+            return .unverifiable
+        }
+        guard isDirectory(target) else {
+            var node = stat()
+            if lstat(target.path, &node) == -1 && errno == ENOENT {
+                return .missing
+            }
+            return .unverifiable
+        }
+        let qualification = AgentTargetQualifier().qualify(
+            agent: agent,
+            detected: false,
+            candidates: [target],
+            authorization: authorization
+        )
+        return qualification.allowsManagedWrite ? .manageable : .unverifiable
+    }
+
     var agentConfigurations: [AgentConfigurationRecord] {
         rootSnapshot?.metadata.agents ?? AgentConfigurationRecord.phase1BuiltIns
     }
@@ -203,7 +275,7 @@ extension SkillsHubLibraryController {
                 kind: .access,
                 id: "configuration-missing",
                 title: "Agent configuration is unavailable",
-                detail: "Reconnect the current SkillsHub Root before changing this directory.",
+                detail: "Reconnect the current Management Directory before changing this directory.",
                 skillID: nil
             )]
         }
@@ -738,7 +810,7 @@ extension SkillsHubLibraryController {
                         agentDisplayName: descriptor.displayName,
                         linkPath: facts.linkPath,
                         disposition: .removable,
-                        detail: "Remove the verified SkillsHub-managed link and disable this relationship."
+                        detail: "Remove the verified Skills Hub-managed link and disable this relationship."
                     )
                 case .vacant:
                     return ManagedRelationClearItem(

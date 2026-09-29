@@ -458,7 +458,7 @@ extension SkillsHubLibraryController {
 
     private func operationTitle(for kind: Phase1OperationKind) -> String {
         switch kind {
-        case .initializeRoot: return "Establish SkillsHub Root"
+        case .initializeRoot: return "Establish Management Directory"
         case .importLocalSource: return "Import local source"
         case .importGitHubSource: return "Import GitHub source"
         case .registerLocalSource: return "Register local source"
