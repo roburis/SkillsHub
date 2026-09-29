@@ -13,6 +13,8 @@ struct SkillsHubLibraryControllerTests {
         try FileManager.default.createDirectory(at: claude.deletingLastPathComponent(), withIntermediateDirectories: true)
         let externalFile = codex.appendingPathComponent("existing.txt")
         try Data("untouched".utf8).write(to: externalFile)
+        let externalLink = codex.appendingPathComponent("existing-link")
+        try FileManager.default.createSymbolicLink(at: externalLink, withDestinationURL: externalFile)
         let store = InMemoryStartupAccessStore(restorablePaths: [root.path, codex.path])
         let adapter = RecordingSecurityScopedResourceAccessAdapter()
         let controller = SkillsHubLibraryController(
@@ -30,12 +32,20 @@ struct SkillsHubLibraryControllerTests {
         let metadataBefore = try Data(contentsOf: metadataURL)
         let fileBefore = try Data(contentsOf: externalFile)
         let nodeBefore = try FileManager.default.attributesOfItem(atPath: externalFile.path)
+        let linkBefore = try LinkNodeIdentity.read(at: externalLink)
         let baselineStarts = adapter.startRecords.count
         let baselineStops = adapter.stoppedURLs.count
 
         controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.codex] == .manageable)
+        #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .missing)
+        #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "existing.txt" })
+        #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "existing-link" })
+        #expect(!controller.agentFindings.contains { $0.agentID == AgentKind.claudeCode.rawValue })
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: false)
+        controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .authorizationRequired)
+        try FileManager.default.removeItem(at: claude)
         store.restorablePaths.insert(claude.path)
         controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .missing)
@@ -48,6 +58,7 @@ struct SkillsHubLibraryControllerTests {
         controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .otherDirectoryConfigured)
         #expect(try Data(contentsOf: externalFile) == fileBefore)
+        #expect(try LinkNodeIdentity.read(at: externalLink) == linkBefore)
         let nodeAfter = try FileManager.default.attributesOfItem(atPath: externalFile.path)
         for key in [FileAttributeKey.systemFileNumber, .posixPermissions, .modificationDate] {
             #expect((nodeBefore[key] as? AnyHashable) == (nodeAfter[key] as? AnyHashable))
@@ -901,7 +912,14 @@ struct SkillsHubLibraryControllerTests {
         )
         #expect(presentation.observation == node)
         #expect(presentation.verification == expected)
-        try fixture.controller.auditAllDetectedAgentDirectories()
+        if change == "permission" {
+            #expect(throws: (any Error).self) {
+                try fixture.controller.auditAllDetectedAgentDirectories()
+            }
+            #expect(fixture.controller.agentDirectoryAuditFailures[agent.rawValue] != nil)
+        } else {
+            try fixture.controller.auditAllDetectedAgentDirectories()
+        }
         presentation = try #require(
             fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent }
         )
@@ -911,7 +929,9 @@ struct SkillsHubLibraryControllerTests {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
-        #expect(try encoder.encode(persisted) == encoder.encode(fixture.controller.localState))
+        if change != "permission" {
+            #expect(try encoder.encode(persisted) == encoder.encode(fixture.controller.localState))
+        }
         #expect(fixture.controller.rootSnapshot?.metadata.managedRelationEvidence == ownership)
         #expect(fixture.controller.localState.managedRelationEvidence.isEmpty)
         #expect(try Data(contentsOf: metadataURL) == metadata)

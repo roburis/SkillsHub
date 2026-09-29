@@ -839,8 +839,75 @@ final class SkillsHubUITests: XCTestCase {
         let refresh = app.buttons["refresh-default-agent-directories"]
         XCTAssertTrue(refresh.isEnabled)
         refresh.click()
+        for agent in ["codex", "claudeCode"] {
+            XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-status-\(agent)"].exists
+                || app.descendants(matching: .any)["default-agent-directory-verified-\(agent)"].exists)
+        }
+    }
+
+    @MainActor
+    func testDefaultAgentRefreshShowsCurrentEntriesAtMinimumWidthInThreeLanguages() throws {
+        for (language, title) in [
+            ("en", "Refresh default Agent directories"),
+            ("zh-Hans", "刷新默认 Agent 目录"),
+            ("ja", "既定のAgentディレクトリを更新")
+        ] {
+            let fixture = try makeFixture()
+            let hidden = fixture.home.appending(path: ".codex/skills/.hidden-review")
+            try Data("hidden".utf8).write(to: hidden)
+            let app = try launch(fixture: fixture, language: language, windowWidth: 1040)
+            selectNavigation("settings", in: app)
+            let refresh = app.buttons["refresh-default-agent-directories"]
+            let heading = app.descendants(matching: .any)["settings-agents-heading"]
+            XCTAssertTrue(refresh.isHittable)
+            XCTAssertTrue(heading.exists)
+            XCTAssertEqual(refresh.label, title)
+            XCTAssertGreaterThan(refresh.frame.minX, heading.frame.maxX)
+            XCTAssertEqual(refresh.frame.midY, heading.frame.midY, accuracy: 16)
+            refresh.click()
+            XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-verified-codex"].waitForExistence(timeout: 3))
+            selectNavigation("agent-codex", in: app)
+            XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.staticTexts[".hidden-review"].exists)
+            app.terminate()
+            try fixture.cleanup()
+            activeFixture = nil
+        }
+    }
+
+    @MainActor
+    func testDefaultAgentDirectoryAuthorizationCancelAndExactSelection() throws {
+        let fixture = try makeFixture()
+        let app = try launch(fixture: fixture, additionalArguments: ["--skillshub-ui-agent-authorization-fixture"])
+        selectNavigation("settings", in: app)
+        app.buttons["refresh-default-agent-directories"].click()
+        let authorize = app.buttons["authorize-default-agent-directory-codex"]
+        let verified = app.descendants(matching: .any)["default-agent-directory-verified-codex"]
+        XCTAssertTrue(authorize.waitForExistence(timeout: 3))
+        XCTAssertFalse(verified.exists)
+
+        authorize.click()
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 3))
+        app.sheets.buttons["Cancel"].click()
+        XCTAssertTrue(authorize.exists)
+        XCTAssertFalse(verified.exists)
+
+        authorize.click()
+        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 3))
+        let target = fixture.home.appending(path: ".codex/skills", directoryHint: .isDirectory)
+        chooseDirectory(target, in: app)
+        XCTAssertTrue(verified.waitForExistence(timeout: 3))
+        selectNavigation("agent-codex", in: app)
+        XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
+        try FileManager.default.moveItem(at: target, to: fixture.runRoot.appending(path: "removed-codex-skills"))
+        selectNavigation("settings", in: app)
+        app.buttons["refresh-default-agent-directories"].click()
+        XCTAssertFalse(verified.exists)
         XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-status-codex"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-status-claudeCode"].exists)
+        selectNavigation("agent-codex", in: app)
+        XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Agent directory has not been verified."].firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["No matching Skills"].exists)
     }
 
     @MainActor
