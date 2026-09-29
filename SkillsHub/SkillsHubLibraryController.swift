@@ -35,6 +35,9 @@ final class SkillsHubLibraryController {
         didSet {
             defaultAgentDirectoryRefresh = [:]
             agentDirectoryAuditFailures = [:]
+            if oldValue?.standardizedFileURL != rootURL?.standardizedFileURL {
+                agentFindings = []
+            }
         }
     }
     var availableSkills: [AvailableSkill]

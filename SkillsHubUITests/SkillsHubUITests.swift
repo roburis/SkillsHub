@@ -561,8 +561,19 @@ final class SkillsHubUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(app.toolbars.firstMatch.searchFields["agent-workspace-search"].frame.width, 210)
             selectNavigation("settings", in: app)
             XCTAssertTrue(app.staticTexts["Settings"].exists)
+            checkToolbarHeight("settings")
             app.buttons["manage-root-settings"].click()
+            let confirmation = app.alerts.firstMatch
+            XCTAssertTrue(confirmation.waitForExistence(timeout: 2))
+            XCTAssertTrue(confirmation.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", fixture.root.path)
+            ).firstMatch.exists)
+            confirmation.buttons["Cancel"].click()
+            XCTAssertTrue(app.descendants(matching: .any)["settings-workspace"].exists)
+            app.buttons["manage-root-settings"].click()
+            app.alerts.firstMatch.buttons["Choose Another Directory"].click()
             XCTAssertTrue(app.staticTexts["Management Directory"].exists)
+            checkToolbarHeight("management-directory")
         }
         let report = XCTAttachment(string: metrics.joined(separator: "\n"))
         report.name = "Toolbar metrics"
@@ -869,6 +880,9 @@ final class SkillsHubUITests: XCTestCase {
             selectNavigation("agent-codex", in: app)
             XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
             XCTAssertTrue(app.staticTexts[".hidden-review"].exists)
+            selectNavigation("settings", in: app)
+            selectNavigation("agent-codex", in: app)
+            XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
             app.terminate()
             try fixture.cleanup()
             activeFixture = nil

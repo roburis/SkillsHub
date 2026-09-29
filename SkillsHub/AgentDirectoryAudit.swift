@@ -449,12 +449,13 @@ nonisolated final class AgentDirectoryAuditService {
                 continue
             }
 
-            guard detection.detected, detection.skillsDirectoryExists, detection.entryCount > 0 else {
+            guard detection.skillsDirectoryExists, detection.entryCount > 0 else {
                 continue
             }
 
-            let currentFingerprint = structuralFingerprint(for: URL(fileURLWithPath: detection.skillsDirectory, isDirectory: true))
             let previous = localState.agentAuditSnapshots.first { $0.agentID == detection.agentID && $0.skillsDirectory == detection.skillsDirectory }
+            guard detection.detected || previous != nil else { continue }
+            let currentFingerprint = structuralFingerprint(for: URL(fileURLWithPath: detection.skillsDirectory, isDirectory: true))
             if previous == nil || previous?.directoryFingerprint != currentFingerprint {
                 findings.append(finding(
                     agentID: detection.agentID,
