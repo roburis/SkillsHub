@@ -13,7 +13,32 @@ extension SkillsHubLibraryController {
             checkInstallation: checkInstallation
         )
         agentDetections = result.detections
-        agentFindings = result.findings
+        let retainedFindings = agentFindings.filter { finding in
+            guard [.localDirectoryNotManaged, .externalSymlinkNotManaged, .brokenSymlink,
+                   .duplicateWithHub, .aliasConflict, .rootMovedRepairAvailable, .invalidEntry].contains(finding.type),
+                  let detection = result.detections.first(where: { $0.agentID == finding.agentID }),
+                  detection.skillsDirectoryExists, detection.readable, detection.writable,
+                  let snapshot = localState.agentAuditSnapshots.first(where: {
+                      $0.agentID == finding.agentID && $0.skillsDirectory == detection.skillsDirectory
+                  }),
+                  snapshot.entryCount == detection.entryCount,
+                  !result.findings.contains(where: {
+                      $0.agentID == finding.agentID && $0.type == .pendingAudit
+                  }) else { return false }
+            return true
+        }
+        agentFindings = result.findings + retainedFindings
+        for agent in [AgentKind.codex, .claudeCode] where defaultAgentDirectoryRefresh[agent] == .manageable {
+            let detection = result.detections.first { $0.agentID == agent.rawValue }
+            let snapshot = localState.agentAuditSnapshots.first {
+                $0.agentID == agent.rawValue && $0.skillsDirectory == detection?.skillsDirectory
+            }
+            if detection?.skillsDirectoryExists != true || detection?.readable != true || detection?.writable != true
+                || snapshot?.entryCount != detection?.entryCount
+                || result.findings.contains(where: { $0.agentID == agent.rawValue && $0.type == .pendingAudit }) {
+                defaultAgentDirectoryRefresh[agent] = .unverifiable
+            }
+        }
         localState.detectedAgentsSnapshot = result.detections
         localState.lastAgentLightScanAt = Date()
         refreshRelationObservations(for: result.detections)

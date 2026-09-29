@@ -1717,6 +1717,14 @@ private struct Phase1AgentWorkspace: View {
             }
         }
         .onChange(of: visibleIDs, initial: true) { _, ids in if let selectedID, !ids.contains(selectedID) { self.selectedID = nil } }
+        .onAppear {
+            guard library.hasRoot, let id = descriptor?.id,
+                  library.localState.agentAuditSnapshots.contains(where: { $0.agentID == id }),
+                  !library.agentFindings.contains(where: {
+                      $0.agentID == id && $0.domain == .agentDirectory && $0.type != .pendingAudit
+                  }) else { return }
+            do { try library.auditAgentDirectory(agentID: id) } catch { library.handle(error) }
+        }
         .accessibilityIdentifier("agent-workspace")
         .alert(localized("Delete this link node?"), item: $pendingBrokenLinkDeletion) { plan in
             Button(localized("Delete link node"), role: .destructive) {
@@ -1855,6 +1863,7 @@ private struct Phase1SettingsWorkspace: View {
     @Binding var configuredAgentID: String?
     @Binding var isAddingAgent: Bool
     @Binding var draft: AgentConfigurationDraft
+    @State private var confirmRootChange = false
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
 
     var body: some View {
@@ -1955,7 +1964,10 @@ private struct Phase1SettingsWorkspace: View {
                                 .textSelection(.enabled)
                                 .accessibilityLabel(localized("Management Directory path"))
                                 .accessibilityValue(library.rootURL?.path ?? localized("Not authorized"))
-                            Button(localized("Manage Directory…"), action: openManagementDirectory)
+                            Button(localized(library.hasRoot ? "Change Management Directory…" : "Manage Directory…")) {
+                                if library.hasRoot { confirmRootChange = true }
+                                else { openManagementDirectory() }
+                            }
                                 .accessibilityIdentifier("manage-root-settings")
                         }
                     }
@@ -1986,6 +1998,19 @@ private struct Phase1SettingsWorkspace: View {
             }
             .formStyle(.grouped)
             .padding(20)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Color.clear.frame(width: 0, height: 36).accessibilityHidden(true)
+                }
+            }
+            .alert(localized("Change Management Directory?"), isPresented: $confirmRootChange) {
+                Button(localized("Choose Another Directory"), action: openManagementDirectory)
+                    .accessibilityIdentifier("confirm-change-management-directory")
+                Button(localized("Cancel"), role: .cancel) {}
+            } message: {
+                Text(localized("Current directory: %@\nChanging the active directory does not move its Skills or update existing Agent links.")
+                    .replacingOccurrences(of: "%@", with: library.rootURL?.path ?? ""))
+            }
         .accessibilityIdentifier("settings-workspace")
     }
 
