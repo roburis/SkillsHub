@@ -466,7 +466,7 @@ extension SkillsHubLibraryController {
         case .notDirectory(let path):
             return "The selected object is not a directory: \(path)"
         case .symbolicLink(let path):
-            return "A symbolic link cannot be used as the SkillsHub Root: \(path)"
+            return "A symbolic link cannot be used as the Management Directory: \(path)"
         case .unreadable(let path):
             return "The selected directory is not readable: \(path)"
         case .invalidMetadata(let path, let reason):

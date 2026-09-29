@@ -31,7 +31,7 @@ nonisolated final class AppSettingsService {
             rootPath: rootPath,
             language: language,
             cachePolicyName: cachePolicyName,
-            customRootWarning: rootPath == defaultRootPath ? nil : "Custom root is only applied inside SkillsHub."
+            customRootWarning: rootPath == defaultRootPath ? nil : "Custom root is only applied inside Skills Hub."
         )
     }
 

@@ -346,7 +346,7 @@ final class SkillsHubUITests: XCTestCase {
         let fixture = try makeFixture()
         let app = try launch(fixture: fixture, empty: true)
 
-        XCTAssertTrue(app.staticTexts["Authorize SkillsHub Root"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Authorize Management Directory"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["Start using SkillsHub"].exists)
         let sidebar = app.descendants(matching: .any)["phase1-product-sidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 2))
@@ -394,9 +394,35 @@ final class SkillsHubUITests: XCTestCase {
 
         selectNavigation("settings", in: app)
         XCTAssertTrue(app.descendants(matching: .any)["settings-workspace"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["refresh-default-agent-directories"].isEnabled)
         XCTAssertTrue(app.buttons["manage-root-settings"].exists)
         app.buttons["manage-root-settings"].click()
         XCTAssertTrue(app.buttons["connect-root-primary"].waitForExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testUnconnectedDirectoryAndRefreshInThreeLanguages() throws {
+        for (language, status) in [("system", "未授权"), ("en", "Not authorized"), ("zh-Hans", "未授权"), ("ja", "未許可")] {
+            let fixture = try makeFixture()
+            let app = try launch(fixture: fixture, empty: true, language: language, windowWidth: 1040)
+            let rootStatus = app.descendants(matching: .any)["phase1-root-status"]
+            XCTAssertTrue(rootStatus.waitForExistence(timeout: 3))
+            let actualStatus = "\(rootStatus.label) \(String(describing: rootStatus.value))"
+            XCTAssertTrue(actualStatus.contains(status), "\(language): \(actualStatus)")
+            selectNavigation("settings", in: app)
+            XCTAssertTrue(app.staticTexts["Agents"].exists)
+            if language == "system" {
+                XCTAssertEqual(app.popUpButtons.firstMatch.value as? String, "跟随系统")
+            }
+            XCTAssertFalse(app.buttons["refresh-default-agent-directories"].isEnabled)
+            let screenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            screenshot.name = "Unconnected \(language) 1040pt"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            app.terminate()
+            try fixture.cleanup()
+            activeFixture = nil
+        }
     }
 
     @MainActor
@@ -534,9 +560,9 @@ final class SkillsHubUITests: XCTestCase {
             checkToolbarHeight("agent-codex")
             XCTAssertGreaterThanOrEqual(app.toolbars.firstMatch.searchFields["agent-workspace-search"].frame.width, 210)
             selectNavigation("settings", in: app)
-            checkToolbarHeight("settings")
+            XCTAssertTrue(app.staticTexts["Settings"].exists)
             app.buttons["manage-root-settings"].click()
-            checkToolbarHeight("management-directory")
+            XCTAssertTrue(app.staticTexts["Management Directory"].exists)
         }
         let report = XCTAttachment(string: metrics.joined(separator: "\n"))
         report.name = "Toolbar metrics"
@@ -806,6 +832,15 @@ final class SkillsHubUITests: XCTestCase {
         selectNavigation("tasks", in: app)
         XCTAssertTrue(app.descendants(matching: .any)["phase1-task-list"].waitForExistence(timeout: 2))
         assertTaskGroups(["Waiting for confirmation", "Running", "Needs attention", "Recently completed"], in: app)
+        let back = app.buttons["back-to-settings"]
+        XCTAssertTrue(back.waitForExistence(timeout: 2))
+        back.click()
+        XCTAssertTrue(app.descendants(matching: .any)["settings-workspace"].waitForExistence(timeout: 2))
+        let refresh = app.buttons["refresh-default-agent-directories"]
+        XCTAssertTrue(refresh.isEnabled)
+        refresh.click()
+        XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-status-codex"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-status-claudeCode"].exists)
     }
 
     @MainActor
@@ -1445,7 +1480,7 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["codex-review"].exists)
         app.staticTexts["agent-owned-review"].firstMatch.click()
-        XCTAssertTrue(app.buttons["Copy into SkillsHub…"].exists)
+        XCTAssertTrue(app.buttons["Copy into Skills Hub…"].exists)
         app.staticTexts["codex-review"].firstMatch.click()
         let brokenLink = fixture.home.appending(path: ".codex/skills/codex-review")
         let deleteBrokenLink = app.buttons["Delete broken link…"]

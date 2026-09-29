@@ -95,7 +95,8 @@ struct ContentView: View {
             connectRoot: connectRoot,
             addLocalSource: addLocalSource,
             addGitHubSource: showGitHubSourceSheet,
-            chooseAgentTarget: chooseAgentTarget
+            chooseAgentTarget: chooseAgentTarget,
+            chooseExactAgentTarget: chooseExactAgentTarget
         )
         .task {
             bootstrapDefaultRoot()
@@ -304,8 +305,22 @@ struct ContentView: View {
         )
     }
 
+    private func chooseExactAgentTarget(
+        agent: AgentKind,
+        selected: @escaping () -> Void
+    ) {
+        let target = library.agentPathResolver.globalSkillsDirectory(
+            for: agent, environment: library.agentEnvironment, homeDirectory: library.agentHomeDirectory
+        ).standardizedFileURL
+        chooseDirectory(defaultDirectoryURL: target, requiredDirectoryURL: target, allowCreation: false) { _ in
+            selected()
+        }
+    }
+
     private func chooseDirectory(
         defaultDirectoryURL: URL? = nil,
+        requiredDirectoryURL: URL? = nil,
+        allowCreation: Bool = true,
         action: @escaping (URL) throws -> Void,
         onCancel: @escaping () -> Void = {}
     ) {
@@ -313,7 +328,7 @@ struct ContentView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
+        panel.canCreateDirectories = allowCreation
         panel.resolvesAliases = true
         panel.directoryURL = defaultDirectoryURL
         NSApp.activate(ignoringOtherApps: true)
@@ -321,6 +336,10 @@ struct ContentView: View {
         let completion: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .OK, let url = panel.url else {
                 onCancel()
+                return
+            }
+            if let requiredDirectoryURL, url.standardizedFileURL != requiredDirectoryURL {
+                library.handle(SkillsHubLibraryFailure.invalidSource("Choose the exact default Agent skills directory."))
                 return
             }
             handleSelectedURL(url, action: action)
@@ -406,7 +425,7 @@ private struct GitHubSourceImportSheet: View {
             Text(localized("Add GitHub Source"))
                 .font(.title2.weight(.semibold))
                 .accessibilityIdentifier("github-source-import-sheet")
-            Text(localized("Enter a public repository root. SkillsHub verifies and keeps the complete repository at one commit; no Agent is enabled."))
+            Text(localized("Enter a public repository root. Skills Hub verifies and keeps the complete repository at one commit; no Agent is enabled."))
                 .foregroundStyle(.secondary)
             TextField("https://github.com/owner/repository", text: $input)
                 .textFieldStyle(.roundedBorder)

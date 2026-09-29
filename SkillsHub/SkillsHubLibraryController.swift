@@ -31,7 +31,9 @@ final class SkillsHubLibraryController {
     let appSupportURL: URL
     let agentHomeDirectory: URL
     let agentEnvironment: [String: String]
-    var rootURL: URL?
+    var rootURL: URL? {
+        didSet { defaultAgentDirectoryRefresh = [:] }
+    }
     var availableSkills: [AvailableSkill]
     var installedSkills: [InstalledSkill]
     var sources: [SkillSource]
@@ -51,6 +53,7 @@ final class SkillsHubLibraryController {
     var localState: SkillsHubLocalState
     var agentDetections: [AgentDetectionSnapshot]
     var agentFindings: [AgentDirectoryFinding]
+    var defaultAgentDirectoryRefresh: [AgentKind: AgentDefaultDirectoryRefreshStatus] = [:]
     var rootSnapshot: RootSnapshot?
     var pendingRootInitialization: RootInspectionFacts?
     var lastRootInspectionResult: RootInspectionResult?
@@ -580,8 +583,8 @@ extension SkillsHubLibraryController {
                 type: .localDirectoryNotManaged,
                 entryName: "agent-owned-review",
                 entryKind: .localDirectory,
-                summary: "This directory is owned by Codex and is not managed by SkillsHub.",
-                evidence: ["Entry kind: local directory", "Ownership: no SkillsHub relation evidence"],
+                summary: "This directory is owned by Codex and is not managed by Skills Hub.",
+                evidence: ["Entry kind: local directory", "Ownership: no Skills Hub relation evidence"],
                 sourcePath: home.appending(path: ".codex/skills/agent-owned-review", directoryHint: .isDirectory).path,
                 targetPath: nil,
                 linkPath: nil,

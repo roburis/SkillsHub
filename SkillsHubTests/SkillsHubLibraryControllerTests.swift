@@ -4,6 +4,71 @@ import Testing
 
 @MainActor
 struct SkillsHubLibraryControllerTests {
+    @Test func explicitDefaultAgentDirectoryRefreshKeepsExternalNodesAndRootMetadataUnchanged() throws {
+        let root = try temporaryDirectory()
+        let home = try temporaryDirectory()
+        let codex = AgentPathResolver().globalSkillsDirectory(for: .codex, environment: [:], homeDirectory: home)
+        let claude = AgentPathResolver().globalSkillsDirectory(for: .claudeCode, environment: [:], homeDirectory: home)
+        try FileManager.default.createDirectory(at: codex, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: claude.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let externalFile = codex.appendingPathComponent("existing.txt")
+        try Data("untouched".utf8).write(to: externalFile)
+        let store = InMemoryStartupAccessStore(restorablePaths: [root.path, codex.path])
+        let adapter = RecordingSecurityScopedResourceAccessAdapter()
+        let controller = SkillsHubLibraryController(
+            agentAuditService: AgentDirectoryAuditService(installationPresence: { _, _ in .absent }),
+            agentHomeDirectory: home,
+            agentEnvironment: [:],
+            startupAccessStore: store,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: adapter)
+        )
+        #expect(controller.defaultAgentDirectoryRefresh.isEmpty)
+        controller.refreshDefaultAgentDirectories()
+        #expect(controller.defaultAgentDirectoryRefresh.isEmpty)
+        try connectInitializedTestRoot(controller, at: root)
+        let metadataURL = root.appendingPathComponent(".skillshub.json")
+        let metadataBefore = try Data(contentsOf: metadataURL)
+        let fileBefore = try Data(contentsOf: externalFile)
+        let nodeBefore = try FileManager.default.attributesOfItem(atPath: externalFile.path)
+        let baselineStarts = adapter.startRecords.count
+        let baselineStops = adapter.stoppedURLs.count
+
+        controller.refreshDefaultAgentDirectories()
+        #expect(controller.defaultAgentDirectoryRefresh[.codex] == .manageable)
+        #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .authorizationRequired)
+        store.restorablePaths.insert(claude.path)
+        controller.refreshDefaultAgentDirectories()
+        #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .missing)
+        try FileManager.default.createSymbolicLink(at: claude, withDestinationURL: codex)
+        controller.refreshDefaultAgentDirectories()
+        #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .unverifiable)
+        var snapshot = try #require(controller.rootSnapshot)
+        snapshot.metadata.agents[1].skillsDirectory = codex.path
+        controller.rootSnapshot = snapshot
+        controller.refreshDefaultAgentDirectories()
+        #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .otherDirectoryConfigured)
+        #expect(try Data(contentsOf: externalFile) == fileBefore)
+        let nodeAfter = try FileManager.default.attributesOfItem(atPath: externalFile.path)
+        for key in [FileAttributeKey.systemFileNumber, .posixPermissions, .modificationDate] {
+            #expect((nodeBefore[key] as? AnyHashable) == (nodeAfter[key] as? AnyHashable))
+        }
+        #expect(try Data(contentsOf: metadataURL) == metadataBefore)
+        #expect(store.savedPaths.isEmpty)
+        #expect(adapter.startRecords.count - baselineStarts == adapter.stoppedURLs.count - baselineStops)
+
+        let denied = SkillsHubLibraryController(
+            agentHomeDirectory: home,
+            agentEnvironment: [:],
+            startupAccessStore: store,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(
+                adapter: RecordingSecurityScopedResourceAccessAdapter(allowsStart: false)
+            )
+        )
+        denied.rootURL = root
+        denied.refreshDefaultAgentDirectories()
+        #expect(denied.defaultAgentDirectoryRefresh[.codex] == .unverifiable)
+    }
+
     @Test(arguments: [AgentKind.codex, .claudeCode])
     func authorizedDirectoryWithoutInstallationCanEnableManagedCapability(_ agent: AgentKind) throws {
         let root = try temporaryDirectory()

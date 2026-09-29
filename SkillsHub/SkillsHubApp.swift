@@ -48,7 +48,7 @@ final class SkillsHubAppDelegate: NSObject, NSApplicationDelegate {
            arguments.indices.contains(appearanceIndex + 1) {
             NSApp.appearance = NSAppearance(named: arguments[appearanceIndex + 1] == "Dark" ? .darkAqua : .aqua)
         }
-        if arguments.contains("--skillshub-ui-fixture"),
+        if arguments.contains("--skillshub-ui-fixture") || arguments.contains("--skillshub-ui-empty-fixture"),
            let flagIndex = arguments.firstIndex(of: "--skillshub-ui-fixture-window-width"),
            arguments.indices.contains(flagIndex + 1),
            let width = Double(arguments[flagIndex + 1]) {
