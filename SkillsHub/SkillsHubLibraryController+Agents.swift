@@ -1312,7 +1312,7 @@ extension SkillsHubLibraryController {
     }
 
     var defaultRootURL: URL {
-        agentHomeDirectory.appendingPathComponent("ai-projects/skills-hub", isDirectory: true)
+        agentHomeDirectory.appendingPathComponent("skills-hub", isDirectory: true)
     }
 
     func agentPathStatus(isOverride: Bool, skillsDirectoryExists: Bool, isWritable: Bool) -> AgentPathStatus {

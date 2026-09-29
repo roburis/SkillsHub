@@ -59,8 +59,8 @@ struct SkillsHubLibraryControllerTests {
         let home = try temporaryDirectory()
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home)
 
-        #expect(controller.settingsRootPathDisplay == home.appendingPathComponent("ai-projects/skills-hub").path)
-        #expect(controller.suggestedRootURL.path == home.appendingPathComponent("ai-projects/skills-hub").path)
+        #expect(controller.settingsRootPathDisplay == home.appendingPathComponent("skills-hub").path)
+        #expect(controller.suggestedRootURL.path == home.appendingPathComponent("skills-hub").path)
 
         let root = try temporaryDirectory()
         try connectInitializedTestRoot(controller, at: root)
@@ -75,7 +75,7 @@ struct SkillsHubLibraryControllerTests {
         let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home)
 
-        #expect(controller.settingsState.rootPath == "/Users/test/ai-projects/skills-hub")
+        #expect(controller.settingsState.rootPath == "/Users/test/skills-hub")
         #expect(controller.settingsState.customRootWarning == nil)
     }
 
@@ -168,7 +168,7 @@ struct SkillsHubLibraryControllerTests {
 
     @Test func bootstrapDefaultRootDoesNotAdoptWritableDirectoryWithoutPersistedAuthorization() throws {
         let home = try temporaryDirectory()
-        let defaultRoot = home.appendingPathComponent("ai-projects/skills-hub", isDirectory: true)
+        let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         let roles = defaultRoot.appendingPathComponent("local/roles-skills", isDirectory: true)
         try FileManager.default.createDirectory(at: roles, withIntermediateDirectories: true)
         try skillText(name: "roles-skills", description: "Composite local roles pack.").write(
@@ -201,12 +201,12 @@ struct SkillsHubLibraryControllerTests {
         try controller.bootstrapDefaultRootIfPresent()
 
         #expect(!controller.hasRoot)
-        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent("ai-projects/skills-hub").path))
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent("skills-hub").path))
     }
 
     @Test func bootstrapDefaultRootDoesNotReadMetadataWithoutPersistedAuthorization() throws {
         let home = try temporaryDirectory()
-        let defaultRoot = home.appendingPathComponent("ai-projects/skills-hub", isDirectory: true)
+        let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         try FileManager.default.createDirectory(at: defaultRoot, withIntermediateDirectories: true)
         try "{ invalid json".write(to: defaultRoot.appendingPathComponent(".skillshub.json"), atomically: true, encoding: .utf8)
 
@@ -221,7 +221,7 @@ struct SkillsHubLibraryControllerTests {
 
     @Test func startupAuthorizationRequestIncludesDefaultRootAndDetectedBuiltInAgentsWithoutWriteAccess() throws {
         let home = try temporaryDirectory()
-        let defaultRoot = home.appendingPathComponent("ai-projects/skills-hub", isDirectory: true)
+        let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         let codexMarker = home.appendingPathComponent(".codex", isDirectory: true)
         let claudeSkills = home.appendingPathComponent(".claude/skills", isDirectory: true)
         try FileManager.default.createDirectory(at: defaultRoot, withIntermediateDirectories: true)
@@ -253,7 +253,7 @@ struct SkillsHubLibraryControllerTests {
 
     @Test func startupAuthorizationRestoresPersistedDefaultRootAccessWithoutPromptingAgain() throws {
         let home = try temporaryDirectory()
-        let defaultRoot = home.appendingPathComponent("ai-projects/skills-hub", isDirectory: true)
+        let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         try FileManager.default.createDirectory(at: defaultRoot, withIntermediateDirectories: true)
         try SkillsHubMetadataStore().save(
             SkillsHubMetadata(rootConfig: RootConfig(rootPath: defaultRoot.path)),
