@@ -7,7 +7,7 @@ struct RootInspectionTests {
     @Test(arguments: ["connect", "establish", "startup"])
     func invalidMetadataRebuildsThroughRootEntry(entry: String) async throws {
         let home = try temporaryDirectory()
-        let root = home.appendingPathComponent("ai-projects/skills-hub", isDirectory: true)
+        let root = home.appendingPathComponent("skills-hub", isDirectory: true)
         let store = SkillsHubMetadataStore()
         try store.save(SkillsHubMetadata(generation: 7, rootConfig: RootConfig(rootPath: root.path)), to: root)
         let before = try store.load(from: root)
