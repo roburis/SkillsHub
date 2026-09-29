@@ -14,6 +14,7 @@ nonisolated struct Phase1UITestFixtureConfiguration: Hashable, Sendable {
     var agentOverflowFixture: Bool
     var githubRemovalFixture: Bool
     var githubImportFixture: Bool
+    var agentAuthorizationFixture: Bool
 
     init(
         arguments: [String],
@@ -92,6 +93,7 @@ nonisolated struct Phase1UITestFixtureConfiguration: Hashable, Sendable {
         self.agentOverflowFixture = arguments.contains("--skillshub-ui-agent-overflow-fixture")
         self.githubRemovalFixture = arguments.contains("--skillshub-ui-github-removal-fixture")
         self.githubImportFixture = arguments.contains("--skillshub-ui-github-import-fixture")
+        self.agentAuthorizationFixture = arguments.contains("--skillshub-ui-agent-authorization-fixture")
     }
 
     func validateAccessibleDirectories(fileManager: FileManager = .default) throws {
@@ -250,14 +252,18 @@ nonisolated final class Phase1UITestFixtureAccessAdapter: SecurityScopedResource
 
 nonisolated final class Phase1UITestFixtureStartupAccessStore: StartupAccessStoring {
     private let authorizedParent: URL
+    private let withheldTarget: URL?
+    private var selectedTarget = false
 
-    init(authorizedParent: URL) {
+    init(authorizedParent: URL, withheldTarget: URL? = nil) {
         self.authorizedParent = authorizedParent.standardizedFileURL
+        self.withheldTarget = withheldTarget?.standardizedFileURL
     }
 
     func resolveAccess(to url: URL) throws -> StartupAccessBookmarkResolution? {
         let normalizedURL = url.standardizedFileURL
         guard isDescendant(normalizedURL) else { return nil }
+        if normalizedURL == withheldTarget && !selectedTarget { return nil }
         return StartupAccessBookmarkResolution(url: normalizedURL, isStale: false)
     }
 
@@ -267,6 +273,7 @@ nonisolated final class Phase1UITestFixtureStartupAccessStore: StartupAccessStor
                 "Fixture authorization cannot be saved outside its run parent."
             )
         }
+        if url.standardizedFileURL == withheldTarget { selectedTarget = true }
     }
 
     private func isDescendant(_ url: URL) -> Bool {

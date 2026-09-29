@@ -161,7 +161,7 @@ struct PresentationSettingsAndLocalizationTests {
         let workspaceCopy = [
             "Search All Skills…", "Search This Source’s Skills…", "Check for Updates…", "Needs Attention", "View Source…",
             "Add Agent", "Agent Configuration", "Save name and abbreviation", "Custom Agent", "Built-in Agent",
-            "Global skills directory", "Current directory", "Relationship management available", "Action in progress",
+            "Global skills directory", "Current directory", "Relationship management available", "Default directory verified", "Agent directory has not been verified.", "Action in progress",
             "Expanded", "Collapsed", "Will clear", "Blocked", "Cancel Fetch", "Imported · Readable", "Imported · Needs Attention",
             "Remove the verified Skills Hub-managed link and disable this relationship.",
             "Disable this relationship; no link node is currently present.",

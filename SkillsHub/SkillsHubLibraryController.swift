@@ -32,7 +32,10 @@ final class SkillsHubLibraryController {
     let agentHomeDirectory: URL
     let agentEnvironment: [String: String]
     var rootURL: URL? {
-        didSet { defaultAgentDirectoryRefresh = [:] }
+        didSet {
+            defaultAgentDirectoryRefresh = [:]
+            agentDirectoryAuditFailures = [:]
+        }
     }
     var availableSkills: [AvailableSkill]
     var installedSkills: [InstalledSkill]
@@ -54,6 +57,7 @@ final class SkillsHubLibraryController {
     var agentDetections: [AgentDetectionSnapshot]
     var agentFindings: [AgentDirectoryFinding]
     var defaultAgentDirectoryRefresh: [AgentKind: AgentDefaultDirectoryRefreshStatus] = [:]
+    var agentDirectoryAuditFailures: [String: String] = [:]
     var rootSnapshot: RootSnapshot?
     var pendingRootInitialization: RootInspectionFacts?
     var lastRootInspectionResult: RootInspectionResult?
@@ -798,7 +802,9 @@ extension SkillsHubLibraryController {
             agentHomeDirectory: configuration.home,
             agentEnvironment: [:],
             startupAccessStore: Phase1UITestFixtureStartupAccessStore(
-                authorizedParent: configuration.authorizedFixtureParent
+                authorizedParent: configuration.authorizedFixtureParent,
+                withheldTarget: configuration.agentAuthorizationFixture
+                    ? configuration.home.appending(path: ".codex/skills", directoryHint: .isDirectory) : nil
             ),
             securityScopedAccessProvider: SecurityScopedAccessProvider(
                 adapter: Phase1UITestFixtureAccessAdapter(

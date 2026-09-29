@@ -488,7 +488,7 @@ nonisolated final class AgentDirectoryAuditService {
         overrides: [AgentKind: String],
         localState: SkillsHubLocalState,
         installedSkills: [InstalledSkill]
-    ) -> AgentDirectoryAuditResult {
+    ) throws -> AgentDirectoryAuditResult {
         let descriptors = agentDescriptors(homeDirectory: homeDirectory, overrides: overrides, customAgents: localState.customAgents)
             .filter { agentID == nil || $0.agentID == agentID }
         let detections = descriptors.map { detectionSnapshot(for: $0, evidence: $0.agent.flatMap { installationPresence($0, homeDirectory).evidence }) }
@@ -499,6 +499,11 @@ nonisolated final class AgentDirectoryAuditService {
         for descriptor in descriptors {
             let skillsDirectory = descriptor.skillsDirectory
             guard isDirectory(skillsDirectory) else {
+                if agentID != nil {
+                    var node = stat()
+                    let missing = lstat(skillsDirectory.path, &node) == -1 && errno == ENOENT
+                    throw AgentTargetAccessError.qualificationFailed(missing ? .targetMissing : .permissionRequired)
+                }
                 if itemExistsOrIsSymlink(descriptor.markerURL) {
                     findings.append(finding(
                         agentID: descriptor.agentID,
@@ -521,7 +526,7 @@ nonisolated final class AgentDirectoryAuditService {
                 continue
             }
 
-            let children = firstLevelChildren(in: skillsDirectory)
+            let children = try firstLevelChildren(in: skillsDirectory)
             for child in children {
                 findings.append(contentsOf: findingsForEntry(
                     child,
@@ -539,7 +544,7 @@ nonisolated final class AgentDirectoryAuditService {
                 skillsDirectory: skillsDirectory.path,
                 lastFullAuditAt: now(),
                 entryCount: children.count,
-                directoryFingerprint: structuralFingerprint(for: skillsDirectory)
+                directoryFingerprint: structuralFingerprint(for: skillsDirectory, children: children)
             )
             snapshots.removeAll { $0.agentID == snapshot.agentID && $0.skillsDirectory == snapshot.skillsDirectory }
             snapshots.append(snapshot)
@@ -837,7 +842,7 @@ nonisolated final class AgentDirectoryAuditService {
     private func detectionSnapshot(for descriptor: AgentDirectoryDescriptor, evidence: AgentInstallationEvidence?) -> AgentDetectionSnapshot {
         let markerExists = descriptor.isCustom || itemExistsOrIsSymlink(descriptor.markerURL)
         let skillsExists = isDirectory(descriptor.skillsDirectory)
-        let count = skillsExists ? firstLevelChildren(in: descriptor.skillsDirectory).count : 0
+        let count = skillsExists ? ((try? firstLevelChildren(in: descriptor.skillsDirectory))?.count ?? 0) : 0
         let readable = skillsExists && fileManager.isReadableFile(atPath: descriptor.skillsDirectory.path)
         let writable = skillsExists && fileManager.isWritableFile(atPath: descriptor.skillsDirectory.path)
         return AgentDetectionSnapshot(
@@ -937,8 +942,8 @@ nonisolated final class AgentDirectoryAuditService {
         return (Self.sha256Hex(data), frontmatter?.name, frontmatter?.description, ["SKILL.md hash: \(Self.sha256Hex(data))"])
     }
 
-    private func structuralFingerprint(for directory: URL) -> String {
-        let children = firstLevelChildren(in: directory)
+    private func structuralFingerprint(for directory: URL, children: [URL]? = nil) -> String {
+        let children = children ?? (try? firstLevelChildren(in: directory)) ?? []
         let rows = children.map { child -> String in
             let values = try? child.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey, .isSymbolicLinkKey])
             let target = (try? fileManager.destinationOfSymbolicLink(atPath: child.path)) ?? ""
@@ -953,9 +958,9 @@ nonisolated final class AgentDirectoryAuditService {
         return Self.sha256Hex(Data(rows.utf8))
     }
 
-    private func firstLevelChildren(in directory: URL) -> [URL] {
-        (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]))?
-            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending } ?? []
+    private func firstLevelChildren(in directory: URL) throws -> [URL] {
+        try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey, .isSymbolicLinkKey], options: [])
+            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
     }
 
     private func isDirectory(_ url: URL) -> Bool {

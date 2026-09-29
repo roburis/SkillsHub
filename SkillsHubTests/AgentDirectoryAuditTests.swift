@@ -143,8 +143,12 @@ struct AgentDirectoryAuditTests {
         let externalRoot = try temporaryDirectory().appendingPathComponent("external-skill", isDirectory: true)
         let externalLink = codexSkills.appendingPathComponent("external-link")
         let brokenLink = codexSkills.appendingPathComponent("broken-link")
+        let hidden = codexSkills.appendingPathComponent(".hidden-entry", isDirectory: true)
+        let invalid = codexSkills.appendingPathComponent("invalid.txt")
         try FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: noSkill, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: true)
+        try Data("invalid".utf8).write(to: invalid)
         try FileManager.default.createDirectory(at: externalRoot, withIntermediateDirectories: true)
         try localSkillText(name: "Local Skill", description: "Local agent skill.").write(to: local.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         try localSkillText(name: "External Skill", description: "External agent skill.").write(to: externalRoot.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
@@ -166,7 +170,7 @@ struct AgentDirectoryAuditTests {
         try FileManager.default.createDirectory(at: root.appendingPathComponent("local-skill", isDirectory: true), withIntermediateDirectories: true)
         try localSkillText(name: "Local Skill", description: "Local agent skill.").write(to: root.appendingPathComponent("local-skill/SKILL.md"), atomically: true, encoding: .utf8)
 
-        let result = AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
+        let result = try AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
             agentID: AgentKind.codex.rawValue,
             rootURL: root,
             homeDirectory: home,
@@ -178,10 +182,31 @@ struct AgentDirectoryAuditTests {
         #expect(result.findings.contains { $0.type == .duplicateWithHub && $0.entryName == "local-skill" })
         #expect(result.findings.contains { $0.type == .localDirectoryNotManaged && $0.entryName == "local-no-skill-md" })
         #expect(result.findings.contains { $0.type == .externalSymlinkNotManaged && $0.entryName == "external-link" })
+        let actualNames = Set(try FileManager.default.contentsOfDirectory(atPath: codexSkills.path))
+        #expect(Set(result.findings.map(\.entryName)) == actualNames)
+        #expect(result.findings.count == actualNames.count)
         let broken = try #require(result.findings.first { $0.type == .brokenSymlink && $0.entryName == "broken-link" })
         #expect(broken.symlinkTarget == "/missing/path")
         #expect(broken.targetPath == "/missing/path")
         #expect(result.findings.map(\.severity.sortRank) == result.findings.map(\.severity.sortRank).sorted())
+    }
+
+    @Test func fullAuditDoesNotTreatEnumerationFailureAsEmptyDirectory() throws {
+        let home = try temporaryDirectory()
+        let root = try temporaryDirectory()
+        let target = home.appendingPathComponent(".codex/skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let service = AgentDirectoryAuditService(fileManager: FailingAgentDirectoryFileManager(target: target), installationPresence: fixtureAgentInstallation)
+        #expect(throws: (any Error).self) {
+            try service.fullAudit(agentID: AgentKind.codex.rawValue, rootURL: root, homeDirectory: home, overrides: [:], localState: SkillsHubLocalState(), installedSkills: [])
+        }
+        try FileManager.default.removeItem(at: target)
+        #expect(throws: AgentTargetAccessError.qualificationFailed(.targetMissing)) {
+            try AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
+                agentID: AgentKind.codex.rawValue, rootURL: root, homeDirectory: home,
+                overrides: [:], localState: SkillsHubLocalState(), installedSkills: []
+            )
+        }
     }
 
     @Test func fullAuditIncludesAgentsSkillsBrokenSymlinks() throws {
@@ -192,7 +217,7 @@ struct AgentDirectoryAuditTests {
         try FileManager.default.createDirectory(at: agentsSkills, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: brokenLink.path, withDestinationPath: "/missing/stale-agent-skill")
 
-        let result = AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
+        let result = try AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
             agentID: nil,
             rootURL: root,
             homeDirectory: home,
@@ -223,7 +248,7 @@ struct AgentDirectoryAuditTests {
             .write(to: managed.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: managed)
 
-        let result = AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
+        let result = try AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
             agentID: AgentKind.codex.rawValue,
             rootURL: root,
             homeDirectory: home,
@@ -252,7 +277,7 @@ struct AgentDirectoryAuditTests {
         try localSkillText(name: "Shared Review", description: "Local agent skill.")
             .write(to: local.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
-        let result = AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
+        let result = try AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
             agentID: AgentKind.codex.rawValue,
             rootURL: root,
             homeDirectory: home,
@@ -278,11 +303,11 @@ struct AgentDirectoryAuditTests {
         try localSkillText(name: "Review", description: "Reviews code safely.").write(to: local.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
         let service = AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation)
-        let first = service.fullAudit(agentID: AgentKind.codex.rawValue, rootURL: root, homeDirectory: home, overrides: [:], localState: SkillsHubLocalState(), installedSkills: [])
+        let first = try service.fullAudit(agentID: AgentKind.codex.rawValue, rootURL: root, homeDirectory: home, overrides: [:], localState: SkillsHubLocalState(), installedSkills: [])
         let ignoredID = try #require(first.findings.first?.id)
         try localSkillText(name: "Review Changed", description: "Reviews code safely.").write(to: local.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
-        let second = service.fullAudit(
+        let second = try service.fullAudit(
             agentID: AgentKind.codex.rawValue,
             rootURL: root,
             homeDirectory: home,
@@ -499,6 +524,7 @@ struct AgentDirectoryAuditTests {
             skillID: "writer",
             enabled: false
         )
+        try fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
         #expect(fixture.controller.agentDirectoryChangeBlockers(agentID: AgentKind.codex.rawValue).isEmpty)
         try await fixture.controller.saveAgentDirectory(
             agentID: AgentKind.codex.rawValue,
@@ -600,4 +626,17 @@ nonisolated func fixtureAgentInstallation(_ agent: AgentKind, _ home: URL) -> Ag
     let target = AgentPathResolver().globalSkillsDirectory(for: agent, environment: [:], homeDirectory: home)
     guard FileManager.default.fileExists(atPath: target.deletingLastPathComponent().path) else { return .absent }
     return .present(AgentInstallationEvidence(agent: agent, digest: "fixture-installation-\(agent.rawValue)"))
+}
+
+private final class FailingAgentDirectoryFileManager: FileManager, @unchecked Sendable {
+    let target: URL
+
+    init(target: URL) { self.target = target }
+
+    override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?, options mask: DirectoryEnumerationOptions = []) throws -> [URL] {
+        if url.standardizedFileURL == target.standardizedFileURL {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        return try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
+    }
 }

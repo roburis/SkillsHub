@@ -8,6 +8,16 @@ enum AgentDefaultDirectoryRefreshStatus: Equatable {
     case authorizationRequired
     case unverifiable
     case otherDirectoryConfigured
+
+    var descriptionKey: String {
+        switch self {
+        case .manageable: "Default directory verified"
+        case .missing: "Directory does not exist"
+        case .authorizationRequired: "Authorization required"
+        case .unverifiable: "Unable to verify directory"
+        case .otherDirectoryConfigured: "Another directory is configured; default was skipped"
+        }
+    }
 }
 
 nonisolated struct AgentDirectoryChangeBlocker: Hashable, Identifiable, Sendable {
@@ -32,9 +42,23 @@ extension SkillsHubLibraryController {
             defaultAgentDirectoryRefresh = [:]
             return
         }
-        defaultAgentDirectoryRefresh = Dictionary(uniqueKeysWithValues: [AgentKind.codex, .claudeCode].map { agent in
-            (agent, inspectDefaultAgentDirectory(agent))
-        })
+        for agent in [AgentKind.codex, .claudeCode] {
+            let status = inspectDefaultAgentDirectory(agent)
+            if status == .manageable {
+                do {
+                    try auditAgentDirectory(agentID: agent.rawValue)
+                    defaultAgentDirectoryRefresh[agent] = .manageable
+                } catch {
+                    defaultAgentDirectoryRefresh[agent] = .unverifiable
+                    errorMessage = LocalizedMessage(String(describing: error))
+                }
+            } else {
+                defaultAgentDirectoryRefresh[agent] = status
+                if status != .otherDirectoryConfigured {
+                    agentDirectoryAuditFailures[agent.rawValue] = "Agent directory has not been verified."
+                }
+            }
+        }
     }
 
     private func inspectDefaultAgentDirectory(_ agent: AgentKind) -> AgentDefaultDirectoryRefreshStatus {
@@ -47,6 +71,13 @@ extension SkillsHubLibraryController {
         if let configured = agentConfigurations.first(where: { $0.id == agent.rawValue })?.skillsDirectory,
            URL(fileURLWithPath: configured, isDirectory: true).standardizedFileURL != target {
             return .otherDirectoryConfigured
+        }
+        var node = stat()
+        if lstat(target.path, &node) == -1 {
+            return errno == ENOENT ? .missing : .unverifiable
+        }
+        if node.st_mode & mode_t(S_IFMT) == mode_t(S_IFLNK) {
+            return .unverifiable
         }
         let authorization: StartupAccessBookmarkResolution
         do {
@@ -75,10 +106,6 @@ extension SkillsHubLibraryController {
             return .unverifiable
         }
         guard isDirectory(target) else {
-            var node = stat()
-            if lstat(target.path, &node) == -1 && errno == ENOENT {
-                return .missing
-            }
             return .unverifiable
         }
         let qualification = AgentTargetQualifier().qualify(
@@ -334,7 +361,7 @@ extension SkillsHubLibraryController {
                     let currentOverrides = Self.agentPathOverrides(
                         from: metadata.agents
                     )
-                    let currentAudit = agentAuditService.fullAudit(
+                    let currentAudit = try agentAuditService.fullAudit(
                         agentID: agentID,
                         rootURL: rootURL,
                         homeDirectory: agentHomeDirectory,
@@ -642,7 +669,7 @@ extension SkillsHubLibraryController {
         }
     }
 
-    private func agentQualificationFailureDescription(
+    func agentQualificationFailureDescription(
         _ failure: AgentTargetQualificationFailure
     ) -> String {
         switch failure {

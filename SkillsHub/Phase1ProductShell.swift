@@ -1557,6 +1557,10 @@ private struct Phase1AgentWorkspace: View {
         descriptor.map(library.agentCapabilityPresentation)
     }
 
+    private var auditFailed: Bool {
+        descriptor.flatMap { library.agentDirectoryAuditFailures[$0.id] } != nil
+    }
+
     private var relations: [AgentRelationPresentation] {
         guard let agentID = descriptor?.id else { return [] }
         return library.installedSkills.flatMap(library.relationPresentations).filter {
@@ -1565,7 +1569,8 @@ private struct Phase1AgentWorkspace: View {
     }
 
     private var exactManagedRelations: [AgentRelationPresentation] {
-        relations.filter { relation in
+        guard !auditFailed else { return [] }
+        return relations.filter { relation in
             relation.verification == .verifiedConsistent
                 && relation.observation == .symbolicLink
                 && library.rootSnapshot?.metadata.managedRelationEvidence.contains { $0.relation == relation.relation } == true
@@ -1587,6 +1592,7 @@ private struct Phase1AgentWorkspace: View {
     }
 
     private var agentOwnedFindings: [AgentDirectoryFinding] {
+        guard !auditFailed else { return [] }
         guard let agentID = descriptor?.id else { return [] }
         return library.agentFindings.filter {
             $0.agentID == agentID
@@ -1600,7 +1606,7 @@ private struct Phase1AgentWorkspace: View {
         guard let agentID = descriptor?.id else { return [] }
         return library.agentFindings.filter {
             $0.agentID == agentID
-                && (!($0.type == .localDirectoryNotManaged || $0.type == .externalSymlinkNotManaged)
+                && (auditFailed || !($0.type == .localDirectoryNotManaged || $0.type == .externalSymlinkNotManaged)
                     || hasManagedEvidence(for: $0))
         }
         .filter(matches)
@@ -1618,14 +1624,20 @@ private struct Phase1AgentWorkspace: View {
     var body: some View {
         NativeWorkspaceSplit(preferenceKey: "SkillsHub.skills-list.width", stateKey: "\(library.rootURL?.path ?? "")/agent/\(descriptor?.id ?? "")", language: library.language) {
             List(selection: $selectedID) {
+                if let failure = descriptor.flatMap({ library.agentDirectoryAuditFailures[$0.id] }) {
+                    Text(failure == "Agent directory has not been verified."
+                        ? localized(failure)
+                        : localized("Agent directory has not been verified.") + " " + localized(failure))
+                        .foregroundStyle(.orange)
+                }
                 ForEach(shownRelations) { relation in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(relation.skillName).font(.headline).lineLimit(1)
                             if relation.hasPresentationIssue { Image(systemName: "exclamationmark.triangle") }
                         }
-                        Text(localized(relation.verification == .verifiedConsistent ? "Managed by Skills Hub" : "Ownership needs verification")).font(.caption)
-                        Text(localized(relation.verification.presentationLabel)).font(.caption).foregroundStyle(.secondary)
+                        Text(localized(!auditFailed && relation.verification == .verifiedConsistent ? "Managed by Skills Hub" : "Ownership needs verification")).font(.caption)
+                        Text(localized(auditFailed ? "Currently unverifiable" : relation.verification.presentationLabel)).font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 10)
                     .tag("relation:" + relation.id)
@@ -1646,10 +1658,14 @@ private struct Phase1AgentWorkspace: View {
             }
             .listStyle(.plain).scrollContentBackground(.hidden).background(Color(nsColor: .windowBackgroundColor))
             .overlay {
-                if visibleIDs.isEmpty { ContentUnavailableView(localized("No matching Skills"), systemImage: "square.stack.3d.up") }
+                if visibleIDs.isEmpty && descriptor.flatMap({ library.agentDirectoryAuditFailures[$0.id] }) == nil {
+                    ContentUnavailableView(localized("No matching Skills"), systemImage: "square.stack.3d.up")
+                }
             }
         } right: {
-            if let relation = shownRelations.first(where: { "relation:" + $0.id == selectedID }),
+            if auditFailed {
+                ContentUnavailableView(localized("Agent directory has not been verified."), systemImage: "exclamationmark.triangle")
+            } else if let relation = shownRelations.first(where: { "relation:" + $0.id == selectedID }),
                let skill = library.installedSkills.first(where: { $0.id == relation.skillID }),
                let item = library.presentationService.phase1Items(availableSkills: library.availableSkills, installedSkills: [skill], sources: library.localSourcesForPresentation + library.githubSourcesForPresentation, enablementIntents: library.rootSnapshot?.metadata.enablementIntents ?? []).first(where: { $0.managed?.id == skill.id }) {
                 Phase1SkillDetail(library: library, item: item, openSource: { openSource(item) }, currentAgentID: descriptor?.id)
@@ -1850,48 +1866,22 @@ private struct Phase1SettingsWorkspace: View {
                         }
                     }
                 }
-                Section(localized("Agents")) {
-                    Button(localized("Refresh default Agent directories")) {
-                        library.refreshDefaultAgentDirectories()
-                    }
-                    .disabled(!library.hasRoot)
-                    .accessibilityIdentifier("refresh-default-agent-directories")
+                Section {
                     if !library.hasRoot {
                         Text(localized("Connect a Management Directory to refresh Agent directories."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    ForEach([AgentKind.codex, .claudeCode], id: \.self) { agent in
-                        if let status = library.defaultAgentDirectoryRefresh[agent] {
-                            LabeledContent(agent.displayName) {
-                                VStack(alignment: .trailing, spacing: 3) {
-                                    Text(localized(refreshDescription(for: status)))
-                                        .accessibilityIdentifier("default-agent-directory-status-\(agent.rawValue)")
-                                    Text(library.agentPathResolver.globalSkillsDirectory(
-                                        for: agent,
-                                        environment: library.agentEnvironment,
-                                        homeDirectory: library.agentHomeDirectory
-                                    ).path)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                                }
-                            }
-                            if status == .authorizationRequired || status == .unverifiable {
-                                Button(localized("Authorize default directory…")) {
-                                    chooseExactAgentTarget(agent) {
-                                        library.refreshDefaultAgentDirectories()
-                                    }
-                                }
-                                .accessibilityLabel("\(localized("Authorize default directory…")) \(agent.displayName)")
-                                .accessibilityIdentifier("authorize-default-agent-directory-\(agent.rawValue)")
-                            }
-                        }
-                    }
                     ForEach(library.visibleInstalledAgentDescriptors) { descriptor in
                         Phase1AgentSettingsRow(
                             descriptor: descriptor,
-                            capability: library.agentCapabilityPresentation(descriptor)
+                            capability: library.agentCapabilityPresentation(descriptor),
+                            refreshStatus: descriptor.agent.flatMap { library.defaultAgentDirectoryRefresh[$0] },
+                            authorize: descriptor.agent.flatMap { agent in
+                                agent == .codex || agent == .claudeCode ? {
+                                    chooseExactAgentTarget(agent) { library.refreshDefaultAgentDirectories() }
+                                } : nil
+                            }
                         ) {
                             configuredAgentID = descriptor.id
                             isAddingAgent = false
@@ -1919,6 +1909,17 @@ private struct Phase1SettingsWorkspace: View {
                     Text(localized("Saving Agent configuration never changes a Skill relationship."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                } header: {
+                    HStack {
+                        Text(localized("Agents"))
+                            .accessibilityIdentifier("settings-agents-heading")
+                        Spacer()
+                        Button(localized("Refresh default Agent directories")) {
+                            library.refreshDefaultAgentDirectories()
+                        }
+                        .disabled(!library.hasRoot)
+                        .accessibilityIdentifier("refresh-default-agent-directories")
+                    }
                 }
                 if isAddingAgent {
                     Phase1AgentConfigurationForm(
@@ -1988,20 +1989,13 @@ private struct Phase1SettingsWorkspace: View {
         .accessibilityIdentifier("settings-workspace")
     }
 
-    private func refreshDescription(for status: AgentDefaultDirectoryRefreshStatus) -> String {
-        switch status {
-        case .manageable: "Manageable"
-        case .missing: "Directory does not exist"
-        case .authorizationRequired: "Authorization required"
-        case .unverifiable: "Unable to verify directory"
-        case .otherDirectoryConfigured: "Another directory is configured; default was skipped"
-        }
-    }
 }
 
 private struct Phase1AgentSettingsRow: View {
     var descriptor: InstalledAgentDescriptor
     var capability: AgentCapabilityPresentation
+    var refreshStatus: AgentDefaultDirectoryRefreshStatus?
+    var authorize: (() -> Void)?
     var configure: () -> Void
     @Environment(\.appLanguage) private var language
     private func localized(_ text: String) -> String { appLocalized(text, language: language) }
@@ -2010,7 +2004,14 @@ private struct Phase1AgentSettingsRow: View {
         HStack {
             Phase1AgentIcon(descriptor: descriptor, size: 30)
             VStack(alignment: .leading, spacing: 4) {
-                Text(capability.displayName).font(.headline)
+                HStack {
+                    Text(capability.displayName).font(.headline)
+                    if refreshStatus == .manageable {
+                        Image(systemName: "checkmark.circle.fill")
+                            .accessibilityLabel("\(capability.displayName): \(localized("Default directory verified"))")
+                            .accessibilityIdentifier("default-agent-directory-verified-\(capability.agentID)")
+                    }
+                }
                 Text(localized(descriptor.isCustom ? "Custom Agent" : "Built-in Agent"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -2019,11 +2020,23 @@ private struct Phase1AgentSettingsRow: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(localized(capability.canManageRelations ? "Relationship management available" : capability.unavailableReason ?? "Unavailable"))
-                    .font(.caption)
-                    .foregroundStyle(capability.canManageRelations ? Color.secondary : Color.orange)
+                if let refreshStatus, refreshStatus != .manageable {
+                    Text(localized(refreshStatus.descriptionKey))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("default-agent-directory-status-\(capability.agentID)")
+                } else if !capability.canManageRelations {
+                    Text(localized(capability.unavailableReason ?? "Unavailable"))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
             Spacer()
+            if (refreshStatus == .authorizationRequired || refreshStatus == .unverifiable), let authorize {
+                Button(localized("Authorize default directory…"), action: authorize)
+                    .accessibilityLabel("\(localized("Authorize default directory…")) \(capability.displayName)")
+                    .accessibilityIdentifier("authorize-default-agent-directory-\(capability.agentID)")
+            }
             Button(localized("Configure…"), action: configure)
                 .accessibilityIdentifier("configure-agent-\(capability.agentID)")
         }

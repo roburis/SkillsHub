@@ -20,10 +20,41 @@ extension SkillsHubLibraryController {
     }
 
     func auditAgentDirectory(agentID: String) throws {
+        do {
+            try performAgentDirectoryAudit(agentID: agentID)
+            agentDirectoryAuditFailures.removeValue(forKey: agentID)
+        } catch {
+            if case let AgentTargetAccessError.qualificationFailed(reason) = error {
+                agentDirectoryAuditFailures[agentID] = agentQualificationFailureDescription(reason)
+            } else {
+                agentDirectoryAuditFailures[agentID] = error.localizedDescription
+            }
+            if let agent = AgentKind(rawValue: agentID), defaultAgentDirectoryRefresh[agent] != nil {
+                defaultAgentDirectoryRefresh[agent] = .unverifiable
+            }
+            throw error
+        }
+    }
+
+    private func performAgentDirectoryAudit(agentID: String) throws {
         guard let rootURL else {
             throw SkillsHubLibraryFailure.missingRoot
         }
-        let result = agentAuditService.fullAudit(
+        guard let descriptor = visibleInstalledAgentDescriptors.first(where: { $0.id == agentID }),
+              let path = descriptor.skillsDirectory else {
+            throw ControllerRelationActionError.unsupportedAgent(agentID)
+        }
+        let target = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        let identity = try LinkNodeIdentity.read(at: target)
+        let targetAccess = try acquireAgentTargetAccess(agentID: agentID, actionID: UUID())
+        defer { _ = targetAccess.endByOwningAction() }
+        guard targetAccess.qualification.target?.standardizedFileURL == target,
+              !FileAccessService(fileManager: fileManager).isSymlink(target),
+              isDirectory(target),
+              try LinkNodeIdentity.read(at: target) == identity else {
+            throw AgentTargetAccessError.qualificationFailed(.permissionRequired)
+        }
+        let result = try agentAuditService.fullAudit(
             agentID: agentID,
             rootURL: rootURL,
             homeDirectory: agentHomeDirectory,
@@ -38,21 +69,11 @@ extension SkillsHubLibraryController {
     }
 
     func auditAllDetectedAgentDirectories() throws {
-        guard let rootURL else {
-            throw SkillsHubLibraryFailure.missingRoot
+        guard hasRoot else { throw SkillsHubLibraryFailure.missingRoot }
+        for descriptor in visibleInstalledAgentDescriptors where agentDetections.contains(where: { $0.agentID == descriptor.id && $0.detected }) {
+            try auditAgentDirectory(agentID: descriptor.id)
         }
-        let result = agentAuditService.fullAudit(
-            agentID: nil,
-            rootURL: rootURL,
-            homeDirectory: agentHomeDirectory,
-            overrides: agentPathOverrides,
-            localState: agentAuditLocalState,
-            installedSkills: installedSkills
-        )
-        mergeAgentAuditResult(result)
         setStatus("Audited detected agent directories.")
-        errorMessage = nil
-        try saveLocalState()
     }
 
     func prepareBrokenLinkDeletion(findingID: String) throws -> BrokenLinkDeletionPlan {
