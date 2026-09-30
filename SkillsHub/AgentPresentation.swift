@@ -91,6 +91,9 @@ nonisolated struct AgentRelationPresentation: Identifiable, Equatable {
     var unavailableReason: String?
     var lastOutcome: ControllerRelationActionOutcome?
     var safeNextStep: String
+    var linkPath: String? = nil
+    var linkText: String? = nil
+    var resolvedTargetPath: String? = nil
 
     var id: String { relation.id }
     var desiredEnabled: Bool { !(intendedEnabled ?? false) }
@@ -235,12 +238,25 @@ extension TargetNodeKind {
     nonisolated var presentationLabel: String {
         switch self {
         case .vacant: "Vacant"
-        case .symbolicLink: "Managed link observed"
-        case .brokenSymbolicLink: "Broken link"
-        case .directory: "Directory"
+        case .symbolicLink: "Symbolic link"
+        case .brokenSymbolicLink: "Broken symbolic link"
+        case .directory: "Real directory"
         case .regularFile: "File"
         case .other: "Other node"
-        case .unreadable: "Unreadable"
+        case .unreadable: "Type unverified"
+        }
+    }
+}
+
+extension AgentSkillEntryKind {
+    nonisolated var presentationLabel: String {
+        switch self {
+        case .hubManagedSymlink, .externalSymlink: TargetNodeKind.symbolicLink.presentationLabel
+        case .brokenSymlink: TargetNodeKind.brokenSymbolicLink.presentationLabel
+        case .localDirectory: TargetNodeKind.directory.presentationLabel
+        case .plainFile: TargetNodeKind.regularFile.presentationLabel
+        case .invalid: TargetNodeKind.unreadable.presentationLabel
+        case .missing: TargetNodeKind.vacant.presentationLabel
         }
     }
 }

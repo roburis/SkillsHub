@@ -842,6 +842,7 @@ private struct Phase1SkillsWorkspace: View {
                               openProblem: { selectedSkillID = item.id; detailAnchor = "problem"; detailFocusRequest = UUID() },
                               showsSource: returnSourceID == nil)
                     .tag(item.id)
+                    .listRowInsets(.horizontal, 16)
                     .listRowSeparator(item.id == visibleItems.last?.id ? .hidden : .visible, edges: .bottom)
             }
         }
@@ -868,6 +869,7 @@ private struct Phase1SkillsWorkspace: View {
         }
         .accessibilityIdentifier("skill-library-list")
         .focused($listFocused)
+        .onChange(of: selectedSkillID) { _, value in if value != nil { listFocused = true } }
         .onAppear {
             if focusRequest != nil { listFocused = true; focusRequest = nil }
         }
@@ -942,6 +944,16 @@ private struct Phase1SkillDetail: View {
                 VStack(alignment: .leading, spacing: 24) {
                     Text(item.name).font(.title2.weight(.semibold)).textSelection(.enabled)
                     Text(item.detail).textSelection(.enabled)
+                    if let observed = library.contentNodeObservation(for: item) {
+                        Text(localized(observed.nodeKind.presentationLabel))
+                            .help("\(item.name) · \(localized(observed.nodeKind.presentationLabel)) · \(observed.linkPath)")
+                            .accessibilityLabel("\(item.name) · \(localized(observed.nodeKind.presentationLabel))")
+                            .accessibilityIdentifier("content-node-type")
+                    } else {
+                        Text(localized("Type unverified"))
+                            .accessibilityLabel("\(item.name) · \(localized("Type unverified"))")
+                            .accessibilityIdentifier("content-node-type")
+                    }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(item.sourceName).foregroundStyle(.secondary)
                         if let sourceID = item.source?.id {
@@ -992,6 +1004,12 @@ private struct Phase1SkillDetail: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(item.managed?.installedPath ?? item.location)
                                 .font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                            if let observed = library.contentNodeObservation(for: item) {
+                                Text(observed.linkPath).textSelection(.enabled)
+                                if let raw = observed.linkText { Text("\(localized("Original target")): \(raw)").textSelection(.enabled) }
+                                if let target = observed.resolvedTargetPath { Text("\(localized("Resolved target")): \(target)").textSelection(.enabled) }
+                                if let limitation = observed.limitation { Text(limitation) }
+                            }
                             ForEach(relations) { relation in
                                 if let observed = library.localState.targetObservations.first(where: { $0.relation == relation.relation }) {
                                     Text(relation.agentDisplayName).font(.headline)
@@ -1185,6 +1203,7 @@ private struct Phase1SourcesWorkspace: View {
                     }
                     .padding(.vertical, 10)
                     .tag(source.id)
+                    .listRowInsets(.horizontal, 16)
                     .listRowSeparator(source.id == visibleSources.last?.id ? .hidden : .visible, edges: .bottom)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("source-row-\(source.id.uuidString)")
@@ -1200,6 +1219,7 @@ private struct Phase1SourcesWorkspace: View {
             }
             .accessibilityIdentifier("source-list")
             .focused($listFocused)
+            .onChange(of: selectedSourceID) { _, value in if value != nil { listFocused = true } }
             .onAppear {
                 if focusRequest != nil { listFocused = true; focusRequest = nil }
             }
@@ -1556,6 +1576,7 @@ private struct Phase1SourceRemovalSheet: View {
 }
 
 private struct Phase1AgentWorkspace: View {
+    @FocusState private var listFocused: Bool
     @Bindable var library: SkillsHubLibraryController
     var descriptor: InstalledAgentDescriptor?
     var addLocalSource: () -> Void
@@ -1643,6 +1664,7 @@ private struct Phase1AgentWorkspace: View {
                         ? localized(failure)
                         : localized("Agent directory has not been verified.") + " " + localized(failure))
                         .foregroundStyle(.orange)
+                        .listRowInsets(.horizontal, 16)
                 }
                 ForEach(shownRelations) { relation in
                     VStack(alignment: .leading, spacing: 8) {
@@ -1651,26 +1673,36 @@ private struct Phase1AgentWorkspace: View {
                             if relation.hasPresentationIssue { Image(systemName: "exclamationmark.triangle") }
                         }
                         Text(localized(!auditFailed && relation.verification == .verifiedConsistent ? "Managed by Skills Hub" : "Ownership needs verification")).font(.caption)
+                        Text(localized(auditFailed ? "Type unverified" : relation.observation?.presentationLabel ?? "Type unverified"))
+                            .font(.caption).foregroundStyle(.secondary)
                         Text(localized(auditFailed ? "Currently unverifiable" : relation.verification.presentationLabel)).font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 10)
                     .tag("relation:" + relation.id)
+                    .listRowInsets(.horizontal, 16)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("agent-row-\(relation.id)")
+                    .help("\(relation.skillName) · \(localized(auditFailed ? "Type unverified" : relation.observation?.presentationLabel ?? "Type unverified"))")
                 }
                 ForEach(shownFindings) { finding in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(finding.entryName).font(.headline).lineLimit(1)
                         Text(localized(finding.summary)).lineLimit(2).foregroundStyle(.secondary)
                         Text(localized(agentOwnedFindings.contains { $0.id == finding.id } ? "Not managed by Skills Hub" : "Ownership needs verification")).font(.caption)
+                        Text(localized(auditFailed ? "Type unverified" : finding.entryKind.presentationLabel))
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 10)
                     .tag("finding:" + finding.id)
+                    .listRowInsets(.horizontal, 16)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("agent-row-\(finding.id)")
+                    .help("\(finding.entryName) · \(localized(auditFailed ? "Type unverified" : finding.entryKind.presentationLabel))")
                 }
             }
             .listStyle(.plain).scrollContentBackground(.hidden).background(Color(nsColor: .windowBackgroundColor))
+            .focused($listFocused)
+            .onChange(of: selectedID) { _, value in if value != nil { listFocused = true } }
             .overlay {
                 if visibleIDs.isEmpty && descriptor.flatMap({ library.agentDirectoryAuditFailures[$0.id] }) == nil {
                     ContentUnavailableView(localized("No matching Skills"), systemImage: "square.stack.3d.up")
@@ -1788,6 +1820,9 @@ private struct Phase1AgentFindingRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(localized(finding.summary))
                 Text("\(localized("Node")): \(localized(finding.entryKind.presentationLabel))")
+                if let path = finding.sourcePath { Text(path).textSelection(.enabled) }
+                if let raw = finding.symlinkTarget { Text("\(localized("Original target")): \(raw)").textSelection(.enabled) }
+                if let target = finding.targetPath { Text("\(localized("Resolved target")): \(target)").textSelection(.enabled) }
                 Text("\(localized("Selection")): \(localized(selection))")
                 ForEach(finding.evidence, id: \.self) { evidence in
                     Text(evidence)
@@ -1802,11 +1837,10 @@ private struct Phase1AgentFindingRow: View {
             } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(finding.entryName).font(.headline)
+                        .accessibilityLabel("\(finding.entryName) · \(localized(finding.entryKind.presentationLabel))")
                     Text(localized(classification)).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .accessibilityLabel(finding.entryName)
-            .accessibilityValue("\(localized(classification)). \(localized(finding.summary))")
             .accessibilityHint(localized("Expand to read current evidence and the read-only boundary."))
             .accessibilityIdentifier("agent-finding-\(finding.id)")
             if let copyToHub {
@@ -1839,20 +1873,6 @@ private enum AgentWorkspaceOwnershipFilter: String, CaseIterable, Identifiable {
         case .managed: "Managed by Skills Hub"
         case .external: "Not managed by Skills Hub"
         case .unknown: "Ownership needs verification"
-        }
-    }
-}
-
-private extension AgentSkillEntryKind {
-    var presentationLabel: String {
-        switch self {
-        case .hubManagedSymlink: "Managed symbolic link"
-        case .externalSymlink: "External symbolic link"
-        case .brokenSymlink: "Broken symbolic link"
-        case .localDirectory: "Directory"
-        case .plainFile: "File"
-        case .invalid: "Unsupported node"
-        case .missing: "Missing node"
         }
     }
 }
@@ -2395,10 +2415,18 @@ private struct Phase1RelationDetail: View {
                 .accessibilityLabel(localized("Intent"))
                 .accessibilityValue(localized(relation.intendedEnabled.map { $0 ? "Enabled" : "Disabled" } ?? "Not set"))
                 .accessibilityIdentifier("relation-intent-\(relation.relation.agentID)-\(relation.skillID)")
-            Text("\(localized("Observed")): \(localized(relation.observation?.presentationLabel ?? "No current observation"))")
+            Text("\(localized("Observed")): \(localized(relation.observation?.presentationLabel ?? "Type unverified"))")
                 .accessibilityLabel(localized("Observed"))
-                .accessibilityValue(localized(relation.observation?.presentationLabel ?? "No current observation"))
+                .accessibilityValue(localized(relation.observation?.presentationLabel ?? "Type unverified"))
                 .accessibilityIdentifier("relation-observation-\(relation.relation.agentID)-\(relation.skillID)")
+                .help("\(relation.agentDisplayName) · \(relation.skillName) · \(localized(relation.observation?.presentationLabel ?? "Type unverified"))")
+            if let path = relation.linkPath {
+                DisclosureGroup(localized("Paths and check details")) {
+                    Text(path).font(.caption).textSelection(.enabled)
+                    if let raw = relation.linkText { Text("\(localized("Original target")): \(raw)").font(.caption).textSelection(.enabled) }
+                    if let target = relation.resolvedTargetPath { Text("\(localized("Resolved target")): \(target)").font(.caption).textSelection(.enabled) }
+                }
+            }
             Text("\(localized("Verification")): \(localized(relation.verification.presentationLabel))")
                 .accessibilityLabel(localized("Verification"))
                 .accessibilityValue(localized(relation.verification.presentationLabel))
@@ -2416,7 +2444,7 @@ private struct Phase1RelationDetail: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(library.localized(LocalizedMessage("%@ relationship for %@", arguments: [relation.agentDisplayName, relation.skillName])))
-        .accessibilityValue("\(localized("Intent")) \(localized(relation.intendedEnabled.map { $0 ? "Enabled" : "Disabled" } ?? "Not set")). \(localized("Observed")) \(localized(relation.observation?.presentationLabel ?? "None")). \(localized("Verification")) \(localized(relation.verification.presentationLabel)).")
+        .accessibilityValue("\(localized("Intent")) \(localized(relation.intendedEnabled.map { $0 ? "Enabled" : "Disabled" } ?? "Not set")). \(localized("Observed")) \(localized(relation.observation?.presentationLabel ?? "Type unverified")). \(localized("Verification")) \(localized(relation.verification.presentationLabel)).")
         .accessibilityIdentifier("relation-detail-\(relation.relation.agentID)-\(relation.skillID)")
     }
 

@@ -52,7 +52,9 @@ struct ContentView: View {
                 controller.errorMessage = "Invalid Phase 1 UI fixture: \(error.localizedDescription)"
             }
         } else {
-            let languagePreferences = AppLanguagePreferences()
+            let languagePreferences = arguments.contains("--skillshub-home")
+                ? AppLanguagePreferences(defaults: Self.fixturePreferences(from: arguments))
+                : AppLanguagePreferences()
             let agentHomeDirectory = Self.debugHomeDirectory(from: arguments)
                 ?? UserHomeDirectoryResolver.currentHomeDirectory()
             let streamFactory: () -> any FilesystemEventStreaming = arguments.contains("--skillshub-ui-observation-failure")
@@ -78,6 +80,19 @@ struct ContentView: View {
         }
         return controller
         #else
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--skillshub-ui-fixture-run-id"),
+           let home = Self.debugHomeDirectory(from: arguments),
+           let support = Self.debugAppSupportDirectory(from: arguments) {
+            let preferences = Self.fixturePreferences(from: arguments)
+            WorkspaceLayoutPreferences.defaults = preferences
+            return SkillsHubLibraryController(
+                languagePreferences: AppLanguagePreferences(defaults: preferences),
+                appSupportURL: support,
+                agentHomeDirectory: home,
+                filesystemEventStreamFactory: { SystemFilesystemEventStream() }
+            )
+        }
         return SkillsHubLibraryController(
             languagePreferences: AppLanguagePreferences(),
             filesystemEventStreamFactory: { SystemFilesystemEventStream() }
@@ -148,7 +163,6 @@ struct ContentView: View {
         .environment(\.appLanguage, library.language)
     }
 
-    #if DEBUG
     /// UI fixtures keep language and layout preferences out of the user's domain.
     /// One suite is reused and cleared whenever a new fixture run starts, so relaunches within a run persist.
     private static func fixturePreferences(from arguments: [String]) -> UserDefaults {
@@ -189,6 +203,7 @@ struct ContentView: View {
         return baseDirectory.appending(path: directoryName, directoryHint: .isDirectory)
     }
 
+    #if DEBUG
     private static func debugLanguage(from arguments: [String]) -> AppLanguage? {
         guard let flagIndex = arguments.firstIndex(of: "--skillshub-ui-fixture-language"),
               arguments.indices.contains(arguments.index(after: flagIndex)) else {

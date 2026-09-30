@@ -7,6 +7,7 @@ import Testing
 struct FilesystemObservationTests {
     // MARK: - Scope mapping
 
+    #if DEBUG
     @Test func mapsRootAndAgentPathsToDistinctScopes() {
         let root = URL(fileURLWithPath: "/tmp/root", isDirectory: true)
         let codexDir = URL(fileURLWithPath: "/tmp/home/.codex/skills", isDirectory: true)
@@ -29,7 +30,9 @@ struct FilesystemObservationTests {
         #expect(batch.needsFullScan == false)
         #expect(batch.rootChanged == false)
     }
+    #endif
 
+    #if DEBUG
     @Test func agentDirectoryContainedInRootStillMapsToAgentScope() {
         // An Agent directory nested under the Root must win over .managedRoot.
         let root = URL(fileURLWithPath: "/tmp/root", isDirectory: true)
@@ -47,9 +50,11 @@ struct FilesystemObservationTests {
 
         #expect(batch.scopes == [.agentDirectory(agentID: "codex")])
     }
+    #endif
 
     // MARK: - Coalescing / loss / root change
 
+    #if DEBUG
     @Test func multiplePathsInOneScopeCoalesceToOneScopeEntry() {
         let controller = FilesystemObservationController(streamFactory: { FakeFilesystemEventStream() })
         let subscription = FilesystemObservationController.Subscription(
@@ -68,7 +73,9 @@ struct FilesystemObservationTests {
 
         #expect(batch.scopes == [.managedRoot])
     }
+    #endif
 
+    #if DEBUG
     @Test func droppedEventsForceFullScan() {
         let controller = FilesystemObservationController(streamFactory: { FakeFilesystemEventStream() })
         let subscription = FilesystemObservationController.Subscription(
@@ -88,7 +95,9 @@ struct FilesystemObservationTests {
             #expect(batch.needsFullScan == true)
         }
     }
+    #endif
 
+    #if DEBUG
     @Test func rootChangeFlagsAreReported() {
         let controller = FilesystemObservationController(streamFactory: { FakeFilesystemEventStream() })
         let subscription = FilesystemObservationController.Subscription(
@@ -108,6 +117,7 @@ struct FilesystemObservationTests {
             #expect(batch.rootChanged == true)
         }
     }
+    #endif
 
     // MARK: - Subscription lifecycle
 

@@ -480,7 +480,7 @@ nonisolated final class AgentDirectoryAuditService {
                     symlinkTarget: nil,
                     skillFileHash: nil,
                     matchCandidates: [],
-                    summary: "Found \(detection.entryCount) skill entries, not fully audited.",
+                    summary: "Found \(detection.entryCount) directory entries, not fully audited.",
                     evidence: ["Entry count: \(detection.entryCount)", "Structural fingerprint: \(currentFingerprint)"],
                     ignoredFingerprints: ignored
                 ))
@@ -619,8 +619,13 @@ nonisolated final class AgentDirectoryAuditService {
         ignoredFingerprints: Set<String>,
         localState: SkillsHubLocalState
     ) -> [AgentDirectoryFinding] {
-        let inspection = inspectEntry(entry)
-        if inspection.kind == .externalSymlink,
+        let recorded = localState.managedRelationEvidence.contains {
+            $0.relation.agentID == descriptor.agentID && pathsMatch($0.linkPath, entry.path)
+        } || localState.activeAgentLinks.contains {
+            $0.agentID == descriptor.agentID && pathsMatch($0.linkPath, entry.path)
+        }
+        guard let inspection = inspectEntry(entry, requiresEntry: recorded) else { return [] }
+        if inspection.isValidSkill, inspection.kind == .externalSymlink,
            isExactManagedLink(
                entry,
                descriptor: descriptor,
@@ -684,20 +689,20 @@ nonisolated final class AgentDirectoryAuditService {
         case .hubManagedSymlink:
             return nil
         case .externalSymlink:
-            return .externalSymlinkNotManaged
+            return inspection.isValidSkill ? .externalSymlinkNotManaged : .invalidEntry
         case .brokenSymlink:
             if rootMovedRecord(entry: entry, oldTarget: inspection.targetPath, descriptor: descriptor, rootURL: rootURL, localState: localState) != nil {
                 return .rootMovedRepairAvailable
             }
             return .brokenSymlink
         case .localDirectory:
-            return candidates.isEmpty ? .localDirectoryNotManaged : .duplicateWithHub
+            return inspection.isValidSkill ? (candidates.isEmpty ? .localDirectoryNotManaged : .duplicateWithHub) : .invalidEntry
         case .plainFile, .invalid, .missing:
             return .invalidEntry
         }
     }
 
-    private func inspectEntry(_ entry: URL) -> AgentEntryInspection {
+    private func inspectEntry(_ entry: URL, requiresEntry: Bool) -> AgentEntryInspection? {
         var evidence: [String] = []
         if access.isSymlink(entry) {
             do {
@@ -713,24 +718,72 @@ nonisolated final class AgentDirectoryAuditService {
                     evidence.append("Target status could not be verified (errno \(errno)).")
                     return AgentEntryInspection(kind: .invalid, targetPath: target.path, symlinkTarget: rawTarget, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: evidence)
                 }
-                return AgentEntryInspection(kind: .externalSymlink, targetPath: target.path, symlinkTarget: rawTarget, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: evidence)
+                let inspection = AgentEntryInspection(kind: .externalSymlink, targetPath: target.path, symlinkTarget: rawTarget, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: evidence)
+                guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+                    var invalid = inspection
+                    invalid.evidence.append("Target is not a skill directory.")
+                    return invalid
+                }
+                return inspectSkillDirectory(target, inspection: inspection, requiresEntry: requiresEntry)
             } catch {
                 evidence.append("Symlink target could not be resolved.")
                 return AgentEntryInspection(kind: .invalid, targetPath: nil, symlinkTarget: nil, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: evidence)
             }
         }
 
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: entry.path, isDirectory: &isDirectory) else {
-            return AgentEntryInspection(kind: .missing, targetPath: nil, symlinkTarget: nil, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: ["Entry missing: \(entry.path)"])
+        var status = stat()
+        guard lstat(entry.path, &status) == 0 else {
+            let missing = errno == ENOENT
+            return AgentEntryInspection(kind: missing ? .missing : .invalid, targetPath: nil, symlinkTarget: nil, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: [missing ? "Entry missing: \(entry.path)" : "Entry status could not be verified (errno \(errno))."])
         }
-        guard isDirectory.boolValue else {
+        guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
             return AgentEntryInspection(kind: .plainFile, targetPath: entry.path, symlinkTarget: nil, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: ["Plain file: \(entry.path)"])
         }
-        let skillFile = entry.appendingPathComponent("SKILL.md")
-        let skill = readSkillSummary(from: skillFile)
-        let localEvidence = skill.hash == nil ? evidence + ["Missing SKILL.md"] : evidence + skill.evidence
-        return AgentEntryInspection(kind: .localDirectory, targetPath: entry.path, symlinkTarget: nil, skillFileURL: skillFile, skillFileHash: skill.hash, skillName: skill.name, skillDescription: skill.description, evidence: localEvidence)
+        let inspection = AgentEntryInspection(kind: .localDirectory, targetPath: entry.path, symlinkTarget: nil, skillFileURL: nil, skillFileHash: nil, skillName: nil, skillDescription: nil, evidence: evidence)
+        return inspectSkillDirectory(entry, inspection: inspection, requiresEntry: requiresEntry)
+    }
+
+    private func inspectSkillDirectory(_ directory: URL, inspection: AgentEntryInspection, requiresEntry: Bool) -> AgentEntryInspection? {
+        var inspection = inspection
+        let skillFile = directory.appendingPathComponent("SKILL.md")
+        do {
+            guard try fileManager.contentsOfDirectory(atPath: directory.path).contains("SKILL.md") else {
+                if !requiresEntry { return nil }
+                inspection.evidence.append("Missing SKILL.md")
+                return inspection
+            }
+        } catch {
+            inspection.evidence.append("Skill directory could not be read: \(error.localizedDescription)")
+            return inspection
+        }
+        var status = stat()
+        guard lstat(skillFile.path, &status) == 0 else {
+            let missing = errno == ENOENT
+            if missing && !requiresEntry { return nil }
+            inspection.evidence.append(missing ? "Missing SKILL.md" : "SKILL.md status could not be verified (errno \(errno)).")
+            return inspection
+        }
+        inspection.skillFileURL = skillFile
+        do {
+            let resolved = try access.resolvePath("SKILL.md", relativeTo: directory, within: directory) { url, _ in
+                var node = stat()
+                guard lstat(url.path, &node) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                return node.st_mode & mode_t(S_IFMT) == mode_t(S_IFLNK)
+                    ? try self.fileManager.destinationOfSymbolicLink(atPath: url.path) : nil
+            }
+            guard fileManager.isReadableFile(atPath: resolved.path) else { throw FileAccessFailure.unreadable(path: resolved.path) }
+            let data = try Data(contentsOf: resolved)
+            inspection.skillFileHash = Self.sha256Hex(data)
+            guard let text = String(data: data, encoding: .utf8) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+            let frontmatter = try frontmatterParser.parse(text)
+            inspection.skillName = frontmatter.name
+            inspection.skillDescription = frontmatter.description
+            inspection.isValidSkill = true
+            inspection.evidence.append("SKILL.md hash: \(Self.sha256Hex(data))")
+        } catch {
+            inspection.evidence.append("SKILL.md could not be validated: \(error.localizedDescription)")
+        }
+        return inspection
     }
 
     private func isExactManagedLink(
@@ -768,7 +821,7 @@ nonisolated final class AgentDirectoryAuditService {
                 evidence.append(.resolvedPath)
             }
             if let hash = inspection.skillFileHash,
-               let hubHash = readSkillSummary(from: hubURL.appendingPathComponent("SKILL.md")).hash,
+               let hubHash = inspectEntry(hubURL, requiresEntry: true)?.skillFileHash,
                hash == hubHash {
                 evidence.append(.skillFileHash)
             }
@@ -953,15 +1006,6 @@ nonisolated final class AgentDirectoryAuditService {
         }
     }
 
-    private func readSkillSummary(from skillFile: URL) -> (hash: String?, name: String?, description: String?, evidence: [String]) {
-        guard let data = try? Data(contentsOf: skillFile) else {
-            return (nil, nil, nil, [])
-        }
-        let text = String(decoding: data, as: UTF8.self)
-        let frontmatter = try? frontmatterParser.parse(text)
-        return (Self.sha256Hex(data), frontmatter?.name, frontmatter?.description, ["SKILL.md hash: \(Self.sha256Hex(data))"])
-    }
-
     private func structuralFingerprint(for directory: URL, children: [URL]? = nil) -> String {
         let children = children ?? (try? firstLevelChildren(in: directory)) ?? []
         let rows = children.map { child -> String in
@@ -1130,4 +1174,5 @@ private struct AgentEntryInspection {
     var skillName: String?
     var skillDescription: String?
     var evidence: [String]
+    var isValidSkill = false
 }

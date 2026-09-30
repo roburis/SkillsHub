@@ -244,11 +244,10 @@ struct AgentDirectoryAuditTests {
         )
 
         #expect(result.findings.contains { $0.type == .duplicateWithHub && $0.entryName == "local-skill" })
-        #expect(result.findings.contains { $0.type == .localDirectoryNotManaged && $0.entryName == "local-no-skill-md" })
+        #expect(!result.findings.contains { $0.entryName == "local-no-skill-md" || $0.entryName == ".hidden-entry" })
         #expect(result.findings.contains { $0.type == .externalSymlinkNotManaged && $0.entryName == "external-link" })
         let actualNames = Set(try FileManager.default.contentsOfDirectory(atPath: codexSkills.path))
-        #expect(Set(result.findings.map(\.entryName)) == actualNames)
-        #expect(result.findings.count == actualNames.count)
+        #expect(Set(result.findings.map(\.entryName)) == actualNames.subtracting(["local-no-skill-md", ".hidden-entry"]))
         let broken = try #require(result.findings.first { $0.type == .brokenSymlink && $0.entryName == "broken-link" })
         #expect(broken.symlinkTarget == "/missing/path")
         #expect(broken.targetPath == "/missing/path")
@@ -328,8 +327,75 @@ struct AgentDirectoryAuditTests {
         let finding = try #require(result.findings.first { $0.entryName == "review" })
         #expect(finding.type == .externalSymlinkNotManaged)
         #expect(finding.entryKind == .externalSymlink)
-        #expect(finding.skillFileHash == nil)
-        #expect(!finding.evidence.contains { $0.contains("SKILL.md") })
+        #expect(finding.skillFileHash != nil)
+        #expect(finding.evidence.contains { $0.contains("SKILL.md hash") })
+    }
+
+    @Test(arguments: [".system", "nested", "case-entry", "external-empty", "invalid", "unreadable", "entry-inside", "entry-escape", "external-file", "managed-missing"])
+    func directEntryIdentityPreservesProblemsAndLeavesNodesUnchanged(_ sample: String) throws {
+        let home = try temporaryDirectory()
+        let root = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: home)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let target = home.appendingPathComponent(".codex/skills", isDirectory: true)
+        let directory = root.appendingPathComponent("sample", isDirectory: true)
+        let entry = target.appendingPathComponent(sample)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bytes = Data(localSkillText(name: "Sample", description: "Direct entry.").utf8)
+        let file = directory.appendingPathComponent("SKILL.md")
+        var state = SkillsHubLocalState()
+        if sample == "external-file" {
+            try bytes.write(to: file)
+            try FileManager.default.createSymbolicLink(at: entry, withDestinationURL: file)
+        } else if sample == "external-empty" {
+            try FileManager.default.createSymbolicLink(at: entry, withDestinationURL: directory)
+        } else {
+            try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: true)
+            let skillFile = entry.appendingPathComponent("SKILL.md")
+            if sample == "nested" {
+                try FileManager.default.createDirectory(at: entry.appendingPathComponent("child"), withIntermediateDirectories: true)
+                try bytes.write(to: entry.appendingPathComponent("child/SKILL.md"))
+            } else if sample == "invalid" {
+                try Data("invalid frontmatter".utf8).write(to: skillFile)
+            } else if sample == "case-entry" {
+                try bytes.write(to: entry.appendingPathComponent("skill.md"))
+            } else if sample == "entry-inside" {
+                try bytes.write(to: entry.appendingPathComponent("entry.md"))
+                try FileManager.default.createSymbolicLink(atPath: skillFile.path, withDestinationPath: "entry.md")
+            } else if sample == "unreadable" {
+                try bytes.write(to: skillFile)
+                try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: skillFile.path)
+            } else if sample == "entry-escape" {
+                try bytes.write(to: file)
+                try FileManager.default.createSymbolicLink(at: skillFile, withDestinationURL: file)
+            } else if sample == "managed-missing" {
+                state.activeAgentLinks = [AgentManagedLinkRecord(agentID: "codex", agent: .codex, alias: sample,
+                    linkPath: entry.path, targetPath: directory.path, hubSkillID: sample,
+                    hubRelativePath: "sample", rootAtCreation: root.path)]
+            }
+        }
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: entry.appendingPathComponent("SKILL.md").path) }
+        let before = try FileManager.default.contentsOfDirectory(atPath: target.path)
+        let result = try AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation).fullAudit(
+            agentID: "codex", rootURL: root, homeDirectory: home, overrides: [:], localState: state, installedSkills: [])
+        if [".system", "nested", "case-entry", "external-empty"].contains(sample) {
+            #expect(result.findings.isEmpty)
+        } else if sample == "entry-inside" {
+            #expect(result.findings.first?.type == .localDirectoryNotManaged)
+        } else {
+            #expect(result.findings.contains { $0.entryName == sample && $0.type == .invalidEntry })
+            #expect(!result.findings.contains { $0.type == .localDirectoryNotManaged || $0.type == .externalSymlinkNotManaged })
+            if sample == "unreadable" {
+                #expect(!result.findings.flatMap(\.evidence).contains("Missing SKILL.md"))
+            }
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: target.path) == before)
+        if sample == "entry-escape" || sample == "external-file" {
+            #expect(try Data(contentsOf: file) == bytes)
+        }
     }
 
     @Test func sameDisplayNameHubSkillsRemainDistinctCandidates() throws {
@@ -612,6 +678,8 @@ struct AgentDirectoryAuditTests {
             at: oldDirectory.appendingPathComponent("external-owned", isDirectory: true),
             withIntermediateDirectories: false
         )
+        try localSkillText(name: "External", description: "External skill.").write(
+            to: oldDirectory.appendingPathComponent("external-owned/SKILL.md"), atomically: true, encoding: .utf8)
         try fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
 
         let blockers = fixture.controller.agentDirectoryChangeBlockers(agentID: AgentKind.codex.rawValue)

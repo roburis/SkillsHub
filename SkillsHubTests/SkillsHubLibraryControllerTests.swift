@@ -378,6 +378,8 @@ struct SkillsHubLibraryControllerTests {
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         let entry = target.appendingPathComponent("outside-skill", isDirectory: true)
         try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: true)
+        try Data("---\nname: Outside\ndescription: Startup consumer.\n---\n".utf8).write(to: entry.appendingPathComponent("SKILL.md"))
+        try FileManager.default.createDirectory(at: target.appendingPathComponent("ordinary-folder"), withIntermediateDirectories: true)
         try SkillsHubMetadataStore().save(SkillsHubMetadata(rootConfig: RootConfig(rootPath: root.path)), to: root)
         let metadataURL = root.appendingPathComponent(".skillshub.json")
         let before = try Data(contentsOf: metadataURL)
@@ -390,6 +392,7 @@ struct SkillsHubLibraryControllerTests {
         try controller.bootstrapDefaultRootIfPresent()
 
         #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "outside-skill" })
+        #expect(!controller.agentFindings.contains { $0.entryName == "ordinary-folder" })
         #expect(try Data(contentsOf: metadataURL) == before)
         #expect(store.savedPaths.isEmpty)
     }
@@ -883,6 +886,12 @@ struct SkillsHubLibraryControllerTests {
         let skill = try #require(fixture.controller.installedSkills.first { $0.id == "writer" })
         let before = try #require(fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent })
         try #require(before.verification == .verifiedConsistent)
+        #expect(before.linkPath == fixture.controller.localState.targetObservations.first { $0.relation == before.relation }?.linkPath)
+        #expect(before.linkText != nil)
+        #expect(before.resolvedTargetPath == URL(fileURLWithPath: skill.installedPath).resolvingSymlinksInPath().path)
+        let item = try #require(fixture.controller.presentationService.phase1Items(
+            availableSkills: [], installedSkills: [skill], sources: [], enablementIntents: []).first)
+        #expect(fixture.controller.contentNodeObservation(for: item)?.nodeKind == .directory)
         let otherObservation = fixture.controller.localState.targetObservations.first { $0.relation.agentID != agent.rawValue }
         let otherVerification = fixture.controller.localState.verificationRecords.first { $0.relation.agentID != agent.rawValue }
         let ownership = fixture.controller.rootSnapshot?.metadata.managedRelationEvidence ?? []
@@ -901,6 +910,9 @@ struct SkillsHubLibraryControllerTests {
         #expect(after.verification != .verifiedConsistent)
         #expect(after.verification == .drifted)
         #expect(after.observation == .regularFile)
+        #expect(after.linkPath == link.path)
+        #expect(after.linkText == nil)
+        #expect(after.resolvedTargetPath == nil)
         #expect(after.safeNextStep == "Review the current relation before preparing another action.")
         #expect(fixture.controller.relationPresentations(for: skill).first { $0.agentKind != agent }?.verification == .verifiedConsistent)
         #expect(fixture.controller.rootSnapshot?.metadata.enablementIntents == intents)
@@ -918,6 +930,13 @@ struct SkillsHubLibraryControllerTests {
         let observation = try #require(persisted.targetObservations.first { $0.relation.agentID == agent.rawValue })
         #expect(observation.fileIdentity != ownership.first { $0.relation.agentID == agent.rawValue }?.fileIdentity)
         #expect(persisted.verificationRecords.first { $0.relation.agentID == agent.rawValue }?.bindings.observationDigest == observation.digest)
+        fixture.controller.agentDirectoryAuditFailures[agent.rawValue] = "Access unavailable"
+        let unavailable = try #require(fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent })
+        #expect(unavailable.observation == nil)
+        #expect(unavailable.linkPath == nil)
+        #expect(unavailable.linkText == nil)
+        #expect(unavailable.resolvedTargetPath == nil)
+        #expect(fixture.controller.relationPresentations(for: skill).first { $0.agentKind != agent }?.observation == .symbolicLink)
     }
 
     @Test(arguments: [AgentKind.codex, .claudeCode], ["unchanged", "vacant", "directory", "external", "broken", "replacement", "permission"])

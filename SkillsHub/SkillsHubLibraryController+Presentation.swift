@@ -1,6 +1,23 @@
 import Foundation
 
 extension SkillsHubLibraryController {
+    func contentNodeObservation(for item: Phase1SkillPresentation) -> TargetObservation? {
+        guard let rootURL, rootSessionLease != nil else { return nil }
+        let path = item.managed?.installedPath ?? item.source?.localPath.map {
+            URL(fileURLWithPath: $0).appendingPathComponent(item.relativeLocation).path
+        }
+        guard let path else { return nil }
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard FileAccessService().isDescendant(url, of: rootURL, resolvingSymlinks: false),
+              let identity = item.managed?.assetID ?? item.source?.id else { return nil }
+        // This identity only locates a transient content observation; it is never a managed relation.
+        return try? RelationOwnershipInspector().inspect(
+            linkURL: url,
+            relation: AgentRelationIdentity(assetID: identity, agentID: "content", scope: .global),
+            canonicalTargetPath: url.path, evidence: nil
+        ).observation
+    }
+
     var settingsState: AppSettingsState {
         settingsService.state(
             rootPath: settingsRootPathDisplay,

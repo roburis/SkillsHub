@@ -206,6 +206,8 @@ extension SkillsHubLibraryController {
             )
             let intent = rootSnapshot?.metadata.enablementIntents.first { $0.id == relation.id }
             let observation = localState.targetObservations.first { $0.relation == relation }
+            let currentObservation = agentDirectoryAuditFailures[descriptor.id] == nil || observation?.nodeKind == .unreadable
+                ? observation : nil
             let record = localState.verificationRecords.first { $0.relation == relation }
             let capability = agentCapabilityPresentation(descriptor)
             let result = relationActionResults[relation.id]
@@ -235,13 +237,16 @@ extension SkillsHubLibraryController {
                 skillID: skill.id,
                 skillName: skill.name,
                 intendedEnabled: intent?.isEnabled,
-                observation: observation?.nodeKind,
+                observation: currentObservation?.nodeKind,
                 verification: verification,
                 isInFlight: inFlightRelationActionIDs.contains(relation.id),
                 canPerformAction: capability.canManageRelations,
                 unavailableReason: capability.unavailableReason,
                 lastOutcome: result?.outcome,
-                safeNextStep: safeNextStep
+                safeNextStep: safeNextStep,
+                linkPath: currentObservation?.linkPath,
+                linkText: currentObservation?.linkText,
+                resolvedTargetPath: currentObservation?.resolvedTargetPath
             )
         }
     }
