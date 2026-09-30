@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 nonisolated enum AgentIconRenderingMode: Equatable {
     case original
@@ -14,6 +15,18 @@ nonisolated struct AgentIconSpecification: Equatable {
 }
 
 nonisolated enum AgentIconCatalog {
+    /// Only consumes the desktop path already verified by the installation detector.
+    @MainActor static func desktopIcon(at path: String?) -> NSImage? {
+        guard let path, let bundle = Bundle(path: path),
+              let name = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
+              !name.isEmpty, URL(fileURLWithPath: name).lastPathComponent == name,
+              let resources = bundle.resourceURL else { return nil }
+        let filename = (name as NSString).pathExtension.isEmpty ? name + ".icns" : name
+        guard let image = NSImage(contentsOf: resources.appendingPathComponent(filename)),
+              image.isValid, image.size != .zero else { return nil }
+        return image
+    }
+
     static let customFallback = AgentIconSpecification(
         assetName: nil,
         fallbackSystemImage: "person.crop.circle",

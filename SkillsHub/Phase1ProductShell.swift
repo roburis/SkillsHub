@@ -282,7 +282,6 @@ struct Phase1ProductShell: View {
                 openAgent: { requestNavigation(.agent($0)) },
                 openTasks: { requestNavigation(.tasks) },
                 openManagementDirectory: { requestNavigation(.managementDirectory) },
-                openOperation: { requestNavigation(.operation($0)) },
                 configuredAgentID: $configuredAgentID,
                 isAddingAgent: $isAddingAgent,
                 draft: $agentConfigurationDraft
@@ -551,7 +550,19 @@ private struct Phase1ProductSidebar: View {
                 }
                 Section(appLocalized("Sources", language: language)) {
                     destinationRow(appLocalized("Local", language: language), systemImage: "folder", destination: .localSources)
-                    destinationRow("GitHub", systemImage: "network", destination: .githubSources)
+                    Button { selection = .githubSources } label: {
+                        Label {
+                            Text("GitHub")
+                        } icon: {
+                            Image("GitHubSourceIcon").renderingMode(.template)
+                                .resizable().scaledToFit().frame(width: 16, height: 16)
+                                .foregroundStyle(Color(nsColor: .labelColor))
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .tag(Phase1NavigationDestination.githubSources)
+                    .accessibilityIdentifier("nav-github-sources")
                 }
                 Section(appLocalized("Agents", language: language)) {
                     if agents.isEmpty {
@@ -1862,7 +1873,6 @@ private struct Phase1SettingsWorkspace: View {
     var openAgent: (String) -> Void
     var openTasks: () -> Void
     var openManagementDirectory: () -> Void
-    var openOperation: (UUID) -> Void
     @Binding var configuredAgentID: String?
     @Binding var isAddingAgent: Bool
     @Binding var draft: AgentConfigurationDraft
@@ -1976,24 +1986,17 @@ private struct Phase1SettingsWorkspace: View {
                     }
                 }
                 Section(localized("Operation and Recovery")) {
-                    ForEach(library.phase1Tasks.sorted { $0.updatedAt > $1.updatedAt }) { task in
-                        Button { openOperation(task.id) } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(SkillsHubLocalization().localized(task.title, language: library.language))
-                                Text(SkillsHubLocalization().localized(task.result, language: library.language)).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }.accessibilityIdentifier("open-operation-\(task.id)")
-                    }
+                    Text(library.phase1TaskBadgeCount == 0
+                         ? localized("No pending operations")
+                         : localized("Pending operations: %@").replacingOccurrences(
+                            of: "%@", with: library.phase1TaskBadgeCount.formatted()))
+                        .accessibilityIdentifier("operation-summary")
                     Button {
                         openTasks()
                     } label: {
                         HStack {
                             Label(localized("Operation and Recovery"), systemImage: "checklist")
                             Spacer()
-                            if library.phase1TaskBadgeCount > 0 {
-                                Text(library.phase1TaskBadgeCount, format: .number)
-                                    .font(.caption.monospacedDigit())
-                            }
                         }
                     }
                     .accessibilityIdentifier("nav-tasks")
@@ -2300,18 +2303,21 @@ private struct Phase1AgentConfigurationForm: View {
 
 private struct Phase1AgentIcon: View {
     var presentation: AgentPresentation
+    var desktopIcon: NSImage?
     var size: CGFloat
     var showsBackground = true
     @Environment(\.appLanguage) private var language
 
     init(descriptor: InstalledAgentDescriptor, size: CGFloat, showsBackground: Bool = true) {
         presentation = AgentPresentation(descriptor: descriptor)
+        desktopIcon = AgentIconCatalog.desktopIcon(at: descriptor.desktopAppPath)
         self.size = size
         self.showsBackground = showsBackground
     }
 
     init(presentation: AgentPresentation, size: CGFloat, showsBackground: Bool = true) {
         self.presentation = presentation
+        desktopIcon = nil
         self.size = size
         self.showsBackground = showsBackground
     }
@@ -2326,6 +2332,9 @@ private struct Phase1AgentIcon: View {
                 }
                 .font(.system(size: size >= 24 ? 12 : 10, weight: .semibold))
                 .frame(width: min(size, 24), height: min(size, 24))
+            } else if let desktopIcon {
+                Image(nsImage: desktopIcon).resizable().scaledToFit()
+                    .frame(width: min(size, 20), height: min(size, 20))
             } else if let assetName = presentation.iconSpecification.assetName {
                 agentAsset(assetName)
             } else {

@@ -30,6 +30,7 @@ nonisolated struct InstalledAgentDescriptor: Equatable, Identifiable {
     var isUnresolved: Bool
     var globalCapability: InstalledAgentCapability
     var installationCategory: AgentInstallationCategory? = nil
+    var desktopAppPath: String? = nil
 
     var isVisibleOnCards: Bool {
         !isUnresolved
@@ -73,7 +74,8 @@ nonisolated struct InstalledAgentDescriptorBuilder {
                 isDetected: detection?.detected == true,
                 isUnresolved: false,
                 globalCapability: globalCapability,
-                installationCategory: detection?.installationCategory ?? (detection?.installationEvidence?.category)
+                installationCategory: detection?.installationCategory ?? (detection?.installationEvidence?.category),
+                desktopAppPath: detection?.installationEvidence?.desktopAppPath
             )
         }
 
