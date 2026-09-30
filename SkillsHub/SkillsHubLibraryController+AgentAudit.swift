@@ -5,6 +5,21 @@ extension SkillsHubLibraryController {
         guard let rootURL else {
             return
         }
+        var leases: [SecurityScopedAccessLease] = []
+        defer { leases.forEach { _ = $0.end(by: $0.owner) } }
+        let directories = agentAuditService.agentDescriptors(
+            homeDirectory: agentHomeDirectory, overrides: agentPathOverrides,
+            customAgents: agentAuditLocalState.customAgents
+        ).map(\.skillsDirectory)
+        for directory in Set(directories.map(\.standardizedFileURL)) {
+            guard let authorization = try? startupAccessStore.resolveAccess(to: directory),
+                  !authorization.isStale,
+                  authorization.url.standardizedFileURL == directory,
+                  let lease = try? securityScopedAccessProvider.acquire(
+                      url: authorization.url, owner: .inspection(UUID())
+                  ) else { continue }
+            leases.append(lease)
+        }
         let result = agentAuditService.lightScan(
             rootURL: rootURL,
             homeDirectory: agentHomeDirectory,
@@ -70,9 +85,9 @@ extension SkillsHubLibraryController {
             throw ControllerRelationActionError.unsupportedAgent(agentID)
         }
         let target = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-        let identity = try LinkNodeIdentity.read(at: target)
         let targetAccess = try acquireAgentTargetAccess(agentID: agentID, actionID: UUID())
         defer { _ = targetAccess.endByOwningAction() }
+        let identity = try LinkNodeIdentity.read(at: target)
         guard targetAccess.qualification.target?.standardizedFileURL == target,
               !FileAccessService(fileManager: fileManager).isSymlink(target),
               isDirectory(target),

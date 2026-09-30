@@ -772,6 +772,9 @@ extension SkillsHubLibraryController {
         controller.agentPathOverrides = Self.agentPathOverrides(
             from: controller.rootSnapshot?.metadata.agents ?? []
         )
+        if configuration.installationStatusFixture {
+            controller.refreshAgentLightScan(checkInstallation: true)
+        }
         return controller
     }
 
@@ -794,6 +797,18 @@ extension SkillsHubLibraryController {
         SkillsHubLibraryController(
             agentAuditService: AgentDirectoryAuditService { agent, _ in
                 guard agent == .codex || agent == .claudeCode else { return .absent }
+                if configuration.installationStatusFixture {
+                    let value = try? String(contentsOf: configuration.runRoot.appendingPathComponent("installation-status"), encoding: .utf8)
+                    guard agent == .codex else { return .absent }
+                    switch value?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    case "desktop":
+                        return .present(AgentInstallationEvidence(agent: agent, digest: "fixture-desktop", cliInstalled: false, desktopAppPath: "/fixture/Codex.app"))
+                    case "cli":
+                        return .present(AgentInstallationEvidence(agent: agent, digest: "fixture-cli", cliInstalled: true))
+                    case "absent": return .absent
+                    default: return .unverifiable
+                    }
+                }
                 return .present(
                     AgentInstallationEvidence(
                         agent: agent,

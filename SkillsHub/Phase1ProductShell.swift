@@ -113,7 +113,7 @@ struct Phase1ProductShell: View {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 Phase1ProductSidebar(
                     selection: navigationSelection,
-                    agents: library.visibleInstalledAgentDescriptors
+                    agents: library.sidebarAgentDescriptors
                 )
                 .navigationSplitViewColumnWidth(min: 176, ideal: 196, max: 260)
                 .toolbar(removing: .sidebarToggle)
@@ -166,6 +166,9 @@ struct Phase1ProductShell: View {
         }
         .frame(minWidth: 1040, minHeight: 560)
         .environment(\.appLanguage, library.language)
+        .onChange(of: library.sidebarAgentDescriptors.map(\.id)) { _, ids in
+            if case .agent(let id) = selection, !ids.contains(id) { selection = .allSkills }
+        }
         .confirmationDialog(
             appLocalized("Discard unsaved changes?", language: library.language),
             isPresented: $showUnsavedNavigationConfirmation
@@ -2040,6 +2043,12 @@ private struct Phase1AgentSettingsRow: View {
                 Text(localized(descriptor.isCustom ? "Custom Agent" : "Built-in Agent"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if !descriptor.isCustom {
+                    Text(localized(installationStatusKey))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("agent-installation-status-\(descriptor.id)")
+                }
                 Text(capability.targetPath ?? localized("No target configured"))
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -2064,6 +2073,16 @@ private struct Phase1AgentSettingsRow: View {
             }
             Button(localized("Configure…"), action: configure)
                 .accessibilityIdentifier("configure-agent-\(capability.agentID)")
+        }
+    }
+
+    private var installationStatusKey: String {
+        switch descriptor.installationCategory {
+        case .cli: "CLI installed"
+        case .desktop: "Desktop App installed"
+        case .both: "CLI and Desktop App installed"
+        case .absent: "Installation not found"
+        case .unverifiable, nil: "Installation could not be verified"
         }
     }
 }

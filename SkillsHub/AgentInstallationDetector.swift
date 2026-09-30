@@ -1,11 +1,30 @@
 import Darwin
 import Foundation
 import Security
+import CoreServices
 
 /// Static proof for one supported Agent. Directory observations are not installation evidence.
 nonisolated struct AgentInstallationEvidence: Codable, Hashable, Sendable {
     let agent: AgentKind
     let digest: String
+    let cliInstalled: Bool?
+    let desktopAppPath: String?
+
+    init(agent: AgentKind, digest: String, cliInstalled: Bool? = nil, desktopAppPath: String? = nil) {
+        self.agent = agent
+        self.digest = digest
+        self.cliInstalled = cliInstalled
+        self.desktopAppPath = desktopAppPath
+    }
+
+    var category: AgentInstallationCategory {
+        if desktopAppPath != nil { return cliInstalled == true ? .both : .desktop }
+        return .cli // Historical evidence was exclusively verified CLI evidence.
+    }
+}
+
+nonisolated enum AgentInstallationCategory: String, Codable, Hashable, Sendable {
+    case absent, unverifiable, cli, desktop, both
 }
 
 nonisolated enum AgentInstallationResult: Equatable, Sendable {
@@ -17,6 +36,14 @@ nonisolated enum AgentInstallationResult: Equatable, Sendable {
         guard case .present(let evidence) = self else { return nil }
         return evidence
     }
+
+    var category: AgentInstallationCategory {
+        switch self {
+        case .absent: .absent
+        case .unverifiable: .unverifiable
+        case .present(let evidence): evidence.category
+        }
+    }
 }
 
 nonisolated struct AgentInstallationDetector: Sendable {
@@ -26,9 +53,20 @@ nonisolated struct AgentInstallationDetector: Sendable {
     }
 
     private let candidates: @Sendable (AgentKind, URL) -> [Candidate]
+    private let desktopCandidates: @Sendable (AgentKind, URL) throws -> [URL]
+    private let verifyCLI: @Sendable (URL, String) throws -> [String]
+    private let verifyDesktop: @Sendable (URL, String) throws -> [String]
 
-    init(candidates: @escaping @Sendable (AgentKind, URL) -> [Candidate] = Self.fixedCandidates) {
+    init(
+        candidates: @escaping @Sendable (AgentKind, URL) -> [Candidate] = Self.fixedCandidates,
+        desktopCandidates: @escaping @Sendable (AgentKind, URL) throws -> [URL] = Self.registeredDesktopCandidates,
+        verifyCLI: @escaping @Sendable (URL, String) throws -> [String] = Self.validatedHashes,
+        verifyDesktop: @escaping @Sendable (URL, String) throws -> [String] = Self.validatedDesktopHashes
+    ) {
         self.candidates = candidates
+        self.desktopCandidates = desktopCandidates
+        self.verifyCLI = verifyCLI
+        self.verifyDesktop = verifyDesktop
     }
 
     static func fixedCandidates(agent: AgentKind, home: URL) -> [Candidate] {
@@ -40,14 +78,14 @@ nonisolated struct AgentInstallationDetector: Sendable {
     }
 
     func detect(agent: AgentKind, home: URL) -> AgentInstallationResult {
-        guard let requirement = Self.requirement(for: agent) else { return .unverifiable }
+        guard let requirement = Self.requirement(for: agent), let desktopRequirement = Self.desktopRequirement(for: agent) else { return .unverifiable }
         var proofs: [String] = []
         var unknown = false
         for candidate in candidates(agent, home) {
             do {
                 let url = try Self.resolve(candidate)
                 let before = try Self.identity(url)
-                let hashes = try Self.validatedHashes(url, requirement: requirement)
+                let hashes = try verifyCLI(url, requirement)
                 guard try Self.resolve(candidate) == url, try Self.identity(url) == before else { throw Failure.invalid }
                 proofs.append(([url.path, before] + hashes).joined(separator: "|"))
             } catch Failure.absent {
@@ -56,10 +94,80 @@ nonisolated struct AgentInstallationDetector: Sendable {
                 unknown = true
             }
         }
+        let cliInstalled = !proofs.isEmpty
+        var desktopAppPath: String?
+        do {
+            for url in try desktopCandidates(agent, home) {
+                do {
+                    let before = try Self.desktopIdentity(url)
+                    let hashes = try verifyDesktop(url, desktopRequirement)
+                    guard try Self.desktopIdentity(url) == before else { throw Failure.invalid }
+                    proofs.append(([url.standardizedFileURL.path, before] + hashes).joined(separator: "|"))
+                    desktopAppPath = url.standardizedFileURL.path
+                } catch Failure.absent {
+                    continue
+                } catch {
+                    unknown = true
+                }
+            }
+        } catch {
+            unknown = true
+        }
         guard proofs.isEmpty == false else { return unknown ? .unverifiable : .absent }
-        let rules = "static-native-v1|all-architectures|offline|bounded-install-root|\(requirement)"
+        let rules = "static-native-v2|offline|signed-cli-and-desktop|\(requirement)|\(desktopRequirement)"
         let digest = SHA256Digest.hex(Data(([rules] + Array(Set(proofs)).sorted()).joined(separator: "\n").utf8))
-        return .present(AgentInstallationEvidence(agent: agent, digest: digest))
+        return .present(AgentInstallationEvidence(agent: agent, digest: digest, cliInstalled: cliInstalled, desktopAppPath: desktopAppPath))
+    }
+
+    static func registeredDesktopCandidates(agent: AgentKind, home: URL) throws -> [URL] {
+        guard let bundleID = desktopBundleID(for: agent) else { return [] }
+        let fixed = [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")]
+            .map { $0.appendingPathComponent(agent == .codex ? "Codex.app" : "Claude.app", isDirectory: true) }
+        var error: Unmanaged<CFError>?
+        let registered = LSCopyApplicationURLsForBundleIdentifier(bundleID as CFString, &error)?.takeRetainedValue() as? [URL] ?? []
+        if let error = error?.takeRetainedValue(), CFErrorGetCode(error) != kLSApplicationNotFoundErr {
+            throw error
+        }
+        return Array(Set(fixed + registered)).sorted { $0.path < $1.path }
+    }
+
+    private static func desktopBundleID(for agent: AgentKind) -> String? {
+        switch agent {
+        case .codex: "com.openai.codex"
+        case .claudeCode: "com.anthropic.claudefordesktop"
+        default: nil
+        }
+    }
+
+    private static func desktopRequirement(for agent: AgentKind) -> String? {
+        guard let bundleID = desktopBundleID(for: agent) else { return nil }
+        let team = agent == .codex ? "2DC432GLL2" : "Q6L2SF6YDW"
+        return "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(bundleID)\""
+    }
+
+    private static func desktopIdentity(_ url: URL) throws -> String {
+        var info = stat()
+        var volume = statfs()
+        guard lstat(url.path, &info) == 0 else {
+            if errno == ENOENT { throw Failure.absent }
+            throw Failure.invalid
+        }
+        guard info.st_mode & S_IFMT == S_IFDIR, statfs(url.path, &volume) == 0,
+              volume.f_flags & UInt32(MNT_LOCAL) != 0 else { throw Failure.invalid }
+        return "\(info.st_dev)|\(info.st_ino)|\(info.st_mtimespec.tv_sec)|\(info.st_ctimespec.tv_sec)"
+    }
+
+    private static func validatedDesktopHashes(_ url: URL, requirement text: String) throws -> [String] {
+        var requirement: SecRequirement?
+        var code: SecStaticCode?
+        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement,
+              SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
+              SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures).union(.noNetworkAccess), requirement) == errSecSuccess else { throw Failure.invalid }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let dictionary = information as? [String: Any],
+              let values = dictionary[kSecCodeInfoCdHashes as String] as? [Data], !values.isEmpty else { throw Failure.invalid }
+        return values.map { $0.map { String(format: "%02x", $0) }.joined() }.sorted()
     }
 
     static func requirement(for agent: AgentKind) -> String? {

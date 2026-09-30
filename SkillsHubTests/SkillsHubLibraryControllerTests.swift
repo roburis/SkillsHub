@@ -370,6 +370,30 @@ struct SkillsHubLibraryControllerTests {
         #expect(accessStore.restoredPaths.contains(defaultRoot.standardizedFileURL.path))
     }
 
+    @Test func startupRestoresAuthorizedAgentEntriesWithoutChangingRootMetadata() throws {
+        let home = try temporaryDirectory()
+        let root = home.appendingPathComponent("skills-hub", isDirectory: true)
+        let target = home.appendingPathComponent(".codex/skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let entry = target.appendingPathComponent("outside-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: entry, withIntermediateDirectories: true)
+        try SkillsHubMetadataStore().save(SkillsHubMetadata(rootConfig: RootConfig(rootPath: root.path)), to: root)
+        let metadataURL = root.appendingPathComponent(".skillshub.json")
+        let before = try Data(contentsOf: metadataURL)
+        let store = InMemoryStartupAccessStore(restorablePaths: [root.path, target.path])
+        let controller = SkillsHubLibraryController(
+            agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation),
+            agentHomeDirectory: home, agentEnvironment: [:], startupAccessStore: store
+        )
+
+        try controller.bootstrapDefaultRootIfPresent()
+
+        #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "outside-skill" })
+        #expect(try Data(contentsOf: metadataURL) == before)
+        #expect(store.savedPaths.isEmpty)
+    }
+
     @Test func startupAuthorizationSkipsBuiltInAgentWhenPersistedAccessRestores() throws {
         let root = try temporaryDirectory()
         let home = try temporaryDirectory()

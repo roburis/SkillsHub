@@ -15,6 +15,7 @@ nonisolated struct Phase1UITestFixtureConfiguration: Hashable, Sendable {
     var githubRemovalFixture: Bool
     var githubImportFixture: Bool
     var agentAuthorizationFixture: Bool
+    var installationStatusFixture: Bool
 
     init(
         arguments: [String],
@@ -94,6 +95,7 @@ nonisolated struct Phase1UITestFixtureConfiguration: Hashable, Sendable {
         self.githubRemovalFixture = arguments.contains("--skillshub-ui-github-removal-fixture")
         self.githubImportFixture = arguments.contains("--skillshub-ui-github-import-fixture")
         self.agentAuthorizationFixture = arguments.contains("--skillshub-ui-agent-authorization-fixture")
+        self.installationStatusFixture = arguments.contains("--skillshub-ui-installation-status-fixture")
     }
 
     func validateAccessibleDirectories(fileManager: FileManager = .default) throws {

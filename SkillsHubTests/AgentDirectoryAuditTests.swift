@@ -51,12 +51,75 @@ struct AgentDirectoryAuditTests {
             try FileManager.default.createSymbolicLink(at: entry, withDestinationURL: URL(fileURLWithPath: "/usr/bin/true"))
         default: break
         }
-        let detector = AgentInstallationDetector(candidates: { _, _ in [.init(entry: entry, root: root)] })
+        let detector = AgentInstallationDetector(candidates: { _, _ in [.init(entry: entry, root: root)] }, desktopCandidates: { _, _ in [] })
         #expect(detector.detect(agent: .codex, home: root) == (sample == "absent" ? .absent : .unverifiable))
         if sample == "unreadable" {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: entry.path)
             #expect(FileManager.default.isReadableFile(atPath: entry.path))
         }
+    }
+
+    @Test(arguments: ["absent", "cli", "desktop", "both", "unknown"])
+    func installationClassifiesBoundedSignedChannels(_ sample: String) throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".tmp/agent-classification-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appendingPathComponent("codex")
+        let app = root.appendingPathComponent("Codex.app", isDirectory: true)
+        if sample == "cli" || sample == "both" || sample == "unknown" {
+            try Data("fixture".utf8).write(to: cli)
+        }
+        if sample == "desktop" || sample == "both" {
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        }
+        let detector = AgentInstallationDetector(
+            candidates: { _, _ in [.init(entry: cli, root: root)] },
+            desktopCandidates: { _, _ in [app] },
+            verifyCLI: { _, _ in
+                if sample == "unknown" { throw CocoaError(.fileReadNoPermission) }
+                return ["verified-cli"]
+            },
+            verifyDesktop: { _, _ in ["verified-desktop"] }
+        )
+        let expected: AgentInstallationCategory = switch sample {
+        case "cli": .cli
+        case "desktop": .desktop
+        case "both": .both
+        case "unknown": .unverifiable
+        default: .absent
+        }
+        #expect(detector.detect(agent: .codex, home: root).category == expected)
+    }
+
+    @Test func unsignedDesktopBundleCannotBecomeInstallationEvidence() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".tmp/agent-unsigned-desktop-\(UUID().uuidString)", isDirectory: true)
+        let app = root.appendingPathComponent("Codex.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let detector = AgentInstallationDetector(candidates: { _, _ in [] }, desktopCandidates: { _, _ in [app] })
+        #expect(detector.detect(agent: .codex, home: root) == .unverifiable)
+    }
+
+    @Test(arguments: [AgentInstallationCategory.absent, .unverifiable, .cli, .desktop, .both])
+    func builtInSidebarAdmissionKeepsConfiguration(_ category: AgentInstallationCategory) {
+        let detection = AgentDetectionSnapshot(
+            agentID: AgentKind.codex.rawValue, agent: .codex, displayName: "Codex",
+            markerPath: "/fixture/.codex", skillsDirectory: "/fixture/.codex/skills",
+            detected: [.cli, .desktop, .both].contains(category), skillsDirectoryExists: true,
+            entryCount: 0, readable: true, writable: true, isCustom: false,
+            installationCategory: category
+        )
+        let descriptors = InstalledAgentDescriptorBuilder().build(
+            detections: [detection], configurations: AgentConfigurationRecord.phase1BuiltIns,
+            links: []
+        ).descriptors
+        let codex = descriptors.first { $0.id == AgentKind.codex.rawValue }
+        #expect(descriptors.count == 2)
+        #expect(codex?.isVisibleOnCards == true)
+        #expect(codex?.isVisibleInSidebar == [.cli, .desktop, .both].contains(category))
+        #expect(descriptors.first { $0.id == AgentKind.claudeCode.rawValue }?.isVisibleInSidebar == false)
     }
 
     @Test(arguments: [AgentKind.codex, .claudeCode])
@@ -72,6 +135,7 @@ struct AgentDirectoryAuditTests {
         let detection = try #require(result.detections.first { $0.agent == agent })
         #expect(detection.skillsDirectoryExists)
         #expect(detection.detected == false)
+        #expect(detection.installationCategory == .absent)
         #expect(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
     }
 
@@ -197,6 +261,10 @@ struct AgentDirectoryAuditTests {
         let target = home.appendingPathComponent(".codex/skills", isDirectory: true)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         let service = AgentDirectoryAuditService(fileManager: FailingAgentDirectoryFileManager(target: target), installationPresence: fixtureAgentInstallation)
+        let light = service.lightScan(rootURL: root, homeDirectory: home, overrides: [:], localState: SkillsHubLocalState())
+        #expect(light.detections.first { $0.agent == .codex }?.entryCount == 0)
+        #expect(light.detections.first { $0.agent == .codex }?.readable == false)
+        #expect(light.findings.contains { $0.agent == .codex && $0.type == .directoryEnumerationFailed })
         #expect(throws: (any Error).self) {
             try service.fullAudit(agentID: AgentKind.codex.rawValue, rootURL: root, homeDirectory: home, overrides: [:], localState: SkillsHubLocalState(), installedSkills: [])
         }
@@ -436,6 +504,7 @@ struct AgentDirectoryAuditTests {
         #expect(builtIn.globalCapability.isAvailable)
         let custom = try #require(result.descriptors.first { $0.id == "custom-valid" })
         #expect(custom.globalCapability.isAvailable)
+        #expect(custom.isVisibleInSidebar)
         let invalid = try #require(result.descriptors.first { $0.id == "custom-invalid" })
         #expect(invalid.globalCapability == .unavailable(.invalidSkillsDirectory))
         let missing = try #require(result.descriptors.first { $0.id == "custom-missing" })
@@ -455,6 +524,7 @@ struct AgentDirectoryAuditTests {
 
         #expect(controller.visibleInstalledAgentDescriptors.map(\.id) == ["claudeCode", "codex"])
         #expect(controller.visibleInstalledAgentDescriptors.allSatisfy { $0.isDetected == false })
+        #expect(controller.sidebarAgentDescriptors.isEmpty)
     }
 
     @Test func agentDirectoryChangesOnlyAfterOldRelationsAreClear() async throws {
