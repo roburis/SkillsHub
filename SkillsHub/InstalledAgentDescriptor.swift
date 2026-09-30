@@ -29,9 +29,14 @@ nonisolated struct InstalledAgentDescriptor: Equatable, Identifiable {
     var isDetected: Bool
     var isUnresolved: Bool
     var globalCapability: InstalledAgentCapability
+    var installationCategory: AgentInstallationCategory? = nil
 
     var isVisibleOnCards: Bool {
         !isUnresolved
+    }
+
+    var isVisibleInSidebar: Bool {
+        isVisibleOnCards && (isCustom || [.cli, .desktop, .both].contains(installationCategory))
     }
 }
 
@@ -67,7 +72,8 @@ nonisolated struct InstalledAgentDescriptorBuilder {
                 isCustom: configuration.agent == nil,
                 isDetected: detection?.detected == true,
                 isUnresolved: false,
-                globalCapability: globalCapability
+                globalCapability: globalCapability,
+                installationCategory: detection?.installationCategory ?? (detection?.installationEvidence?.category)
             )
         }
 

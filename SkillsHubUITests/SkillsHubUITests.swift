@@ -401,6 +401,41 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testInstallationEvidenceControlsSidebarButKeepsSettingsAndRelations() throws {
+        let fixture = try makeFixture()
+        let status = fixture.runRoot.appendingPathComponent("installation-status")
+        try "desktop".write(to: status, atomically: true, encoding: .utf8)
+        let app = try launch(fixture: fixture, additionalArguments: ["--skillshub-ui-installation-status-fixture"])
+        XCTAssertTrue(app.descendants(matching: .any)["nav-agent-codex"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["nav-agent-claudeCode"].exists)
+        selectNavigation("settings", in: app)
+        XCTAssertTrue(app.staticTexts["Desktop App installed"].exists)
+        XCTAssertTrue(app.buttons["configure-agent-claudeCode"].exists)
+        selectNavigation("all-skills", in: app)
+        app.descendants(matching: .any)["skill-row-fixture-review-candidate"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["relation-detail-claudeCode-review-fixture"].waitForExistence(timeout: 2))
+
+        selectNavigation("agent-codex", in: app)
+        try "absent".write(to: status, atomically: true, encoding: .utf8)
+        app.buttons["recheck-agent-directory-codex"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["skill-library-list"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["nav-agent-codex"].exists)
+        selectNavigation("settings", in: app)
+        app.buttons["refresh-default-agent-directories"].click()
+        XCTAssertFalse(app.descendants(matching: .any)["nav-agent-codex"].exists)
+        XCTAssertTrue(app.staticTexts["Installation not found"].exists)
+        XCTAssertTrue(app.buttons["configure-agent-codex"].exists)
+        selectNavigation("all-skills", in: app)
+        app.descendants(matching: .any)["skill-row-fixture-review-candidate"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["relation-detail-codex-review-fixture"].waitForExistence(timeout: 2))
+        try "unknown".write(to: status, atomically: true, encoding: .utf8)
+        selectNavigation("settings", in: app)
+        app.buttons["refresh-default-agent-directories"].click()
+        XCTAssertTrue(app.staticTexts["Installation could not be verified"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["nav-agent-codex"].exists)
+    }
+
+    @MainActor
     func testUnconnectedDirectoryAndRefreshInThreeLanguages() throws {
         for (language, status) in [("system", "未授权"), ("en", "Not authorized"), ("zh-Hans", "未授权"), ("ja", "未許可")] {
             let fixture = try makeFixture()
@@ -922,6 +957,38 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Agent directory has not been verified."].firstMatch.exists)
         XCTAssertFalse(app.staticTexts["No matching Skills"].exists)
+    }
+
+    @MainActor
+    func testAuthorizedAgentEntriesReturnAfterAppRestart() throws {
+        let fixture = try makeFixture()
+        let root = fixture.home.appending(path: "skills-hub", directoryHint: .isDirectory)
+        let target = fixture.home.appending(path: ".claude/skills", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target.appending(path: "outside-skill"), withIntermediateDirectories: true)
+        let supportName = "SkillsHubUITests-restart-\(fixture.runID.uuidString)"
+        var app = launchPlatformRootApp(fixture: fixture, scenario: "restart", appSupportName: supportName)
+        openEstablishRootPanel(in: app)
+        chooseDirectory(root, in: app)
+        XCTAssertTrue(waitForConfiguredRoot(in: app, expectedCount: 1))
+        selectNavigation("settings", in: app)
+        app.buttons["refresh-default-agent-directories"].click()
+        let authorize = app.buttons["authorize-default-agent-directory-claudeCode"]
+        XCTAssertTrue(authorize.waitForExistence(timeout: 3))
+        authorize.click()
+        chooseDirectory(target, in: app)
+        selectNavigation("agent-claudeCode", in: app)
+        XCTAssertTrue(app.staticTexts["outside-skill"].waitForExistence(timeout: 3))
+        let metadataURL = root.appending(path: ".skillshub.json")
+        let before = try Data(contentsOf: metadataURL)
+        app.terminate()
+        activeApp = nil
+
+        app = launchPlatformRootApp(fixture: fixture, scenario: "restart", appSupportName: supportName, expectEmpty: false)
+        selectNavigation("agent-claudeCode", in: app)
+        XCTAssertTrue(app.staticTexts["outside-skill"].waitForExistence(timeout: 5))
+        XCTAssertEqual(try Data(contentsOf: metadataURL), before)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.appending(path: "outside-skill").path))
     }
 
     @MainActor
@@ -1968,11 +2035,13 @@ final class SkillsHubUITests: XCTestCase {
     private func launchPlatformRootApp(
         fixture: Phase1UITestFixture,
         scenario: String,
+        appSupportName: String? = nil,
+        expectEmpty: Bool = true,
         additionalArguments: [String] = []
     ) -> XCUIApplication {
         let app = XCUIApplication()
         activeApp = app
-        let appSupportName = "SkillsHubUITests-platform-\(scenario)-\(UUID().uuidString)"
+        let appSupportName = appSupportName ?? "SkillsHubUITests-platform-\(scenario)-\(UUID().uuidString)"
         app.launchArguments = [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-ApplePersistenceIgnoreState", "YES",
@@ -1985,8 +2054,10 @@ final class SkillsHubUITests: XCTestCase {
         app.launch()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 4))
-        XCTAssertTrue(app.buttons["establish-root-primary"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["connect-root-primary"].exists)
+        if expectEmpty {
+            XCTAssertTrue(app.buttons["establish-root-primary"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.buttons["connect-root-primary"].exists)
+        }
         return app
     }
 

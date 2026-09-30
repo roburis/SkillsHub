@@ -42,6 +42,15 @@ extension SkillsHubLibraryController {
             defaultAgentDirectoryRefresh = [:]
             return
         }
+        let priorFindings = agentFindings
+        refreshAgentLightScan(checkInstallation: true)
+        let unavailableIDs = Set(agentDetections.filter { !$0.skillsDirectoryExists || !$0.readable }.map(\.agentID))
+        // Keep the last observed entries visible with the verification failure until access is restored.
+        agentFindings += priorFindings.filter { finding in
+            unavailableIDs.contains(finding.agentID)
+                && [.localDirectoryNotManaged, .externalSymlinkNotManaged].contains(finding.type)
+                && !agentFindings.contains(where: { $0.id == finding.id })
+        }
         for agent in [AgentKind.codex, .claudeCode] {
             let status = inspectDefaultAgentDirectory(agent)
             if status == .manageable {
@@ -135,6 +144,10 @@ extension SkillsHubLibraryController {
 
     var visibleInstalledAgentDescriptors: [InstalledAgentDescriptor] {
         installedAgentDescriptors.filter { $0.isVisibleOnCards && $0.id != "agents" }
+    }
+
+    var sidebarAgentDescriptors: [InstalledAgentDescriptor] {
+        visibleInstalledAgentDescriptors.filter(\.isVisibleInSidebar)
     }
 
     var installedAgentIdentityIssues: [InstalledAgentIdentityIssue] {
@@ -473,7 +486,7 @@ extension SkillsHubLibraryController {
         }
 
         for finding in findings ?? agentFindings where finding.agentID == agentID
-            && [.pendingAudit, .permissionDenied, .linkDrift, .rollbackFailed, .invalidEntry].contains(finding.type) {
+            && [.pendingAudit, .permissionDenied, .directoryEnumerationFailed, .linkDrift, .rollbackFailed, .invalidEntry].contains(finding.type) {
             blockers.append(AgentDirectoryChangeBlocker(
                 kind: .unresolvedRelation,
                 id: "finding-\(finding.id)",
@@ -536,20 +549,19 @@ extension SkillsHubLibraryController {
         }
         let target = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         let detection = agentDetections.first { $0.agentID == agentID }
-        let candidates = isDirectory(target) ? [target] : []
         let authorization = try startupAccessStore.resolveAccess(to: target)
         let qualification = if let agent = descriptor.agent {
             AgentTargetQualifier().qualify(
                 agent: agent,
                 detected: detection?.detected == true,
-                candidates: candidates,
+                candidates: [target],
                 authorization: authorization
             )
         } else {
             AgentTargetQualifier().qualify(
                 customAgentID: agentID,
                 detected: detection?.detected == true,
-                candidates: candidates,
+                candidates: [target],
                 authorization: authorization
             )
         }
@@ -567,6 +579,10 @@ extension SkillsHubLibraryController {
             lease = try securityScopedAccessProvider.acquire(url: qualifiedTarget, owner: owner)
         } catch SecurityScopedAccessError.startDenied {
             throw AgentTargetAccessError.leaseUnavailable
+        }
+        guard isDirectory(target) else {
+            _ = lease.end(by: owner)
+            throw AgentTargetAccessError.qualificationFailed(.targetMissing)
         }
         return AgentTargetAccess(
             qualification: qualification,

@@ -55,6 +55,14 @@ extension SkillsHubLibraryController {
             } else if case .initializationRequired(let facts) = result {
                 try activateExistingRoot(facts, announceStatus: false, resolvingPersistedBookmark: true)
             }
+            if rootURL != nil {
+                refreshAgentLightScan(checkInstallation: true)
+                for descriptor in visibleInstalledAgentDescriptors where agentDetections.contains(where: {
+                    $0.agentID == descriptor.id && $0.detected
+                }) {
+                    try? auditAgentDirectory(agentID: descriptor.id)
+                }
+            }
         } catch {
             if isRootPermissionError(error) {
                 return

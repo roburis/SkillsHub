@@ -54,6 +54,7 @@ nonisolated enum AgentFindingType: String, Codable, CaseIterable, Hashable {
     case pendingAudit
     case missingSkillsDirectory
     case permissionDenied
+    case directoryEnumerationFailed
     case localDirectoryNotManaged
     case externalSymlinkNotManaged
     case brokenSymlink
@@ -143,6 +144,7 @@ nonisolated struct AgentDetectionSnapshot: Codable, Hashable, Identifiable {
     var writable: Bool
     var isCustom: Bool
     var installationEvidence: AgentInstallationEvidence? = nil
+    var installationCategory: AgentInstallationCategory? = nil
 
     var id: String { agentID }
 }
@@ -396,7 +398,11 @@ nonisolated final class AgentDirectoryAuditService {
     ) -> AgentDirectoryAuditResult {
         let descriptors = agentDescriptors(homeDirectory: homeDirectory, overrides: overrides, customAgents: localState.customAgents)
         let detections = descriptors.map { descriptor in
-            detectionSnapshot(for: descriptor, evidence: checkInstallation ? descriptor.agent.flatMap { installationPresence($0, homeDirectory).evidence } : localState.detectedAgentsSnapshot.first { $0.agentID == descriptor.agentID }?.installationEvidence)
+            detectionSnapshot(
+                for: descriptor,
+                installation: checkInstallation ? descriptor.agent.map { installationPresence($0, homeDirectory) } : nil,
+                previous: localState.detectedAgentsSnapshot.first { $0.agentID == descriptor.agentID }
+            )
         }
         let ignored = Set(localState.ignoredFindingFingerprints)
         var findings: [AgentDirectoryFinding] = []
@@ -424,11 +430,13 @@ nonisolated final class AgentDirectoryAuditService {
             }
 
             if detection.detected && detection.skillsDirectoryExists && (!detection.readable || !detection.writable) {
+                let enumerationFailed = !detection.readable
+                    && fileManager.isReadableFile(atPath: detection.skillsDirectory)
                 findings.append(finding(
                     agentID: detection.agentID,
                     agent: detection.agent,
                     agentDisplayName: detection.displayName,
-                    type: .permissionDenied,
+                    type: enumerationFailed ? .directoryEnumerationFailed : .permissionDenied,
                     entryName: detection.displayName,
                     entryKind: .missing,
                     sourcePath: detection.skillsDirectory,
@@ -437,7 +445,9 @@ nonisolated final class AgentDirectoryAuditService {
                     symlinkTarget: nil,
                     skillFileHash: nil,
                     matchCandidates: [],
-                    summary: "Agent skills directory is not readable or writable.",
+                    summary: enumerationFailed
+                        ? "Agent skills directory could not be enumerated. Reauthorize it in Settings and recheck."
+                        : "Agent skills directory is not readable or writable.",
                     evidence: [
                         "Marker: \(detection.markerPath)",
                         "Skills directory: \(detection.skillsDirectory)",
@@ -492,7 +502,13 @@ nonisolated final class AgentDirectoryAuditService {
     ) throws -> AgentDirectoryAuditResult {
         let descriptors = agentDescriptors(homeDirectory: homeDirectory, overrides: overrides, customAgents: localState.customAgents)
             .filter { agentID == nil || $0.agentID == agentID }
-        let detections = descriptors.map { detectionSnapshot(for: $0, evidence: $0.agent.flatMap { installationPresence($0, homeDirectory).evidence }) }
+        let detections = descriptors.map { descriptor in
+            detectionSnapshot(
+                for: descriptor,
+                installation: descriptor.agent.map { installationPresence($0, homeDirectory) },
+                previous: localState.detectedAgentsSnapshot.first { $0.agentID == descriptor.agentID }
+            )
+        }
         let ignored = Set(localState.ignoredFindingFingerprints)
         var findings: [AgentDirectoryFinding] = []
         var snapshots = localState.agentAuditSnapshots
@@ -840,11 +856,13 @@ nonisolated final class AgentDirectoryAuditService {
         )
     }
 
-    private func detectionSnapshot(for descriptor: AgentDirectoryDescriptor, evidence: AgentInstallationEvidence?) -> AgentDetectionSnapshot {
+    private func detectionSnapshot(for descriptor: AgentDirectoryDescriptor, installation: AgentInstallationResult?, previous: AgentDetectionSnapshot?) -> AgentDetectionSnapshot {
+        let evidence = installation?.evidence ?? (installation == nil ? previous?.installationEvidence : nil)
         let markerExists = descriptor.isCustom || itemExistsOrIsSymlink(descriptor.markerURL)
         let skillsExists = isDirectory(descriptor.skillsDirectory)
-        let count = skillsExists ? ((try? firstLevelChildren(in: descriptor.skillsDirectory))?.count ?? 0) : 0
-        let readable = skillsExists && fileManager.isReadableFile(atPath: descriptor.skillsDirectory.path)
+        let children = skillsExists ? try? firstLevelChildren(in: descriptor.skillsDirectory) : nil
+        let count = children?.count ?? 0
+        let readable = skillsExists && children != nil && fileManager.isReadableFile(atPath: descriptor.skillsDirectory.path)
         let writable = skillsExists && fileManager.isWritableFile(atPath: descriptor.skillsDirectory.path)
         return AgentDetectionSnapshot(
             agentID: descriptor.agentID,
@@ -858,7 +876,8 @@ nonisolated final class AgentDirectoryAuditService {
             readable: readable,
             writable: writable,
             isCustom: descriptor.isCustom,
-            installationEvidence: evidence
+            installationEvidence: evidence,
+            installationCategory: installation?.category ?? previous?.installationCategory
         )
     }
 
@@ -1014,7 +1033,7 @@ nonisolated final class AgentDirectoryAuditService {
 
     private func severity(for type: AgentFindingType) -> AgentFindingSeverity {
         switch type {
-        case .permissionDenied, .rollbackFailed, .linkDrift:
+        case .permissionDenied, .directoryEnumerationFailed, .rollbackFailed, .linkDrift:
             return .error
         case .localDirectoryNotManaged, .externalSymlinkNotManaged, .brokenSymlink, .duplicateWithHub, .aliasConflict, .invalidEntry, .rootMovedRepairAvailable:
             return .warning
@@ -1027,7 +1046,7 @@ nonisolated final class AgentDirectoryAuditService {
         switch type {
         case .linkDrift, .rootMovedRepairAvailable, .brokenSymlink:
             return .link
-        case .pendingAudit, .missingSkillsDirectory, .permissionDenied, .localDirectoryNotManaged, .externalSymlinkNotManaged, .duplicateWithHub, .aliasConflict, .copiedButAgentStillLocal, .copiedButAgentStillExternal, .rollbackFailed, .invalidEntry:
+        case .pendingAudit, .missingSkillsDirectory, .permissionDenied, .directoryEnumerationFailed, .localDirectoryNotManaged, .externalSymlinkNotManaged, .duplicateWithHub, .aliasConflict, .copiedButAgentStillLocal, .copiedButAgentStillExternal, .rollbackFailed, .invalidEntry:
             return .agentDirectory
         }
     }
@@ -1038,7 +1057,7 @@ nonisolated final class AgentDirectoryAuditService {
             return .auditAgentDirectory
         case .missingSkillsDirectory:
             return .createSkillsDirectory
-        case .permissionDenied:
+        case .permissionDenied, .directoryEnumerationFailed:
             return .viewPermissionGuidance
         case .localDirectoryNotManaged:
             return .moveToHub
