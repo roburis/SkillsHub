@@ -202,9 +202,9 @@ private final class SidebarConfigurationView: NSView {
                 if let split = current as? NSSplitView,
                    let controller = split.delegate as? NSSplitViewController,
                    let item = controller.splitViewItems.first {
-                    item.canCollapse = false
-                    item.minimumThickness = 176
-                    item.maximumThickness = 260
+                    if item.canCollapse { item.canCollapse = false }
+                    if item.minimumThickness != 176 { item.minimumThickness = 176 }
+                    if item.maximumThickness != 260 { item.maximumThickness = 260 }
                     if self.configuredSplit !== split {
                         NotificationCenter.default.removeObserver(self, name: NSSplitView.didResizeSubviewsNotification, object: self.configuredSplit)
                         self.configuredSplit = split
@@ -219,6 +219,8 @@ private final class SidebarConfigurationView: NSView {
         }
     }
     @objc private func rememberWidth() {
+        // SwiftUI may reset the item limits after the initial layout.
+        configure()
         guard NSEvent.pressedMouseButtons != 0, let width = configuredSplit?.arrangedSubviews.first?.frame.width else { return }
         WorkspaceLayoutPreferences.defaults.set(min(260, max(176, width)), forKey: widthKey)
     }

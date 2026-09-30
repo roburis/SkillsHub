@@ -173,10 +173,18 @@ esac
 derived_prefix="${derived_data_root}-${mode}-"
 
 result_bundle=""
+configuration=""
 only_testing=()
 only_testing_count=0
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
+    --configuration)
+      if [[ "$#" -lt 2 || -n "$configuration" || ( "$2" != "Debug" && "$2" != "Release" ) ]]; then
+        fail "configuration must be Debug or Release and specified once"
+      fi
+      configuration="$2"
+      shift 2
+      ;;
     --only-testing)
       if [[ "$mode" == "build" || "$#" -lt 2 || -z "$2" || "$2" == --* ]]; then
         fail "unexpected argument '--only-testing'"
@@ -256,6 +264,13 @@ xcode_command=(
   -destination "$destination"
   -derivedDataPath "$derived_data"
 )
+
+if [[ -n "$configuration" ]]; then
+  xcode_command+=( -configuration "$configuration" )
+  if [[ "$configuration" == "Release" && "$mode" != "build" ]]; then
+    xcode_command+=( ENABLE_TESTABILITY=YES )
+  fi
+fi
 
 if [[ "$mode" != "acceptance" ]]; then
   xcode_command+=( CODE_SIGNING_ALLOWED=NO )

@@ -248,6 +248,14 @@ if grep -Fxq -- "-only-testing:SkillsHubTests" "$xcodebuild_log"; then
   exit 1
 fi
 
+run_verify unit --configuration Release --only-testing SkillsHubTests
+expect_file_contains "-configuration"
+expect_file_contains "Release"
+expect_file_contains "ENABLE_TESTABILITY=YES"
+expect_failure "configuration must be Debug or Release and specified once" build --configuration invalid
+expect_failure "configuration must be Debug or Release and specified once" build --configuration
+expect_failure "configuration must be Debug or Release and specified once" build --configuration Debug --configuration Release
+
 unit_evidence_parent="$temporary_directory/unit-evidence"
 mkdir "$unit_evidence_parent"
 unit_result_bundle="$unit_evidence_parent/unit.xcresult"

@@ -245,8 +245,40 @@ struct PresentationSettingsAndLocalizationTests {
         #expect(localization.localized("Settings", language: .system, preferredLanguages: ["ja"]) == "設定")
     }
 
+    @Test func nodeLabelsDescribeTypeIndependentlyOfOwnershipInThreeLanguages() {
+        let localization = SkillsHubLocalization()
+        let labels: [(TargetNodeKind, String, String, String)] = [
+            (.symbolicLink, "Symbolic link", "软链接", "シンボリックリンク"),
+            (.directory, "Real directory", "真实目录", "実ディレクトリ"),
+            (.brokenSymbolicLink, "Broken symbolic link", "失效软链接", "無効なシンボリックリンク"),
+            (.unreadable, "Type unverified", "类型待核实", "種類未確認")
+        ]
+        for (kind, english, chinese, japanese) in labels {
+            #expect(localization.localized(kind.presentationLabel, language: .english) == english)
+            #expect(localization.localized(kind.presentationLabel, language: .chinese) == chinese)
+            #expect(localization.localized(kind.presentationLabel, language: .japanese) == japanese)
+        }
+        #expect(AgentSkillEntryKind.hubManagedSymlink.presentationLabel == AgentSkillEntryKind.externalSymlink.presentationLabel)
+        #expect(AgentSkillEntryKind.localDirectory.presentationLabel == TargetNodeKind.directory.presentationLabel)
+        #expect(AgentSkillEntryKind.invalid.presentationLabel == TargetNodeKind.unreadable.presentationLabel)
+    }
+
     @MainActor
-    @Test func explicitLanguagePersistsAcrossControllerRestart() throws {
+    @Test func invalidLanguagePreferenceFallsBackWithoutRewritingStoredValue() throws {
+        let suiteName = "PresentationSettingsAndLocalizationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("unsupported-language", forKey: "appLanguage")
+
+        let controller = SkillsHubLibraryController(languagePreferences: AppLanguagePreferences(defaults: defaults))
+
+        #expect(controller.language == .system)
+        #expect(defaults.string(forKey: "appLanguage") == "unsupported-language")
+    }
+
+    @MainActor
+    @Test(arguments: AppLanguage.allCases)
+    func explicitLanguagePersistsAcrossControllerRestart(language: AppLanguage) throws {
         let suiteName = "PresentationSettingsAndLocalizationTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -254,12 +286,13 @@ struct PresentationSettingsAndLocalizationTests {
         let controller = SkillsHubLibraryController(languagePreferences: preferences)
 
         #expect(controller.language == .system)
+        #expect(defaults.object(forKey: "appLanguage") == nil)
         #expect(SkillsHubLocalization().localized("Settings", language: controller.language, preferredLanguages: ["ja-JP"]) == "設定")
 
-        controller.language = .japanese
+        controller.language = language
 
-        let restarted = SkillsHubLibraryController(languagePreferences: preferences)
-        #expect(restarted.language == .japanese)
+        let restarted = SkillsHubLibraryController(languagePreferences: AppLanguagePreferences(defaults: defaults))
+        #expect(restarted.language == language)
     }
 
     @Test func unconnectedRootStatesAndAgentGroupAreLocalized() {

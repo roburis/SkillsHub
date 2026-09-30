@@ -3,6 +3,7 @@ import Testing
 @testable import SkillsHub
 
 struct RootMutationOwnerTests {
+    #if DEBUG
     @Test(.timeLimit(.minutes(1))) @MainActor
     func operationCompletionCannotReplaceAnotherRootSnapshot() async throws {
         let fixture = try RootMutationFixture()
@@ -36,6 +37,7 @@ struct RootMutationOwnerTests {
         #expect(controller.phase1Tasks.isEmpty)
         #expect(controller.sources.isEmpty)
     }
+    #endif
 
     @Test(.timeLimit(.minutes(1)))
     func writeQualificationRefusesSecondLiveHolderAndReleasesOnExit() async throws {
@@ -122,6 +124,7 @@ struct RootMutationOwnerTests {
         #expect(after == .performed(true))
     }
 
+    #if DEBUG
     @Test(.timeLimit(.minutes(1)))
     func directActionAndPhase1PlanShareOneRootSequence() async throws {
         let fixture = try RootMutationFixture()
@@ -195,6 +198,7 @@ struct RootMutationOwnerTests {
         #expect(final.metadata.sources.isEmpty)
         #expect(FileManager.default.fileExists(atPath: fixture.journal.path) == false)
     }
+    #endif
 }
 
 private struct RelationMutationProbeCredential: Sendable {

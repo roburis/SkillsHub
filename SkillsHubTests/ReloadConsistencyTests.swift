@@ -339,6 +339,7 @@ struct ReloadConsistencyTests {
         #expect(try local.appendingPathComponent("linked").resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true)
     }
 
+    #if DEBUG
     @Test func syntheticManagedRootEventTriggersRuntimeDiscovery() async throws {
         let root = try reloadTemporaryDirectory()
         let fakeHome = try reloadTemporaryDirectory()
@@ -364,7 +365,9 @@ struct ReloadConsistencyTests {
 
         #expect(Set(controller.installedSkills.map(\.id)) == ["review", "summarize"])
     }
+    #endif
 
+    #if DEBUG
     @Test func coalescedManagedRootEventsRunSingleRecheck() async throws {
         let root = try reloadTemporaryDirectory()
         let fakeHome = try reloadTemporaryDirectory()
@@ -389,7 +392,9 @@ struct ReloadConsistencyTests {
 
         #expect(controller.recheckGeneration == generationAfterInitial + 1)
     }
+    #endif
 
+    #if DEBUG
     @Test func droppedEventBatchForcesFullAuthorizedScan() async throws {
         let root = try reloadTemporaryDirectory()
         let fakeHome = try reloadTemporaryDirectory()
@@ -414,6 +419,7 @@ struct ReloadConsistencyTests {
 
         #expect(Set(controller.installedSkills.map(\.id)) == ["review", "summarize"])
     }
+    #endif
 
     @Test func staleRecheckGenerationDoesNotOverrideNewerObservationStatus() async throws {
         let root = try reloadTemporaryDirectory()
@@ -439,6 +445,7 @@ struct ReloadConsistencyTests {
         #expect(controller.observationStatus == .observing)
     }
 
+    #if DEBUG
     @Test func eventsAfterRootSwitchDoNotLandOnNewRoot() async throws {
         let rootA = try reloadTemporaryDirectory()
         let rootB = try reloadTemporaryDirectory()
@@ -480,6 +487,7 @@ struct ReloadConsistencyTests {
         ])
         #expect(controller.installedSkills.map(\.id) == ["beta"])
     }
+    #endif
 
     @Test func failedInitialSubscriptionSurfacesUnknownObservationMessage() async throws {
         let root = try reloadTemporaryDirectory()

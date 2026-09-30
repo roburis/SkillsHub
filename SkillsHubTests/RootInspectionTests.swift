@@ -21,7 +21,7 @@ struct RootInspectionTests {
         try Data("invalid JSON".utf8).write(to: root.appendingPathComponent(".skillshub.json"))
         let controller = SkillsHubLibraryController(
             agentHomeDirectory: home, agentEnvironment: [:],
-            startupAccessStore: RootInspectionBookmarkStoreStub(),
+            startupAccessStore: RootInspectionBookmarkStoreStub(authorizedURLs: [root.standardizedFileURL]),
             securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter())
         )
         switch entry {
@@ -87,6 +87,7 @@ struct RootInspectionTests {
         #expect(controller.phase1Tasks.contains(task))
     }
 
+    #if DEBUG
     @Test func failedSourceFinalEvidenceStillPublishesCurrentMetadata() async throws {
         let root = try initializedRoot(generation: 0)
         let source = try temporaryDirectory()
@@ -103,6 +104,7 @@ struct RootInspectionTests {
         #expect(controller.sources.count == 1)
         #expect(controller.phase1Tasks.first?.phase == .needsAttention)
     }
+    #endif
 
     @Test func selectionAndCancellationDoNotWriteThenOneEstablishmentActionCompletes() async throws {
         let root = try temporaryDirectory()
@@ -314,6 +316,9 @@ private func rootInspectionController(
     adapter: RecordingSecurityScopedResourceAccessAdapter
 ) -> SkillsHubLibraryController {
     SkillsHubLibraryController(
+        agentHomeDirectory: URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("RootInspectionAgentHome-\(UUID().uuidString)"),
+        agentEnvironment: [:],
         startupAccessStore: RootInspectionBookmarkStoreStub(),
         securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: adapter)
     )
@@ -332,11 +337,16 @@ private func initializedRoot(generation: UInt64) throws -> URL {
 }
 
 private final class RootInspectionBookmarkStoreStub: StartupAccessStoring {
+    var authorizedURLs: Set<URL>
+
+    init(authorizedURLs: Set<URL> = []) { self.authorizedURLs = authorizedURLs }
+
     func resolveAccess(to url: URL) throws -> StartupAccessBookmarkResolution? {
-        StartupAccessBookmarkResolution(url: url.standardizedFileURL, isStale: false)
+        guard authorizedURLs.contains(url.standardizedFileURL) else { return nil }
+        return StartupAccessBookmarkResolution(url: url.standardizedFileURL, isStale: false)
     }
 
-    func saveAccess(to url: URL) throws {}
+    func saveAccess(to url: URL) throws { authorizedURLs.insert(url.standardizedFileURL) }
 }
 
 private struct RootTreeEntry: Equatable {

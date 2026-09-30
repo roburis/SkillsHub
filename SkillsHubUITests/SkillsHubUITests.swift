@@ -436,6 +436,29 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testProductionStartupLanguageDefaultsAndPersistsAcrossProcesses() throws {
+        let fixture = try makeFixture()
+        var app = launchPlatformRootApp(fixture: fixture, scenario: "language", language: nil, systemLanguages: "(zh-Hans-CN)")
+        selectNavigation("settings", in: app)
+        XCTAssertEqual(app.popUpButtons.firstMatch.value as? String, "跟随系统")
+
+        for (choice, expected) in [("English", "English"), ("简体中文", "简体中文"), ("日本語", "日本語"), ("システムに従う", "跟随系统")] {
+            app.popUpButtons.firstMatch.click()
+            app.menuItems[choice].click()
+            app.terminate()
+            app = launchPlatformRootApp(fixture: fixture, scenario: "language", language: nil, systemLanguages: "(zh-Hans-CN)")
+            selectNavigation("settings", in: app)
+            XCTAssertEqual(app.popUpButtons.firstMatch.value as? String, expected)
+        }
+
+        app.terminate()
+        app = launchPlatformRootApp(fixture: fixture, scenario: "language", language: nil, systemLanguages: "(ja-JP)")
+        selectNavigation("settings", in: app)
+        XCTAssertEqual(app.popUpButtons.firstMatch.value as? String, "システムに従う")
+        XCTAssertTrue(app.staticTexts["一般"].exists)
+    }
+
+    @MainActor
     func testUnconnectedDirectoryAndRefreshInThreeLanguages() throws {
         for (language, status) in [("system", "未授权"), ("en", "Not authorized"), ("zh-Hans", "未授权"), ("ja", "未許可")] {
             let fixture = try makeFixture()
@@ -505,6 +528,9 @@ final class SkillsHubUITests: XCTestCase {
         let list = app.descendants(matching: .any)["workspace-list-pane"]
         let detail = app.descendants(matching: .any)["workspace-detail-pane"]
         XCTAssertTrue(list.waitForExistence(timeout: 3))
+        app.staticTexts["Broken Fixture"].firstMatch.click()
+        app.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(app.descendants(matching: .any)["skill-detail"].staticTexts["Candidate Fixture"].waitForExistence(timeout: 2))
         let initial = XCTAttachment(screenshot: window.screenshot())
         initial.name = "Before production divider drag"
         initial.lifetime = .keepAlways
@@ -518,14 +544,17 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertEqual(list.frame.width, 288, accuracy: 2, window.identifier)
         dragDivider(1, by: 500)
         XCTAssertEqual(list.frame.width, 520, accuracy: 2)
-        dragDivider(0, by: -400)
+        // Keep the endpoint on-screen; -400 puts this divider at a negative x.
+        dragDivider(0, by: -60)
         XCTAssertEqual(list.frame.minX - window.frame.minX, 176, accuracy: 2)
         dragDivider(0, by: 400)
         XCTAssertEqual(list.frame.minX - window.frame.minX, 260, accuracy: 2)
         let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
         corner.click(forDuration: 0.1, thenDragTo: corner.withOffset(CGVector(dx: -500, dy: -500)))
         XCTAssertEqual(window.frame.width, 1040, accuracy: 2)
-        XCTAssertGreaterThanOrEqual(list.frame.height, 559)
+        // The minimum content height includes the native toolbar.
+        XCTAssertGreaterThanOrEqual(window.frame.height, 560)
+        XCTAssertGreaterThanOrEqual(list.frame.height + app.toolbars.firstMatch.frame.height, 560)
         XCTAssertGreaterThanOrEqual(detail.frame.width, 359)
         XCTAssertLessThanOrEqual(list.frame.width, 420)
         let compactCorner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
@@ -893,10 +922,10 @@ final class SkillsHubUITests: XCTestCase {
 
     @MainActor
     func testDefaultAgentRefreshShowsCurrentEntriesAtMinimumWidthInThreeLanguages() throws {
-        for (language, title) in [
-            ("en", "Refresh default Agent directories"),
-            ("zh-Hans", "刷新默认 Agent 目录"),
-            ("ja", "既定のAgentディレクトリを更新")
+        for (language, title, nodeType) in [
+            ("en", "Refresh default Agent directories", "Real directory"),
+            ("zh-Hans", "刷新默认 Agent 目录", "真实目录"),
+            ("ja", "既定のAgentディレクトリを更新", "実ディレクトリ")
         ] {
             let fixture = try makeFixture()
             let hidden = fixture.home.appending(path: ".codex/skills/.hidden-review")
@@ -915,6 +944,12 @@ final class SkillsHubUITests: XCTestCase {
             selectNavigation("agent-codex", in: app)
             XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
             XCTAssertTrue(app.staticTexts[".hidden-review"].exists)
+            app.staticTexts["agent-owned-review"].firstMatch.click()
+            let finding = app.disclosureTriangles.matching(NSPredicate(format: "identifier BEGINSWITH %@", "agent-finding-")).firstMatch
+            XCTAssertTrue(finding.waitForExistence(timeout: 2))
+            XCTAssertTrue(finding.label.contains("agent-owned-review"))
+            XCTAssertTrue(finding.label.contains(nodeType))
+
             selectNavigation("settings", in: app)
             selectNavigation("agent-codex", in: app)
             XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 3))
@@ -966,6 +1001,8 @@ final class SkillsHubUITests: XCTestCase {
         let target = fixture.home.appending(path: ".claude/skills", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: target.appending(path: "outside-skill"), withIntermediateDirectories: true)
+        try Data("---\nname: outside-skill\ndescription: A valid external skill.\n---\nBody.\n".utf8)
+            .write(to: target.appending(path: "outside-skill/SKILL.md"))
         let supportName = "SkillsHubUITests-restart-\(fixture.runID.uuidString)"
         var app = launchPlatformRootApp(fixture: fixture, scenario: "restart", appSupportName: supportName)
         openEstablishRootPanel(in: app)
@@ -2125,6 +2162,8 @@ final class SkillsHubUITests: XCTestCase {
         scenario: String,
         appSupportName: String? = nil,
         expectEmpty: Bool = true,
+        language: String? = "en",
+        systemLanguages: String = "(en)",
         additionalArguments: [String] = []
     ) -> XCUIApplication {
         let app = XCUIApplication()
@@ -2133,16 +2172,19 @@ final class SkillsHubUITests: XCTestCase {
         app.launchArguments = [
             "-NSTreatUnknownArgumentsAsOpen", "NO",
             "-ApplePersistenceIgnoreState", "YES",
-            "-AppleLanguages", "(en)",
+            "-AppleLanguages", systemLanguages,
             "--skillshub-home", fixture.home.path,
             "--skillshub-app-support", appSupportName,
-            "--skillshub-ui-fixture-language", "en"
+            "--skillshub-ui-fixture-run-id", fixture.runID.uuidString
         ] + additionalArguments
-        app.launchEnvironment["AppleLanguages"] = "(en)"
+        if let language {
+            app.launchArguments += ["--skillshub-ui-fixture-language", language]
+        }
+        app.launchEnvironment["AppleLanguages"] = systemLanguages
         app.launch()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 4))
-        if expectEmpty {
+        if expectEmpty && language == "en" {
             XCTAssertTrue(app.buttons["establish-root-primary"].waitForExistence(timeout: 3))
             XCTAssertTrue(app.buttons["connect-root-primary"].exists)
         }
