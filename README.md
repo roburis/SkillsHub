@@ -34,9 +34,9 @@ The app is sandboxed and uses security-scoped access for authorized folders. Its
 
 SkillsHub is under active development. The current release focuses on global skill management, local folders, public GitHub repositories, and per-agent enablement.
 
-## Changelog
+## Releases
 
-See [CHANGELOG.md](CHANGELOG.md) for user-facing changes.
+See [Releases](https://github.com/roburis/SkillsHub/releases) for user-facing changes in each published version.
 
 ## Third-party software
 
@@ -78,9 +78,9 @@ App 使用沙盒，并通过 security-scoped access 访问已授权的文件夹�
 
 SkillsHub 正在积极开发中。当前版本聚焦于全局 skill 管理、本地文件夹、公开 GitHub 仓库，以及按 Agent 启用 skill。
 
-## 变更记录
+## 版本发布
 
-面向用户的变更见 [CHANGELOG.md](CHANGELOG.md)。
+各已发布版本的变更介绍见 [Releases](https://github.com/roburis/SkillsHub/releases)。
 
 ## 第三方软件
 
