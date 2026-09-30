@@ -38,9 +38,6 @@ final class SkillsHubAppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var library: SkillsHubLibraryController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let iconImage = bundledIconImage() ?? workspaceIconImage() {
-            NSApp.applicationIconImage = iconImage
-        }
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--skillshub-ui-fixture"),
@@ -84,17 +81,4 @@ final class SkillsHubAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func bundledIconImage() -> NSImage? {
-        guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
-              let iconImage = NSImage(contentsOf: iconURL),
-              iconImage.size != .zero else {
-            return nil
-        }
-        return iconImage
-    }
-
-    private func workspaceIconImage() -> NSImage? {
-        let iconImage = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-        return iconImage.size == .zero ? nil : iconImage
-    }
 }

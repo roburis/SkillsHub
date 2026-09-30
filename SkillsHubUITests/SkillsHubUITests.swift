@@ -1296,6 +1296,32 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testSidebarBrandIconsRemainReadable() throws {
+        for (language, appearance) in [("en", "Light"), ("zh-Hans", "Light"), ("ja", "Light"), ("en", "Dark")] {
+            let fixture = try makeFixture()
+            let app = try launch(fixture: fixture, language: language, windowWidth: 1040,
+                                 additionalArguments: ["--skillshub-ui-fixture-appearance", appearance])
+            let sidebar = app.descendants(matching: .any)["phase1-product-sidebar"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 3))
+            let divider = app.splitters.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            divider.click(forDuration: 0.2, thenDragTo: divider.withOffset(CGVector(dx: -400, dy: 0)))
+            XCTAssertEqual(sidebar.frame.width, 176, accuracy: 2)
+            XCTAssertTrue(app.descendants(matching: .any)["nav-agent-codex"].exists)
+            XCTAssertTrue(app.descendants(matching: .any)["nav-agent-claudeCode"].exists)
+            for destination in ["github-sources", "agent-codex", "agent-claudeCode"] {
+                selectNavigation(destination, in: app)
+                let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+                shot.name = "M002 sidebar \(language) \(appearance) \(destination)"
+                shot.lifetime = .keepAlways
+                add(shot)
+            }
+            app.terminate()
+            try fixture.cleanup()
+            activeFixture = nil
+        }
+    }
+
+    @MainActor
     func testOperationTaskGroupsAndRecoveryAreReadableInThreeLanguages() throws {
         let samples = [
             ("en", ["Waiting for confirmation", "Running", "Needs attention", "Recently completed"], "Re-observe the current object before preparing a new plan.", "Expanded"),
@@ -1305,6 +1331,20 @@ final class SkillsHubUITests: XCTestCase {
         for (language, groups, nextStep, expanded) in samples {
             let fixture = try makeFixture()
             let app = try launch(fixture: fixture, language: language)
+            selectNavigation("settings", in: app)
+            let summary = app.staticTexts["operation-summary"]
+            XCTAssertTrue(summary.waitForExistence(timeout: 2))
+            let expectedSummary = ["en": "Pending operations: 6", "zh-Hans": "待处理操作：6", "ja": "保留中の操作：6"]
+            XCTAssertEqual(summary.value as? String, expectedSummary[language])
+            XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "open-operation-")).firstMatch.exists)
+            let settings = app.descendants(matching: .any)["settings-workspace"]
+            for _ in 0..<3 where !settings.frame.insetBy(dx: 0, dy: 8).contains(summary.frame) {
+                settings.swipeUp()
+            }
+            let settingsShot = XCTAttachment(screenshot: app.screenshot())
+            settingsShot.name = "M002 pending summary \(language)"
+            settingsShot.lifetime = .keepAlways
+            add(settingsShot)
             selectNavigation("tasks", in: app)
             assertTaskGroups(groups, in: app)
             let taskID = "77777777-7777-7777-7777-777777777777"
@@ -1327,6 +1367,54 @@ final class SkillsHubUITests: XCTestCase {
             selectNavigation("local-sources", in: app)
             selectNavigation("tasks", in: app)
             XCTAssertTrue(task.exists)
+            app.terminate()
+            try fixture.cleanup()
+            activeFixture = nil
+        }
+    }
+
+    @MainActor
+    func testOperationSummaryWithoutPendingRecords() throws {
+        for (language, emptyText, completedText) in [
+            ("en", "No pending operations", "Recently completed"),
+            ("zh-Hans", "没有待处理操作", "最近完成"),
+            ("ja", "保留中の操作はありません", "最近の完了")
+        ] {
+            let fixture = try makeFixture()
+            let app = try launch(fixture: fixture, empty: true, language: language)
+            for state in ["empty", "completed"] {
+                if state == "completed" {
+                    selectNavigation("all-skills", in: app)
+                    let root = fixture.runRoot.appending(path: "summary-root", directoryHint: .isDirectory)
+                    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+                    openEstablishRootPanel(in: app)
+                    chooseDirectory(root, in: app)
+                    XCTAssertTrue(waitForText("root-initialized", at: root.appending(path: ".skillshub.operations.jsonl")))
+                }
+                selectNavigation("settings", in: app)
+                let summary = app.staticTexts["operation-summary"]
+                XCTAssertTrue(summary.waitForExistence(timeout: 2))
+                XCTAssertEqual(summary.value as? String, emptyText)
+                XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "open-operation-")).firstMatch.exists)
+                let settings = app.descendants(matching: .any)["settings-workspace"]
+                for _ in 0..<3 where !settings.frame.insetBy(dx: 0, dy: 8).contains(summary.frame) {
+                    settings.swipeUp()
+                }
+                let shot = XCTAttachment(screenshot: app.screenshot())
+                shot.name = "M002 \(state) summary \(language)"
+                shot.lifetime = .keepAlways
+                add(shot)
+                selectNavigation("tasks", in: app)
+                if state == "empty" {
+                    XCTAssertTrue(app.staticTexts[emptyText].exists)
+                } else {
+                    assertTaskGroups([completedText], in: app)
+                    let task = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "phase1-task-")).firstMatch
+                    XCTAssertTrue(task.exists)
+                    task.click()
+                    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "task-safe-next-step-")).firstMatch.exists)
+                }
+            }
             app.terminate()
             try fixture.cleanup()
             activeFixture = nil
