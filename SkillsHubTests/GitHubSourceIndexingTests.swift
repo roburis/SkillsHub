@@ -48,6 +48,21 @@ struct GitHubSourceIndexingTests {
         #expect(apiB.requestedReferences.allSatisfy { $0.commitSHA == commitB })
     }
 
+    @Test(arguments: ["999 comment=broken\n", "5 ab\n", "18 path=../escape\n", "10 size=0\n"])
+    func malformedOrStructuralGlobalPAXIsRejected(metadata: String) async throws {
+        let fixture = repositoryFixture()
+        let result = await GitHubSourceIndexer(
+            apiClient: MockGitHubAPIClient(
+                treeResult: fixture.tree,
+                archiveData: try tarGzip(fixture.archiveEntries, globalPAX: Data(metadata.utf8))
+            ),
+            stager: FileSystemGitHubSourceStager(stagingRoot: try temporaryDirectory())
+        ).index(rawURL: "fixture-owner/lifecycle")
+
+        #expect(result.issue == .archiveInvalid)
+        #expect(result.stagedRepository == nil)
+    }
+
     @Test func archiveOmissionIsFilledOnlyFromSameCommitBlob() async throws {
         var fixture = repositoryFixture()
         let omittedPath = "shared/config.json"
@@ -467,8 +482,12 @@ private func gitBlobID(_ data: Data, sha256: Bool = false) -> String {
     return Insecure.SHA1.hash(data: object).map { String(format: "%02x", $0) }.joined()
 }
 
-private func tarGzip(_ entries: [TarFixtureEntry], commitSHA: String = commitA, includeTerminator: Bool = true) throws -> Data {
+private func tarGzip(_ entries: [TarFixtureEntry], commitSHA: String = commitA, includeTerminator: Bool = true, globalPAX: Data? = nil) throws -> Data {
     var tar = Data()
+    let metadata = globalPAX ?? Data("52 comment=\(commitSHA)\n".utf8)
+    tar.append(tarHeader(path: "pax_global_header", kind: .file(metadata), mode: 0o644, size: metadata.count, typeFlag: 103))
+    tar.append(metadata)
+    tar.append(Data(repeating: 0, count: (512 - metadata.count % 512) % 512))
     let root = "fixture-owner-lifecycle-\(commitSHA)/"
     tar.append(tarHeader(path: root, kind: .directory, mode: 0o755, size: 0))
     for entry in entries {
@@ -486,7 +505,7 @@ private func tarGzip(_ entries: [TarFixtureEntry], commitSHA: String = commitA, 
     return try gzip(tar)
 }
 
-private func tarHeader(path: String, kind: TarFixtureEntry.Kind, mode: UInt64, size: Int) -> Data {
+private func tarHeader(path: String, kind: TarFixtureEntry.Kind, mode: UInt64, size: Int, typeFlag: UInt8? = nil) -> Data {
     var header = Data(repeating: 0, count: 512)
     writeTarString(path, to: &header, range: 0..<100)
     writeTarOctal(mode, to: &header, range: 100..<108)
@@ -501,6 +520,7 @@ private func tarHeader(path: String, kind: TarFixtureEntry.Kind, mode: UInt64, s
     case .directory: header[156] = 53
     case .special: header[156] = 51
     }
+    if let typeFlag { header[156] = typeFlag }
     writeTarString("ustar", to: &header, range: 257..<263)
     writeTarString("00", to: &header, range: 263..<265)
     writeTarOctal(header.reduce(UInt64(0)) { $0 + UInt64($1) }, to: &header, range: 148..<156)

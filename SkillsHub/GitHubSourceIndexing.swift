@@ -815,6 +815,12 @@ nonisolated final class FileSystemGitHubSourceStager: GitHubSourceStaging {
                 rawNodes.append(ArchiveNode(path: path, kind: .symbolicLink(link), isExecutable: false))
             case 53:
                 rawNodes.append(ArchiveNode(path: path.trimmingCharacters(in: CharacterSet(charactersIn: "/")), kind: .directory, isExecutable: false))
+            case 103:
+                let values = try parsePAX(body)
+                // ponytail: only GitHub's global comment; support attribute semantics before allowing other keys.
+                guard values.keys.allSatisfy({ $0 == "comment" }) else {
+                    throw GitHubAPIClientFailure.invalidArchive
+                }
             case 120:
                 let values = try parsePAX(body)
                 paxPath = values["path"]
@@ -876,11 +882,10 @@ nonisolated final class FileSystemGitHubSourceStager: GitHubSourceStaging {
                 throw GitHubAPIClientFailure.invalidArchive
             }
             let record = String(decoding: data[(space + 1)..<(offset + length - 1)], as: UTF8.self)
-            let pair = record.split(separator: "=", maxSplits: 1).map(String.init)
-            if pair.count == 2 {
-                guard result.updateValue(pair[1], forKey: pair[0]) == nil else {
-                    throw GitHubAPIClientFailure.invalidArchive
-                }
+            let pair = record.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            guard pair.count == 2, !pair[0].isEmpty,
+                  result.updateValue(pair[1], forKey: pair[0]) == nil else {
+                throw GitHubAPIClientFailure.invalidArchive
             }
             offset += length
         }
