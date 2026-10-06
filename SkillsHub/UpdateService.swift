@@ -116,7 +116,7 @@ nonisolated struct SourceUpdateResult: Equatable, Sendable {
     var oldContentMovedToTrash: Bool
     var retainedPath: String?
     var trashPath: String?
-    var detail: String
+    var detail: LocalizedMessage
 
     var updateSucceeded: Bool { contentApplied && metadataCommitted }
 }

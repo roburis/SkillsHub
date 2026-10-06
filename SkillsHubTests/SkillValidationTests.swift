@@ -380,7 +380,7 @@ func temporaryDirectory() throws -> URL {
 func connectInitializedTestRoot(
     _ controller: SkillsHubLibraryController,
     at root: URL
-) throws {
+) async throws {
     let normalizedRoot = root.standardizedFileURL
     let store = SkillsHubMetadataStore()
     let metadataFile = store.rootLayout(for: normalizedRoot).skillshubMetadataFile
@@ -390,7 +390,9 @@ func connectInitializedTestRoot(
             to: normalizedRoot
         )
     }
-    try controller.connectExistingRoot(normalizedRoot)
+    try await controller.connectExistingRoot(normalizedRoot)
+    await controller.waitForPendingRechecks()
+    await controller.waitForPresentationObservation()
 }
 
 func makeSkillDirectory(name: String, skillText: String) throws -> URL {

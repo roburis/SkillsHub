@@ -4,7 +4,7 @@ import Testing
 
 @MainActor
 struct SkillsHubLibraryControllerTests {
-    @Test func explicitDefaultAgentDirectoryRefreshKeepsExternalNodesAndRootMetadataUnchanged() throws {
+    @Test func explicitDefaultAgentDirectoryRefreshKeepsExternalNodesAndRootMetadataUnchanged() async throws {
         let root = try temporaryDirectory()
         let home = try temporaryDirectory()
         let codex = AgentPathResolver().globalSkillsDirectory(for: .codex, environment: [:], homeDirectory: home)
@@ -27,9 +27,9 @@ struct SkillsHubLibraryControllerTests {
             securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: adapter)
         )
         #expect(controller.defaultAgentDirectoryRefresh.isEmpty)
-        controller.refreshDefaultAgentDirectories()
+        await controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh.isEmpty)
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
         let metadataURL = root.appendingPathComponent(".skillshub.json")
         let metadataBefore = try Data(contentsOf: metadataURL)
         let fileBefore = try Data(contentsOf: externalFile)
@@ -38,7 +38,7 @@ struct SkillsHubLibraryControllerTests {
         let baselineStarts = adapter.startRecords.count
         let baselineStops = adapter.stoppedURLs.count
 
-        controller.refreshDefaultAgentDirectories()
+        await controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.codex] == .manageable)
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .missing)
         #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "existing.txt" })
@@ -46,40 +46,43 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.agentFindings.contains { $0.entryName == "broken-link" && $0.type == .brokenSymlink })
         let addedEntry = codex.appendingPathComponent("new-entry.txt")
         try Data("new".utf8).write(to: addedEntry)
-        controller.refreshAgentLightScan()
+        await controller.refreshAgentLightScan()
         #expect(controller.defaultAgentDirectoryRefresh[.codex] == .unverifiable)
         #expect(!controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "existing.txt" })
         #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.type == .pendingAudit })
-        controller.refreshDefaultAgentDirectories()
+        let pendingAudit = try #require(controller.agentFindings.first { $0.agentID == AgentKind.codex.rawValue && $0.type == .pendingAudit })
+        #expect(controller.entryAddress(for: pendingAudit).path == nil)
+        #expect(controller.entryAddress(for: pendingAudit).status?.template == "Skill address could not be verified.")
+        await controller.refreshDefaultAgentDirectories()
         let renamedEntry = codex.appendingPathComponent("renamed-entry.txt")
         try FileManager.default.moveItem(at: addedEntry, to: renamedEntry)
-        controller.refreshAgentLightScan()
+        await controller.refreshAgentLightScan()
         #expect(controller.defaultAgentDirectoryRefresh[.codex] == .unverifiable)
         #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.type == .pendingAudit })
         try FileManager.default.moveItem(at: renamedEntry, to: addedEntry)
         try FileManager.default.removeItem(at: addedEntry)
-        controller.refreshDefaultAgentDirectories()
+        await controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.codex] == .manageable)
         #expect(!controller.agentFindings.contains { $0.agentID == AgentKind.claudeCode.rawValue })
-        controller.refreshAgentLightScan()
+        await controller.refreshAgentLightScan()
         #expect(controller.defaultAgentDirectoryRefresh[.codex] == .manageable)
         #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "existing.txt" })
         #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "existing-link" })
         #expect(controller.agentFindings.contains { $0.entryName == "broken-link" && $0.type == .brokenSymlink })
         try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: false)
-        controller.refreshDefaultAgentDirectories()
+        await controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .authorizationRequired)
         try FileManager.default.removeItem(at: claude)
         store.restorablePaths.insert(claude.path)
-        controller.refreshDefaultAgentDirectories()
+        await controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .missing)
         try FileManager.default.createSymbolicLink(at: claude, withDestinationURL: codex)
-        controller.refreshDefaultAgentDirectories()
+        await controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .unverifiable)
         var snapshot = try #require(controller.rootSnapshot)
         snapshot.metadata.agents[1].skillsDirectory = codex.path
         controller.rootSnapshot = snapshot
-        controller.refreshDefaultAgentDirectories()
+        await controller.refreshDefaultAgentDirectories()
         #expect(controller.defaultAgentDirectoryRefresh[.claudeCode] == .otherDirectoryConfigured)
         #expect(try Data(contentsOf: externalFile) == fileBefore)
         #expect(try LinkNodeIdentity.read(at: externalLink) == linkBefore)
@@ -100,12 +103,12 @@ struct SkillsHubLibraryControllerTests {
             )
         )
         denied.rootURL = root
-        denied.refreshDefaultAgentDirectories()
+        await denied.refreshDefaultAgentDirectories()
         #expect(denied.defaultAgentDirectoryRefresh[.codex] == .unverifiable)
     }
 
     @Test(arguments: [AgentKind.codex, .claudeCode])
-    func authorizedDirectoryWithoutInstallationCanEnableManagedCapability(_ agent: AgentKind) throws {
+    func authorizedDirectoryWithoutInstallationCanEnableManagedCapability(_ agent: AgentKind) async throws {
         let root = try temporaryDirectory()
         let home = try temporaryDirectory()
         let target = AgentPathResolver().globalSkillsDirectory(for: agent, environment: [:], homeDirectory: home)
@@ -116,7 +119,7 @@ struct SkillsHubLibraryControllerTests {
             agentEnvironment: [:],
             startupAccessStore: InMemoryStartupAccessStore(restorablePaths: [root.path, target.path])
         )
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
 
         let capability = controller.configuredAgentCapabilities.first { $0.agentID == agent.rawValue }
         #expect(capability?.canManageRelations == true)
@@ -131,7 +134,7 @@ struct SkillsHubLibraryControllerTests {
         try skillText(name: "Manual Review", description: "Reviews manually installed skills.").write(to: manual.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
         await controller.waitForPendingRechecks()
 
         #expect(controller.hasRoot)
@@ -144,7 +147,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(registeredManual.sourceKind == .manualFilesystem)
         #expect(registeredManual.sourceID == nil)
         #expect(controller.sources.isEmpty)
-        #expect(controller.availableSkills.isEmpty)
+        #expect(controller.availableSkills.map(\.name) == ["Manual Review"])
         #expect(controller.agentLinks.isEmpty)
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(".skillshub.json").path))
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("local").path))
@@ -155,7 +158,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(metadata.installedSkills.map(\.id) == ["manual-review"])
     }
 
-    @Test func settingsRootDefaultsToSkillsHubDirectoryUntilUserConfiguresRoot() throws {
+    @Test func settingsRootDefaultsToSkillsHubDirectoryUntilUserConfiguresRoot() async throws {
         let home = try temporaryDirectory()
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home)
 
@@ -163,8 +166,8 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.suggestedRootURL.path == home.appendingPathComponent("skills-hub").path)
 
         let root = try temporaryDirectory()
-        try connectInitializedTestRoot(controller, at: root)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        try await connectInitializedTestRoot(controller, at: root)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
         #expect(controller.rootPathDisplay == root.path)
         #expect(controller.settingsRootPathDisplay == root.path)
@@ -179,7 +182,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.settingsState.customRootWarning == nil)
     }
 
-    @Test func localSourceRootDoesNotBypassRegistrationPlan() async throws {
+    @Test func localRootDiscoveryExposesCandidatesWithoutExternalSourceOrEnablement() async throws {
         let root = try temporaryDirectory()
         let local = root.appendingPathComponent("local", isDirectory: true)
         try FileManager.default.createDirectory(at: local.appendingPathComponent("review", isDirectory: true), withIntermediateDirectories: true)
@@ -196,17 +199,17 @@ struct SkillsHubLibraryControllerTests {
         )
 
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
         await controller.waitForPendingRechecks()
 
-        // T-006: local/ directories with candidates are discovered and registered as
-        // manual-filesystem skills, but this never creates a source (which still
-        // requires a confirmed registration plan) and never populates availableSkills.
+        // Directly maintained content has observations and registrations, without
+        // inventing an external update source or enabling Agent relationships.
         #expect(Set(controller.installedSkills.map(\.id)) == ["review", "write"])
         #expect(controller.installedSkills.allSatisfy { $0.sourceKind == .manualFilesystem })
         #expect(controller.installedSkills.allSatisfy { $0.sourceID == nil })
         #expect(controller.sources.isEmpty)
-        #expect(controller.availableSkills.isEmpty)
+        #expect(Set(controller.availableSkills.map(\.name)) == ["Review", "Write"])
+        #expect(controller.rootSnapshot?.metadata.enablementIntents.isEmpty == true)
     }
 
     @Test func reloadKeepsUnregisteredRootContentOutsideManagedMetadata() async throws {
@@ -217,7 +220,7 @@ struct SkillsHubLibraryControllerTests {
             .write(to: manual.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
         await controller.waitForPendingRechecks()
         // T-006: the manual directory was discovered and registered on connect.
         #expect(controller.installedSkills.map(\.id) == ["manual-review"])
@@ -227,7 +230,7 @@ struct SkillsHubLibraryControllerTests {
         let metadataAfterRegistration = try Data(contentsOf: metadataFile)
 
         try FileManager.default.removeItem(at: manual)
-        try controller.reloadFromDisk()
+        try await controller.reloadFromDisk()
 
         // The registration and its missing record are preserved (Q-002/REQ-018); the
         // deleted directory is marked invalid, not pruned, and no JSON is rewritten.
@@ -249,7 +252,7 @@ struct SkillsHubLibraryControllerTests {
             .write(to: manual.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
 
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
         await controller.waitForPendingRechecks()
         #expect(controller.installedSkills.map(\.id) == ["manual-review"])
         let previousInstalled = controller.installedSkills
@@ -258,7 +261,7 @@ struct SkillsHubLibraryControllerTests {
         try "{".write(to: root.appendingPathComponent(".skillshub.local.json"), atomically: true, encoding: .utf8)
 
         do {
-            try controller.reloadFromDisk()
+            try await controller.reloadFromDisk()
             Issue.record("Expected reloadFromDisk to fail on corrupted local state.")
         } catch {
             #expect(controller.installedSkills.map(\.id) == previousInstalled.map(\.id))
@@ -266,7 +269,7 @@ struct SkillsHubLibraryControllerTests {
         }
     }
 
-    @Test func bootstrapDefaultRootDoesNotAdoptWritableDirectoryWithoutPersistedAuthorization() throws {
+    @Test func bootstrapDefaultRootDoesNotAdoptWritableDirectoryWithoutPersistedAuthorization() async throws {
         let home = try temporaryDirectory()
         let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         let roles = defaultRoot.appendingPathComponent("local/roles-skills", isDirectory: true)
@@ -285,7 +288,7 @@ struct SkillsHubLibraryControllerTests {
         )
 
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home)
-        try controller.bootstrapDefaultRootIfPresent()
+        try await controller.bootstrapDefaultRootIfPresent()
 
         #expect(!controller.hasRoot)
         #expect(controller.settingsRootPathDisplay == defaultRoot.path)
@@ -294,17 +297,17 @@ struct SkillsHubLibraryControllerTests {
         #expect(!FileManager.default.fileExists(atPath: defaultRoot.appendingPathComponent(".skillshub.local.json").path))
     }
 
-    @Test func bootstrapDefaultRootDoesNotCreateMissingDefaultDirectory() throws {
+    @Test func bootstrapDefaultRootDoesNotCreateMissingDefaultDirectory() async throws {
         let home = try temporaryDirectory()
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home)
 
-        try controller.bootstrapDefaultRootIfPresent()
+        try await controller.bootstrapDefaultRootIfPresent()
 
         #expect(!controller.hasRoot)
         #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent("skills-hub").path))
     }
 
-    @Test func bootstrapDefaultRootDoesNotReadMetadataWithoutPersistedAuthorization() throws {
+    @Test func bootstrapDefaultRootDoesNotReadMetadataWithoutPersistedAuthorization() async throws {
         let home = try temporaryDirectory()
         let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         try FileManager.default.createDirectory(at: defaultRoot, withIntermediateDirectories: true)
@@ -312,14 +315,14 @@ struct SkillsHubLibraryControllerTests {
 
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home)
 
-        try controller.bootstrapDefaultRootIfPresent()
+        try await controller.bootstrapDefaultRootIfPresent()
 
         #expect(controller.rootURL == nil)
         #expect(!controller.hasRoot)
         #expect(controller.settingsRootPathDisplay == defaultRoot.path)
     }
 
-    @Test func startupAuthorizationRequestIncludesDefaultRootAndDetectedBuiltInAgentsWithoutWriteAccess() throws {
+    @Test func startupAuthorizationRequestIncludesDefaultRootAndDetectedBuiltInAgentsWithoutWriteAccess() async throws {
         let home = try temporaryDirectory()
         let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         let codexMarker = home.appendingPathComponent(".codex", isDirectory: true)
@@ -339,10 +342,10 @@ struct SkillsHubLibraryControllerTests {
         }
 
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home, agentEnvironment: [:])
-        try controller.bootstrapDefaultRootIfPresent()
+        try await controller.bootstrapDefaultRootIfPresent()
 
         #expect(controller.hasRoot == false)
-        let request = try #require(try controller.startupAuthorizationRequest())
+        let request = try #require(try await controller.startupAuthorizationRequest())
         #expect(request.targets.map(\.id) == ["default-root", "agent-claudeCode", "agent-codex"])
         #expect(request.targets.first?.authorizationURL.path == defaultRoot.path)
         let claudeTarget = try #require(request.targets.first { $0.id == "agent-claudeCode" })
@@ -351,7 +354,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(codexTarget.authorizationURL.path == codexMarker.path)
     }
 
-    @Test func startupAuthorizationRestoresPersistedDefaultRootAccessWithoutPromptingAgain() throws {
+    @Test func startupAuthorizationRestoresPersistedDefaultRootAccessWithoutPromptingAgain() async throws {
         let home = try temporaryDirectory()
         let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
         try FileManager.default.createDirectory(at: defaultRoot, withIntermediateDirectories: true)
@@ -362,15 +365,15 @@ struct SkillsHubLibraryControllerTests {
         let accessStore = InMemoryStartupAccessStore(restorablePaths: [defaultRoot.standardizedFileURL.path])
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home, startupAccessStore: accessStore)
 
-        try controller.bootstrapDefaultRootIfPresent()
+        try await controller.bootstrapDefaultRootIfPresent()
 
         #expect(controller.hasRoot)
-        let request = try controller.startupAuthorizationRequest()
+        let request = try await controller.startupAuthorizationRequest()
         #expect(request == nil)
         #expect(accessStore.restoredPaths.contains(defaultRoot.standardizedFileURL.path))
     }
 
-    @Test func startupRestoresAuthorizedAgentEntriesWithoutChangingRootMetadata() throws {
+    @Test func startupRestoresAuthorizedAgentEntriesWithoutChangingRootMetadata() async throws {
         let home = try temporaryDirectory()
         let root = home.appendingPathComponent("skills-hub", isDirectory: true)
         let target = home.appendingPathComponent(".codex/skills", isDirectory: true)
@@ -389,7 +392,7 @@ struct SkillsHubLibraryControllerTests {
             agentHomeDirectory: home, agentEnvironment: [:], startupAccessStore: store
         )
 
-        try controller.bootstrapDefaultRootIfPresent()
+        try await controller.bootstrapDefaultRootIfPresent()
 
         #expect(controller.agentFindings.contains { $0.agentID == AgentKind.codex.rawValue && $0.entryName == "outside-skill" })
         #expect(!controller.agentFindings.contains { $0.entryName == "ordinary-folder" })
@@ -397,7 +400,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(store.savedPaths.isEmpty)
     }
 
-    @Test func startupAuthorizationSkipsBuiltInAgentWhenPersistedAccessRestores() throws {
+    @Test func startupAuthorizationSkipsBuiltInAgentWhenPersistedAccessRestores() async throws {
         let root = try temporaryDirectory()
         let home = try temporaryDirectory()
         let codexMarker = home.appendingPathComponent(".codex", isDirectory: true)
@@ -408,10 +411,10 @@ struct SkillsHubLibraryControllerTests {
         }
         let accessStore = InMemoryStartupAccessStore(restorablePaths: [codexMarker.standardizedFileURL.path])
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home, agentEnvironment: [:], startupAccessStore: accessStore)
-        try connectInitializedTestRoot(controller, at: root)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        try await connectInitializedTestRoot(controller, at: root)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
-        let request = try controller.startupAuthorizationRequest()
+        let request = try await controller.startupAuthorizationRequest()
 
         #expect(request?.targets.contains(where: { $0.id == "agent-codex" }) != true)
         #expect(accessStore.restoredPaths.contains(codexMarker.standardizedFileURL.path))
@@ -438,7 +441,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(accessStore.savedPaths.isEmpty)
     }
 
-    @Test func authorizationTargetReturnsDetectedBuiltInAgentDirectoryNeedingAccess() throws {
+    @Test func authorizationTargetReturnsDetectedBuiltInAgentDirectoryNeedingAccess() async throws {
         let root = try temporaryDirectory()
         let home = try temporaryDirectory()
         let codexMarker = home.appendingPathComponent(".codex", isDirectory: true)
@@ -449,10 +452,10 @@ struct SkillsHubLibraryControllerTests {
         }
 
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home, agentEnvironment: [:])
-        try connectInitializedTestRoot(controller, at: root)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        try await connectInitializedTestRoot(controller, at: root)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
-        let target = try controller.authorizationTarget(for: .codex)
+        let target = try await controller.authorizationTarget(for: .codex)
 
         #expect(target?.id == "agent-codex")
         #expect(target?.authorizationURL.path == codexMarker.path)
@@ -480,12 +483,12 @@ struct SkillsHubLibraryControllerTests {
             agentEnvironment: [:],
             startupAccessStore: accessStore
         )
-        try connectInitializedTestRoot(controller, at: root)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        try await connectInitializedTestRoot(controller, at: root)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
         let enabled = try await controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: try #require(controller.installedSkills.first).assetID,
             enabled: true
         )
 
@@ -502,7 +505,7 @@ struct SkillsHubLibraryControllerTests {
 
         let repeated = try await controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: try #require(controller.installedSkills.first).assetID,
             enabled: true
         )
         #expect(repeated.outcome == .noChange)
@@ -510,7 +513,7 @@ struct SkillsHubLibraryControllerTests {
 
         let disabled = try await controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: try #require(controller.installedSkills.first).assetID,
             enabled: false
         )
         #expect(disabled.outcome == .succeeded)
@@ -521,8 +524,130 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.agentLinks.isEmpty)
     }
 
+    @Test(arguments: ["empty", "unknown", "drift", "absent"])
+    func historicalMaterialEntryConsumesQualificationAndRechecks(_ state: String) async throws {
+        let fixture = try await makeControllerRelationFixture(agents: [.codex],
+            linkService: AgentLinkService(relationPrimitiveHook: { point, _ in
+                if point == (state == "absent" ? .afterMaterialRemoval : .afterMaterialIsolation) {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+            }))
+        await fixture.controller.waitForPendingRechecks()
+        let enabled = try await fixture.controller.setGlobalAgentEnablement(agentID: AgentKind.codex.rawValue,
+            assetID: fixture.assetID, enabled: true)
+        #expect(enabled.outcome == .succeeded)
+        let task = try #require(fixture.controller.phase1Tasks.first { $0.relationEvidence?.relation == enabled.relation })
+        let material = try #require(task.recoveryEvidence?.creationMaterials)
+        await fixture.controller.recheckRecoveryTasks()
+        let projected = try #require(fixture.controller.phase1Tasks.first { $0.id == task.id })
+        #expect(projected.relationEvidence?.actualDelta.contains(material.detail) == true)
+        for language in [AppLanguage.chinese, .japanese] {
+            #expect(projected.events.contains {
+                SkillsHubLocalization().localized($0.message, language: language)
+                    == SkillsHubLocalization().localized(material.detail, language: language)
+            })
+        }
+        if state == "absent" {
+            #expect(!material.canSettle)
+            #expect(material.detail == "Creation directory absent; deletion history unverified.")
+            #expect(task.phase == .needsAttention)
+            await fixture.controller.recheckRecoveryTasks()
+            #expect(fixture.controller.phase1Tasks.first { $0.id == task.id }?.recoveryEvidence?.creationMaterials == material)
+            return
+        }
+        #expect(material.canSettle)
+        let node = URL(fileURLWithPath: material.path)
+        let before = try LinkNodeIdentity.read(at: node)
+        let link = fixture.targets[.codex]!.appendingPathComponent("Writer")
+        let originalLink = try LinkNodeIdentity.read(at: link)
+        let metadata = try SkillsHubMetadataStore().loadCurrentSnapshot(from: fixture.root)
+        await fixture.controller.recheckRecoveryTasks()
+        #expect(try LinkNodeIdentity.read(at: node) == before)
+        if state != "empty" {
+            try Data("keep".utf8).write(to: node.appendingPathComponent("unknown"))
+            if state == "unknown" {
+                await fixture.controller.recheckRecoveryTasks()
+                #expect(fixture.controller.phase1Tasks.first { $0.id == task.id }?.recoveryEvidence?.creationMaterials?.canSettle == false)
+            }
+        }
+        await fixture.controller.settleCreationMaterials(operationID: task.id)
+        let updated = try #require(fixture.controller.phase1Tasks.first { $0.id == task.id }?.recoveryEvidence?.creationMaterials)
+        #expect(updated.canSettle == false)
+        if state == "empty" {
+            #expect((try? LinkNodeIdentity.read(at: node)) == nil)
+            #expect(updated.detail == "Creation directory settled")
+        } else {
+            #expect(try LinkNodeIdentity.read(at: node) == before)
+            #expect(try String(contentsOf: node.appendingPathComponent("unknown"), encoding: .utf8) == "keep")
+            #expect(updated.detail == "Creation directory contains unknown contents.")
+        }
+        #expect(try LinkNodeIdentity.read(at: link) == originalLink)
+        #expect(try SkillsHubMetadataStore().loadCurrentSnapshot(from: fixture.root).metadataDigest == metadata.metadataDigest)
+    }
+
+    @Test func sameNameRelationsUseSelectedAssetAndRejectContradictoryIdentity() async throws {
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        await fixture.controller.waitForPendingRechecks()
+        let directory = fixture.root.appendingPathComponent("local/other").standardizedFileURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try skillText(name: "Writer", description: "Second location.").write(to: directory.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let other = InstalledSkill(id: "writer", sourceID: nil, name: "Writer", description: "Second location.",
+            installedPath: directory.path, sourceKind: .manualFilesystem, validation: .valid,
+            purpose: nil, tagIDs: [], installedAt: .distantPast)
+        let store = SkillsHubMetadataStore()
+        var snapshot = try store.commit(at: fixture.root, expected: try #require(fixture.controller.rootSnapshot)) {
+            $0.installedSkills.append(other)
+        }
+        fixture.controller.rootSnapshot = snapshot
+        fixture.controller.installedSkills = snapshot.metadata.installedSkills
+        let selected = try await fixture.controller.setGlobalAgentEnablement(agentID: AgentKind.codex.rawValue,
+            assetID: other.assetID, enabled: true)
+        #expect(selected.outcome == .succeeded)
+        #expect(selected.relation.assetID == other.assetID)
+        let occupied = try await fixture.controller.setGlobalAgentEnablement(agentID: AgentKind.codex.rawValue,
+            assetID: fixture.assetID, enabled: true)
+        #expect(occupied.outcome == .blocked)
+        let blockedMessage = try #require(fixture.controller.statusMessage)
+        #expect(blockedMessage.template == "%@ for %@ was not changed. View the current relationship for the next step.")
+        #expect(blockedMessage.arguments == ["Writer", "Codex"])
+        for language in [AppLanguage.chinese, .japanese] {
+            #expect(SkillsHubLocalization().localized(blockedMessage, language: language) != blockedMessage.template)
+        }
+        #expect(try await fixture.controller.setGlobalAgentEnablement(agentID: AgentKind.claudeCode.rawValue,
+            assetID: fixture.assetID, enabled: true).outcome == .succeeded)
+        let plan = try fixture.controller.prepareManagedRelationClearPlan(assetID: other.assetID)
+        #expect(plan.items.allSatisfy { $0.relation.assetID == other.assetID })
+        let cleared = try await fixture.controller.clearAllManagedRelations(using: plan)
+        #expect(cleared.items.count == 1)
+        #expect(cleared.items.first?.outcome == .succeeded)
+        #expect((try? LinkNodeIdentity.read(at: fixture.targets[.codex]!.appendingPathComponent("Writer"))) == nil)
+        #expect(try LinkNodeIdentity.read(at: fixture.targets[.claudeCode]!.appendingPathComponent("Writer")).kind == S_IFLNK)
+        await #expect(throws: SkillsHubLibraryFailure.self) {
+            try await fixture.controller.setGlobalAgentEnablement(agentID: AgentKind.codex.rawValue, assetID: UUID(), enabled: true)
+        }
+        let source = SkillSource(kind: .localDirectory, name: "Wrong association",
+            localPath: fixture.root.appendingPathComponent("local/writer").standardizedFileURL.path)
+        let candidate = AvailableSkill(id: "writer", sourceID: source.id, skillPath: ".", name: "Writer",
+            description: "Fixture", validation: .valid)
+        snapshot = try store.commit(at: fixture.root, expected: try #require(fixture.controller.rootSnapshot)) { metadata in
+            metadata.sources.append(source)
+            metadata.availableSkills.append(candidate)
+            let offset = metadata.installedSkills.firstIndex { $0.assetID == other.assetID }!
+            metadata.installedSkills[offset].sourceID = source.id
+            metadata.installedSkills[offset].candidateID = candidate.candidateID
+        }
+        fixture.controller.rootSnapshot = snapshot
+        await #expect(throws: SkillsHubLibraryFailure.self) {
+            try await fixture.controller.setGlobalAgentEnablement(agentID: AgentKind.codex.rawValue, assetID: other.assetID, enabled: true)
+        }
+        #expect(throws: SkillsHubLibraryFailure.self) {
+            try fixture.controller.prepareManagedRelationClearPlan(assetID: other.assetID)
+        }
+        #expect(try store.loadCurrentSnapshot(from: fixture.root) == snapshot)
+    }
+
     @Test func savingAgentDisplayFieldsChangesNoDirectoryRelationshipOrContent() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
         let target = try #require(fixture.targets[.codex])
         let targetChildrenBefore = try FileManager.default.contentsOfDirectory(atPath: target.path)
         let tasksBefore = fixture.controller.phase1Tasks
@@ -545,7 +670,7 @@ struct SkillsHubLibraryControllerTests {
     }
 
     @Test func invalidDisplayFieldsDoNotChangeSavedAgentConfiguration() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
         let before = try #require(fixture.controller.rootSnapshot).metadata
 
         await #expect(throws: SkillsHubLibraryFailure.invalidSource("Agent name is required.")) {
@@ -568,11 +693,11 @@ struct SkillsHubLibraryControllerTests {
     }
 
     @Test func relationTaskPreservesTimelineEvidenceAndPriorConclusionAcrossNewActions() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
 
         let enabled = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         #expect(enabled.outcome == .succeeded)
@@ -591,7 +716,7 @@ struct SkillsHubLibraryControllerTests {
 
         let repeated = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         #expect(repeated.outcome == .noChange)
@@ -624,16 +749,16 @@ struct SkillsHubLibraryControllerTests {
     }
 
     @Test func concurrentDuplicateRelationActionsSubmitOnlyOneRelationWrite() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
 
         async let first = fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         async let duplicate = fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         let results = try await [first, duplicate]
@@ -645,16 +770,16 @@ struct SkillsHubLibraryControllerTests {
         let creation = try #require(snapshot.metadata.managedRelationEvidence.first?.creation)
         let stagingDirectory = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.targets[.codex]!.path).sorted()
-            == [stagingDirectory.lastPathComponent, "Writer"].sorted())
-        #expect(try FileManager.default.contentsOfDirectory(atPath: stagingDirectory.path).isEmpty)
+            == ["Writer"])
+        #expect((try? LinkNodeIdentity.read(at: stagingDirectory)) == nil)
     }
 
     @Test func oneAgentRelationActionLeavesTheOtherAgentUnchanged() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
 
         let result = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
 
@@ -666,7 +791,7 @@ struct SkillsHubLibraryControllerTests {
     }
 
     @Test func dualAgentEnablementSharesCanonicalSkillAndDisablePreservesOtherRelation() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
         let canonicalSkill = fixture.root
             .appendingPathComponent("local/writer", isDirectory: true)
             .resolvingSymlinksInPath()
@@ -679,7 +804,7 @@ struct SkillsHubLibraryControllerTests {
 
         let codexEnabled = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         #expect(codexEnabled.outcome == .succeeded)
@@ -695,7 +820,7 @@ struct SkillsHubLibraryControllerTests {
 
         let claudeEnabled = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.claudeCode.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         #expect(claudeEnabled.outcome == .succeeded)
@@ -717,13 +842,13 @@ struct SkillsHubLibraryControllerTests {
         #expect(dualVerifications.allSatisfy { $0.conclusion == .verifiedConsistent })
         let installedSkill = try #require(fixture.controller.installedSkills.first { $0.id == "writer" })
         let dualPresentations = fixture.controller.relationPresentations(for: installedSkill)
-        #expect(dualPresentations.first { $0.agentKind == .codex }?.verification == .verifiedConsistent)
-        #expect(dualPresentations.first { $0.agentKind == .claudeCode }?.verification == .verifiedConsistent)
+        #expect(dualPresentations.first { $0.relation.agentID == AgentKind.codex.rawValue }?.verification == .verifiedConsistent)
+        #expect(dualPresentations.first { $0.relation.agentID == AgentKind.claudeCode.rawValue }?.verification == .verifiedConsistent)
         let claudeLinkText = try FileManager.default.destinationOfSymbolicLink(atPath: claudeLink.path)
 
         let codexDisabled = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: false
         )
         #expect(codexDisabled.outcome == .succeeded)
@@ -732,18 +857,18 @@ struct SkillsHubLibraryControllerTests {
         #expect(claudeLink.resolvingSymlinksInPath().standardizedFileURL.path == canonicalSkill.path)
         #expect(
             fixture.controller.relationPresentations(for: installedSkill)
-                .first { $0.agentKind == .claudeCode }?.verification == .verifiedConsistent
+                .first { $0.relation.agentID == AgentKind.claudeCode.rawValue }?.verification == .verifiedConsistent
         )
 
         _ = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         let codexLinkText = try FileManager.default.destinationOfSymbolicLink(atPath: codexLink.path)
         let claudeDisabled = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.claudeCode.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: false
         )
         #expect(claudeDisabled.outcome == .succeeded)
@@ -752,7 +877,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(codexLink.resolvingSymlinksInPath().standardizedFileURL.path == canonicalSkill.path)
         #expect(
             fixture.controller.relationPresentations(for: installedSkill)
-                .first { $0.agentKind == .codex }?.verification == .verifiedConsistent
+                .first { $0.relation.agentID == AgentKind.codex.rawValue }?.verification == .verifiedConsistent
         )
 
         let intents = try SkillsHubMetadataStore()
@@ -767,19 +892,19 @@ struct SkillsHubLibraryControllerTests {
     }
 
     @Test func missingSelectedNodeCanBeExplicitlyReestablished() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
         _ = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         let link = fixture.targets[.codex]!.appendingPathComponent("Writer")
         try FileManager.default.moveItem(at: link, to: fixture.root.appendingPathComponent("removed-link"))
-        try fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
+        try await fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
 
         let skill = try #require(fixture.controller.installedSkills.first { $0.id == "writer" })
         let presentation = try #require(
-            fixture.controller.relationPresentations(for: skill).first { $0.agentKind == .codex }
+            fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == AgentKind.codex.rawValue }
         )
         #expect(presentation.intendedEnabled == true)
         #expect(presentation.desiredEnabled == false)
@@ -787,7 +912,7 @@ struct SkillsHubLibraryControllerTests {
 
         let result = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         #expect(result.outcome == .succeeded)
@@ -795,7 +920,7 @@ struct SkillsHubLibraryControllerTests {
     }
 
     @Test func customAgentUsesTheSameRelationActionPath() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [])
+        let fixture = try await makeControllerRelationFixture(agents: [])
         let target = try temporaryDirectory()
         try fixture.controller.rememberUserSelectedAccess(to: target)
         let custom = try await fixture.controller.addCustomAgent(
@@ -806,7 +931,7 @@ struct SkillsHubLibraryControllerTests {
 
         let result = try await fixture.controller.setGlobalAgentEnablement(
             agentID: custom.id,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         let link = target.appendingPathComponent("Writer")
@@ -817,14 +942,15 @@ struct SkillsHubLibraryControllerTests {
         let relation = try #require(
             fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == custom.id }
         )
-        #expect(relation.agentKind == nil)
+        let descriptor = try #require(fixture.controller.visibleInstalledAgentDescriptors.first { $0.id == custom.id })
+        #expect(descriptor.agent == nil)
         #expect(relation.agentDisplayName == "Custom Bench")
-        #expect(relation.iconMonogram == "CB")
+        #expect(descriptor.iconMonogram == "CB")
         #expect(relation.verification == .verifiedConsistent)
     }
 
     @Test func agentCapabilityAndRelationPresentationUseCurrentIndependentFacts() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
 
         let codexCapability = try #require(
             fixture.controller.configuredAgentCapabilities.first { $0.agentID == AgentKind.codex.rawValue }
@@ -841,14 +967,14 @@ struct SkillsHubLibraryControllerTests {
 
         _ = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
 
         let skill = try #require(fixture.controller.installedSkills.first { $0.id == "writer" })
         var relations = fixture.controller.relationPresentations(for: skill)
-        let codex = try #require(relations.first { $0.agentKind == .codex })
-        let claude = try #require(relations.first { $0.agentKind == .claudeCode })
+        let codex = try #require(relations.first { $0.relation.agentID == AgentKind.codex.rawValue })
+        let claude = try #require(relations.first { $0.relation.agentID == AgentKind.claudeCode.rawValue })
         #expect(codex.intendedEnabled == true)
         #expect(codex.observation == .symbolicLink)
         #expect(codex.verification == .verifiedConsistent)
@@ -859,11 +985,25 @@ struct SkillsHubLibraryControllerTests {
         #expect(claude.observation == nil)
         #expect(claude.verification == .notVerified)
 
+        fixture.controller.relationActionResults[codex.relation.id]?.safeNextStep = "reauthorize-current-relation"
+        let currentNextStep = try #require(fixture.controller.relationPresentations(for: skill)
+            .first { $0.relation == codex.relation }?.safeNextStep)
+        #expect(currentNextStep == "Review current relation facts and authorize a new action.")
+        for language in [AppLanguage.chinese, .japanese] {
+            #expect(SkillsHubLocalization().localized(currentNextStep, language: language) != currentNextStep)
+        }
+        fixture.controller.relationActionResults.removeValue(forKey: codex.relation.id)
+        let verificationIndex = try #require(fixture.controller.localState.verificationRecords
+            .firstIndex { $0.relation == codex.relation })
+        fixture.controller.localState.verificationRecords[verificationIndex].safeNextStep = "原始 history %@"
+        #expect(fixture.controller.relationPresentations(for: skill)
+            .first { $0.relation == codex.relation }?.safeNextStep == "No action is required.")
+
         let currentGeneration = try #require(fixture.controller.rootSnapshot?.generation)
         fixture.controller.rootSnapshot?.generation = currentGeneration + 1
         relations = fixture.controller.relationPresentations(for: skill)
-        #expect(relations.first { $0.agentKind == .codex }?.verification == .notVerified)
-        #expect(relations.first { $0.agentKind == .claudeCode }?.verification == .notVerified)
+        #expect(relations.first { $0.relation.agentID == AgentKind.codex.rawValue }?.verification == .notVerified)
+        #expect(relations.first { $0.relation.agentID == AgentKind.claudeCode.rawValue }?.verification == .notVerified)
 
         fixture.controller.rootSnapshot?.generation = currentGeneration
         let observationIndex = try #require(
@@ -871,20 +1011,20 @@ struct SkillsHubLibraryControllerTests {
         )
         fixture.controller.localState.targetObservations[observationIndex].isReadable = false
         relations = fixture.controller.relationPresentations(for: skill)
-        #expect(relations.first { $0.agentKind == .codex }?.verification == .currentlyUnverifiable)
-        #expect(relations.first { $0.agentKind == .codex }?.safeNextStep == "Restore current access and observe the relation again.")
+        #expect(relations.first { $0.relation.agentID == AgentKind.codex.rawValue }?.verification == .currentlyUnverifiable)
+        #expect(relations.first { $0.relation.agentID == AgentKind.codex.rawValue }?.safeNextStep == "Restore current access and observe the relation again.")
     }
 
     @Test(arguments: [AgentKind.codex, .claudeCode])
     func relationPresentationRejectsReplacedNodeAfterAudit(_ agent: AgentKind) async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
         for enabledAgent in [AgentKind.codex, .claudeCode] {
             _ = try await fixture.controller.setGlobalAgentEnablement(
-                agentID: enabledAgent.rawValue, skillID: "writer", enabled: true
+                agentID: enabledAgent.rawValue, assetID: fixture.assetID, enabled: true
             )
         }
         let skill = try #require(fixture.controller.installedSkills.first { $0.id == "writer" })
-        let before = try #require(fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent })
+        let before = try #require(fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == agent.rawValue })
         try #require(before.verification == .verifiedConsistent)
         #expect(before.linkPath == fixture.controller.localState.targetObservations.first { $0.relation == before.relation }?.linkPath)
         #expect(before.linkText != nil)
@@ -892,6 +1032,8 @@ struct SkillsHubLibraryControllerTests {
         let item = try #require(fixture.controller.presentationService.phase1Items(
             availableSkills: [], installedSkills: [skill], sources: [], enablementIntents: []).first)
         #expect(fixture.controller.contentNodeObservation(for: item)?.nodeKind == .directory)
+        #expect(fixture.controller.entryAddress(for: item).path == "local/writer/SKILL.md")
+        #expect(fixture.controller.entryAddress(for: item).status != nil) // A historical record alone does not verify SKILL.md.
         let otherObservation = fixture.controller.localState.targetObservations.first { $0.relation.agentID != agent.rawValue }
         let otherVerification = fixture.controller.localState.verificationRecords.first { $0.relation.agentID != agent.rawValue }
         let ownership = fixture.controller.rootSnapshot?.metadata.managedRelationEvidence ?? []
@@ -904,9 +1046,9 @@ struct SkillsHubLibraryControllerTests {
         let externalContent = Data("External replacement".utf8)
         try externalContent.write(to: link)
 
-        try fixture.controller.auditAgentDirectory(agentID: agent.rawValue)
+        try await fixture.controller.auditAgentDirectory(agentID: agent.rawValue)
 
-        let after = try #require(fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent })
+        let after = try #require(fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == agent.rawValue })
         #expect(after.verification != .verifiedConsistent)
         #expect(after.verification == .drifted)
         #expect(after.observation == .regularFile)
@@ -914,7 +1056,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(after.linkText == nil)
         #expect(after.resolvedTargetPath == nil)
         #expect(after.safeNextStep == "Review the current relation before preparing another action.")
-        #expect(fixture.controller.relationPresentations(for: skill).first { $0.agentKind != agent }?.verification == .verifiedConsistent)
+        #expect(fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID != agent.rawValue }?.verification == .verifiedConsistent)
         #expect(fixture.controller.rootSnapshot?.metadata.enablementIntents == intents)
         #expect(try Data(contentsOf: metadataURL) == metadata)
         #expect(try Data(contentsOf: link) == externalContent)
@@ -931,19 +1073,19 @@ struct SkillsHubLibraryControllerTests {
         #expect(observation.fileIdentity != ownership.first { $0.relation.agentID == agent.rawValue }?.fileIdentity)
         #expect(persisted.verificationRecords.first { $0.relation.agentID == agent.rawValue }?.bindings.observationDigest == observation.digest)
         fixture.controller.agentDirectoryAuditFailures[agent.rawValue] = "Access unavailable"
-        let unavailable = try #require(fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent })
+        let unavailable = try #require(fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == agent.rawValue })
         #expect(unavailable.observation == nil)
         #expect(unavailable.linkPath == nil)
         #expect(unavailable.linkText == nil)
         #expect(unavailable.resolvedTargetPath == nil)
-        #expect(fixture.controller.relationPresentations(for: skill).first { $0.agentKind != agent }?.observation == .symbolicLink)
+        #expect(fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID != agent.rawValue }?.observation == .symbolicLink)
     }
 
     @Test(arguments: [AgentKind.codex, .claudeCode], ["unchanged", "vacant", "directory", "external", "broken", "replacement", "permission"])
     func relationChecksUseCurrentFileFacts(_ agent: AgentKind, _ change: String) async throws {
-        let fixture = try makeControllerRelationFixture(agents: [agent])
+        let fixture = try await makeControllerRelationFixture(agents: [agent])
         try fixture.controller.saveLocalState()
-        _ = try await fixture.controller.setGlobalAgentEnablement(agentID: agent.rawValue, skillID: "writer", enabled: true)
+        _ = try await fixture.controller.setGlobalAgentEnablement(agentID: agent.rawValue, assetID: fixture.assetID, enabled: true)
         let skill = try #require(fixture.controller.installedSkills.first { $0.id == "writer" })
         let target = try #require(fixture.targets[agent])
         let link = target.appendingPathComponent("Writer")
@@ -973,22 +1115,26 @@ struct SkillsHubLibraryControllerTests {
         let expected: VerificationConclusion = change == "unchanged" ? .verifiedConsistent
             : change == "permission" ? .currentlyUnverifiable : .drifted
 
-        fixture.controller.refreshAgentLightScan()
+        await fixture.controller.refreshAgentLightScan()
         var presentation = try #require(
-            fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent }
+            fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == agent.rawValue }
         )
         #expect(presentation.observation == node)
         #expect(presentation.verification == expected)
         if change == "permission" {
-            #expect(throws: (any Error).self) {
-                try fixture.controller.auditAllDetectedAgentDirectories()
+            await #expect(throws: (any Error).self) {
+                try await fixture.controller.auditAllDetectedAgentDirectories()
             }
-            #expect(fixture.controller.agentDirectoryAuditFailures[agent.rawValue] != nil)
+            let failure = try #require(fixture.controller.agentDirectoryAuditFailures[agent.rawValue])
+            #expect(!failure.isVerbatim)
+            for language in [AppLanguage.chinese, .japanese] {
+                #expect(SkillsHubLocalization().localized(failure.template, language: language) != failure.template)
+            }
         } else {
-            try fixture.controller.auditAllDetectedAgentDirectories()
+            try await fixture.controller.auditAllDetectedAgentDirectories()
         }
         presentation = try #require(
-            fixture.controller.relationPresentations(for: skill).first { $0.agentKind == agent }
+            fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == agent.rawValue }
         )
         #expect(presentation.observation == node)
         #expect(presentation.verification == expected)
@@ -1005,15 +1151,15 @@ struct SkillsHubLibraryControllerTests {
 
         if change == "permission" {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.path)
-            try fixture.controller.auditAgentDirectory(agentID: agent.rawValue)
+            try await fixture.controller.auditAgentDirectory(agentID: agent.rawValue)
             #expect(
                 fixture.controller.relationPresentations(for: skill)
-                    .first { $0.agentKind == agent }?.verification == .verifiedConsistent
+                    .first { $0.relation.agentID == agent.rawValue }?.verification == .verifiedConsistent
             )
         }
     }
 
-    @Test func agentPathSettingsResolveEnvironmentDefaultsAndScanStatus() throws {
+    @Test func agentPathSettingsResolveEnvironmentDefaultsAndScanStatus() async throws {
         let root = try temporaryDirectory()
         let home = try temporaryDirectory()
         let codexHome = try temporaryDirectory()
@@ -1022,8 +1168,8 @@ struct SkillsHubLibraryControllerTests {
             agentHomeDirectory: home,
             agentEnvironment: ["CODEX_HOME": codexHome.path]
         )
-        try connectInitializedTestRoot(controller, at: root)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        try await connectInitializedTestRoot(controller, at: root)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
         var codex = try #require(controller.agentPathSettings.first { $0.agent == .codex })
         #expect(codex.defaultPath == codexHome.appendingPathComponent("skills").path)
@@ -1033,6 +1179,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(!codex.skillsDirectoryExists)
 
         try FileManager.default.createDirectory(at: codexHome.appendingPathComponent("skills"), withIntermediateDirectories: true)
+        await controller.refreshAgentLightScan()
         codex = try #require(controller.agentPathSettings.first { $0.agent == .codex })
         #expect(codex.status == .detected)
         #expect(codex.directoryExists)
@@ -1045,6 +1192,7 @@ struct SkillsHubLibraryControllerTests {
         defer {
             try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claudeSkills.path)
         }
+        await controller.refreshAgentLightScan()
         let claude = try #require(controller.agentPathSettings.first { $0.agent == .claudeCode })
         #expect(claude.status == .notWritable)
         #expect(!claude.isWritable)
@@ -1065,8 +1213,8 @@ struct SkillsHubLibraryControllerTests {
             agentEnvironment: [:],
             startupAccessStore: InMemoryStartupAccessStore(restorablePaths: [root.path, customSkills.path])
         )
-        try connectInitializedTestRoot(controller, at: root)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        try await connectInitializedTestRoot(controller, at: root)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
         #expect(controller.detectedBuiltInAgents == [.codex])
 
@@ -1081,7 +1229,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.detectedBuiltInAgents == [.codex])
 
         try FileManager.default.createDirectory(at: claudeSkills, withIntermediateDirectories: true)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
         #expect(controller.detectedBuiltInAgents == [.claudeCode, .codex])
         #expect(controller.rootSnapshot?.metadata.agents.contains { $0.id == customAgent.id } == true)
@@ -1093,7 +1241,7 @@ struct SkillsHubLibraryControllerTests {
         let controller = SkillsHubLibraryController(
             startupAccessStore: InMemoryStartupAccessStore(restorablePaths: [root.path, target.path])
         )
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
 
         await #expect(throws: SkillsHubLibraryFailure.invalidSource("Enter 1–4 visible characters for the icon abbreviation.")) {
             _ = try await controller.addCustomAgent(
@@ -1119,8 +1267,8 @@ struct SkillsHubLibraryControllerTests {
             agentEnvironment: [:],
             startupAccessStore: InMemoryStartupAccessStore(restorablePaths: [root.path, customSkills.path])
         )
-        try connectInitializedTestRoot(controller, at: root)
-        controller.refreshAgentLightScan(checkInstallation: true)
+        try await connectInitializedTestRoot(controller, at: root)
+        await controller.refreshAgentLightScan(checkInstallation: true)
 
         let customAgent = try await controller.addCustomAgent(
             displayName: "My Custom Agent",
@@ -1139,7 +1287,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(persistedCustomAgent.iconMonogram == "MC")
         #expect(controller.agentDetections.contains { $0.agentID == customAgent.id && $0.isCustom && $0.entryCount == 1 })
 
-        try controller.auditAgentDirectory(agentID: customAgent.id)
+        try await controller.auditAgentDirectory(agentID: customAgent.id)
 
         let customFinding = try #require(controller.agentFindings.first { $0.agentID == customAgent.id })
         #expect(customFinding.agentDisplayName == "My Custom Agent")
@@ -1158,7 +1306,7 @@ struct SkillsHubLibraryControllerTests {
                 restorablePaths: [root.path, firstDirectory.path, secondDirectory.path]
             )
         )
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
 
         let first = try await controller.addCustomAgent(
             displayName: "Reviewer",
@@ -1197,7 +1345,7 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.errorMessage == "Choose a root before continuing.")
     }
 
-    @Test func manualBrokenSymlinkRemainsVisibleInNeedsAttention() throws {
+    @Test func manualBrokenSymlinkRemainsVisibleInNeedsAttention() async throws {
         let root = try temporaryDirectory()
         let broken = root.appendingPathComponent("local/broken-link")
         try FileManager.default.createDirectory(at: broken.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1211,7 +1359,7 @@ struct SkillsHubLibraryControllerTests {
         )
 
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
 
         #expect(controller.installedSkills.map(\.id) == ["broken-link"])
         #expect(controller.installedSkills.first?.validation.status == .invalid)
@@ -1269,11 +1417,12 @@ private func skillText(name: String, description: String) -> String {
 
 @MainActor
 func makeControllerRelationFixture(
-    agents: [AgentKind]
-) throws -> (
+    agents: [AgentKind], linkService: AgentLinkService = AgentLinkService()
+) async throws -> (
     controller: SkillsHubLibraryController,
     root: URL,
-    targets: [AgentKind: URL]
+    targets: [AgentKind: URL],
+    assetID: UUID
 ) {
     let root = try temporaryDirectory()
     let source = root.appendingPathComponent("local/writer", isDirectory: true)
@@ -1309,14 +1458,16 @@ func makeControllerRelationFixture(
         restorablePaths: Set([root.path] + targets.values.map(\.path))
     )
     let controller = SkillsHubLibraryController(
+        agentLinkService: linkService,
         agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation),
         agentHomeDirectory: home,
         agentEnvironment: [:],
         startupAccessStore: accessStore
     )
-    try connectInitializedTestRoot(controller, at: root)
-    controller.refreshAgentLightScan(checkInstallation: true)
-    return (controller, root, targets)
+    try await connectInitializedTestRoot(controller, at: root)
+    await controller.refreshAgentLightScan(checkInstallation: true)
+    let assetID = try #require(controller.installedSkills.first).assetID
+    return (controller, root, targets, assetID)
 }
 
 private final class InMemoryStartupAccessStore: StartupAccessStoring {

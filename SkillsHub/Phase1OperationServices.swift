@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 nonisolated private func sourceImportURL(source: SkillSource, fileManager: FileManager) throws -> URL {
@@ -171,11 +172,15 @@ nonisolated struct RootInitializationFacts: Codable, Hashable, Sendable {
 /// Initialization and runtime scans share indexing and skip symbolic-link directories.
 nonisolated struct RootContentDiscovery: Equatable {
     var installedSkills: [InstalledSkill]
+    var availableSkills: [AvailableSkill]
+    var localSourceNames: Set<String>
 
     static func observe(
         rootURL: URL,
         observedAt: Date,
-        fileManager: FileManager
+        fileManager: FileManager,
+        sources: [SkillSource] = [],
+        localOnly: Bool = false
     ) throws -> RootContentDiscovery {
         let layout = SkillsHubMetadataStore(fileManager: fileManager).rootLayout(for: rootURL)
         func directories(in container: URL) throws -> [URL] {
@@ -183,24 +188,38 @@ nonisolated struct RootContentDiscovery: Equatable {
             guard !access.isSymlink(container) else {
                 throw Phase1OperationError.targetConflict(container.path)
             }
-            guard fileManager.fileExists(atPath: container.path) else { return [] }
+            var node = stat()
+            if Darwin.lstat(container.path, &node) != 0 {
+                if errno == ENOENT { return [] }
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
             return try fileManager.contentsOfDirectory(
                 at: container, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
             ).filter { child in
                 let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                if sources.contains(where: { $0.localPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path } == child.standardizedFileURL.path }),
+                   values.isDirectory != true || values.isSymbolicLink == true {
+                    throw Phase1OperationError.targetConflict(child.path)
+                }
                 return values.isDirectory == true && values.isSymbolicLink != true
             }
         }
-        var children = try directories(in: layout.localDirectory)
-        for owner in try directories(in: layout.githubDirectory) {
-            children.append(contentsOf: try directories(in: owner))
+        let localChildren = try directories(in: layout.localDirectory)
+        var children = localChildren
+        if !localOnly {
+            for owner in try directories(in: layout.githubDirectory) {
+                children.append(contentsOf: try directories(in: owner))
+            }
         }
         children.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         var installedSkills: [InstalledSkill] = []
+        var availableSkills: [AvailableSkill] = []
         for child in children {
             let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
-            let sourceID = StableIdentity.uuid(namespace: "root-local-source", value: child.standardizedFileURL.path)
+            let sourceID = sources.first {
+                $0.localPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path } == child.standardizedFileURL.path
+            }?.id ?? StableIdentity.uuid(namespace: "root-local-source", value: child.standardizedFileURL.path)
             let index = LocalSourceIndexer(
                 fileManager: fileManager,
                 now: { observedAt }
@@ -209,6 +228,7 @@ nonisolated struct RootContentDiscovery: Equatable {
                 throw Phase1OperationError.candidateUnavailable
             }
             guard index.availableSkills.isEmpty == false else { continue }
+            availableSkills.append(contentsOf: index.availableSkills)
             installedSkills.append(contentsOf: index.availableSkills.map { candidate in
                 let installedURL = candidate.skillPath == "."
                     ? child
@@ -225,6 +245,7 @@ nonisolated struct RootContentDiscovery: Equatable {
                     tagIDs: [],
                     installedAt: observedAt,
                     assetID: StableIdentity.uuid(namespace: "root-local-asset", value: installedURL.path),
+                    canonicalPathComponent: candidate.skillPath,
                     currentRevision: candidate.manifestDigest,
                     manifestDigest: candidate.manifestDigest,
                     managedGeneration: 0
@@ -232,7 +253,9 @@ nonisolated struct RootContentDiscovery: Equatable {
             })
         }
         return RootContentDiscovery(
-            installedSkills: installedSkills.sorted { $0.installedPath < $1.installedPath }
+            installedSkills: installedSkills.sorted { $0.installedPath < $1.installedPath },
+            availableSkills: availableSkills,
+            localSourceNames: Set(localChildren.map(\.lastPathComponent))
         )
     }
 }
@@ -313,6 +336,13 @@ nonisolated struct Phase1RelationTaskEvidence: Codable, Hashable, Sendable {
 }
 
 nonisolated enum Phase1RecoveryState: String, Codable, Hashable, Sendable {
+    init(_ state: RelationActionRecoveryState) {
+        switch state {
+        case .completed: self = .completed
+        case .notCompleted: self = .notCompleted
+        case .unknown: self = .unknown
+        }
+    }
     case completed
     case notCompleted = "not-completed"
     case unknown
@@ -335,6 +365,7 @@ nonisolated struct Phase1RecoveryComponent: Codable, Hashable, Sendable {
 
 nonisolated struct Phase1RecoveryEvidence: Codable, Hashable, Sendable {
     var components: [Phase1RecoveryComponent]
+    var creationMaterials: CreationMaterialReview? = nil
     var agentID: String? = nil
     var sourceID: UUID? = nil
     var sourceKind: SkillSourceKind? = nil
@@ -406,6 +437,19 @@ nonisolated struct Phase1JournalRecord: Codable, Hashable, Sendable {
     var result: String
     var confirmationTokenID: UUID?
     var occurredAt: Date
+
+    // In-memory progress uses the recorded phase, never guesses semantics from result text.
+    var progressMessage: LocalizedMessage {
+        switch phase {
+        case .preparing: "Preparing the operation."
+        case .waitingConfirmation: "Waiting for confirmation."
+        case .executing: "Executing the confirmed operation."
+        case .observing: "Observing the operation result."
+        case .verifying: "Verifying the operation result."
+        case .completed: "The operation completed."
+        case .needsAttention: "The operation needs attention. Open its details before continuing."
+        }
+    }
 }
 
 nonisolated struct Phase1OperationResult: Sendable {
@@ -1049,7 +1093,7 @@ actor Phase1OperationCoordinator {
                 )
             }
         } catch {
-            events.append(event(.needsAttention, .verbatim(String(describing: error))))
+            events.append(event(.needsAttention, SkillsHubLocalization.errorPresentation(for: error)))
             return Phase1OperationResult(
                 snapshot: plan.kind == .initializeRoot ? nil : try? metadataStore.loadCurrentSnapshot(from: URL(fileURLWithPath: plan.rootPath)),
                 installedSkill: nil,
@@ -1057,7 +1101,7 @@ actor Phase1OperationCoordinator {
                     plan: plan,
                     objectID: objectID,
                     phase: .needsAttention,
-                    result: .verbatim(String(describing: error)),
+                    result: SkillsHubLocalization.errorPresentation(for: error),
                     events: events
                 ),
                 succeeded: false
@@ -2187,7 +2231,7 @@ nonisolated final class Phase1OperationJournal {
                     Phase1TaskEvent(
                         id: UUID(),
                         phase: $0.phase,
-                        message: LocalizedMessage("Recorded operation step: %@", arguments: [$0.result]),
+                        message: LocalizedMessage("Historical record (original): %@", arguments: [$0.result]),
                         occurredAt: $0.occurredAt
                     )
                 },

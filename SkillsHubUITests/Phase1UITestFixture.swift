@@ -3,6 +3,7 @@ import Foundation
 
 struct Phase1UITestFixture {
     static let candidateRowIdentifier = "skill-row-fixture-publish-candidate"
+    static let reviewRowIdentifier = "skill-row-33333333-3333-4333-A333-333333333333"
     static let sourceRowIdentifier = "source-row-11111111-1111-1111-1111-111111111111"
 
     let runID: UUID
@@ -163,6 +164,7 @@ struct Phase1UITestFixture {
             to: root.appending(path: "local/review-fixture/SKILL.md"),
             options: .atomic
         )
+        try fileManager.copyItem(at: source, to: root.appending(path: "local/fixture-source"))
         try Data(Self.trashSkillText.utf8).write(
             to: root.appending(path: "local/trash-fixture/SKILL.md"),
             options: .atomic

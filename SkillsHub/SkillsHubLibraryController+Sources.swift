@@ -8,25 +8,41 @@ extension SkillsHubLibraryController {
     }
 
     var localSourcesForPresentation: [SkillSource] {
+        localSourcesForInspection.filter { source in
+            guard let observedLocalSourceNames, let path = source.localPath else { return true }
+            return observedLocalSourceNames.contains(URL(fileURLWithPath: path).lastPathComponent)
+        }
+    }
+
+    // Missing sources still provide context for retained skills and recovery records.
+    var localSourcesForInspection: [SkillSource] {
+        localSourcesInspectionSnapshot
+    }
+
+    func makeLocalSourcesForInspection() -> [SkillSource] {
         guard let rootURL else { return sources.filter { $0.kind == .localDirectory } }
         let registered = sources.filter { $0.kind == .localDirectory }
         let registeredPaths = Set(registered.compactMap { $0.localPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path } })
-        let localDirectory = rootURL.standardizedFileURL.appendingPathComponent("local", isDirectory: true)
+        let localPath = rootURL.standardizedFileURL.path + "/local"
+        var rootPrefixes = [localPath]
+        if let resolvedRootPath {
+            rootPrefixes.append(resolvedRootPath + "/local")
+        }
         let manualPaths = Set(installedSkills.compactMap { skill -> String? in
-            guard skill.sourceID == nil, skill.sourceKind == .manualFilesystem else { return nil }
-            let installed = URL(fileURLWithPath: skill.installedPath, isDirectory: true).standardizedFileURL
-            guard installed.path.hasPrefix(localDirectory.path + "/") else { return nil }
-            let relative = installed.path.dropFirst(localDirectory.path.count + 1)
+            guard skill.sourceID == nil,
+                  skill.sourceKind == .manualFilesystem || skill.sourceKind == .localDirectory else { return nil }
+            // Resolve only the existing Root alias, never a replaced/missing descendant.
+            guard let prefix = rootPrefixes.first(where: { skill.installedPath.hasPrefix($0 + "/") }) else { return nil }
+            let relative = skill.installedPath.dropFirst(prefix.count + 1)
             guard let first = relative.split(separator: "/").first else { return nil }
-            return localDirectory.appendingPathComponent(String(first), isDirectory: true).path
+            return localPath + "/" + String(first)
         }).subtracting(registeredPaths)
         let manual = manualPaths.sorted().map { path in
             SkillSource(
                 id: StableIdentity.uuid(namespace: "root-local-source", value: path),
                 kind: .manualFilesystem,
                 name: URL(fileURLWithPath: path).lastPathComponent,
-                localPath: path,
-                directoryIdentity: try? sourceDirectoryIdentity(URL(fileURLWithPath: path, isDirectory: true))
+                localPath: path
             )
         }
         return (registered + manual).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -135,7 +151,7 @@ extension SkillsHubLibraryController {
                         relation: $0.relation,
                         agentDisplayName: $0.agentDisplayName,
                         outcome: .failed,
-                        detail: String(describing: error)
+                        detail: errorPresentation(for: error)
                     )
                 })
             }
@@ -200,7 +216,7 @@ extension SkillsHubLibraryController {
                 trashPath: record.trashPath,
                 metadataRemoved: metadataRemoved,
                 operationRecordCompleted: record.stage == .completed,
-                detail: "Source removal needs attention: \(error)"
+                detail: errorPresentation(for: error)
             )
         }
     }
@@ -296,7 +312,8 @@ extension SkillsHubLibraryController {
                 sourceID: source.id
             )
             guard result.issue == nil, let staged = result.stagedRepository else {
-                throw SkillsHubLibraryFailure.invalidSource("Update preparation failed: \(result.issue?.rawValue ?? "unknown error").")
+                if let issue = result.issue { throw issue }
+                throw SourceUpdateError.preparedSourceIncomplete
             }
             prepared = (
                 staged.directory,
@@ -398,7 +415,7 @@ extension SkillsHubLibraryController {
     }
 
     func recordSourceUpdateFailure(sourceID: UUID, error: Error) {
-        sourceUpdateFailures[sourceID] = String(describing: error)
+        sourceUpdateFailures[sourceID] = errorPresentation(for: error)
         sourceUpdateChecks[sourceID] = nil
         sourceUpdateCheckDates[sourceID] = Date()
     }
@@ -465,13 +482,13 @@ extension SkillsHubLibraryController {
                         relation: $0.relation,
                         agentDisplayName: $0.agentDisplayName,
                         outcome: .failed,
-                        detail: String(describing: error)
+                        detail: errorPresentation(for: error)
                     )
                 })
             }
         }
         for result in relationResults {
-            record.relationResults[result.relation.id] = "\(result.outcome.rawValue): \(result.detail)"
+            record.relationResults[result.relation.id] = "\(result.outcome.rawValue): \(localization.localized(result.detail, language: .english))"
         }
         record.stage = relationshipsComplete ? .relationshipsReconciled : .needsAttention
         record.detail = relationshipsComplete
@@ -669,7 +686,7 @@ extension SkillsHubLibraryController {
             oldContentMovedToTrash: record.stage == .completed,
             retainedPath: record.retainedPath,
             trashPath: record.trashPath,
-            detail: record.detail
+            detail: LocalizedMessage("Operation record (original): %@", arguments: [record.detail])
         )
     }
 
@@ -708,16 +725,39 @@ extension SkillsHubLibraryController {
               let path = source.localPath else { throw SourceUpdateError.invalidSource }
         guard recheckingSourceIDs.insert(sourceID).inserted else { return }
         defer { recheckingSourceIDs.remove(sourceID) }
-        await Task.yield()
-        guard self.rootURL == rootURL else { throw SourceUpdateError.sourceChangedDuringPreparation }
-        let index = LocalSourceIndexer(fileManager: fileManager).index(directory: URL(fileURLWithPath: path), sourceID: sourceID)
-        let validator = SkillValidator(fileManager: fileManager)
-        var assets: Set<UUID> = []
-        for offset in installedSkills.indices {
-            let skill = installedSkills[offset]
-            guard skill.sourceID == sourceID || (source.kind == .manualFilesystem && sourceRelativePath(for: skill, sourcePath: path) != nil) else { continue }
-            assets.insert(skill.assetID)
-            installedSkills[offset].validation = validator.validate(skillDirectory: URL(fileURLWithPath: skill.installedPath), rootDirectory: rootURL, sourceMetadataPresent: skill.sourceID != nil)
+        let sessionID = rootSessionLease?.id
+        let expected = rootSnapshot
+        let inputSkills = installedSkills
+        let inputSources = sources
+        let lease = try rootSessionLease.map {
+            try securityScopedAccessProvider.acquire(url: $0.url, owner: .inspection(UUID()))
+        }
+        defer { if let lease { _ = lease.end(by: lease.owner) } }
+        let selectedSkills = inputSkills.filter {
+            $0.sourceID == sourceID || (source.kind == .manualFilesystem && sourceRelativePath(for: $0, sourcePath: path) != nil)
+        }
+        let result = try await Self.readSourceForRecheck(source: source, root: rootURL,
+            skills: selectedSkills, fileManager: fileManager)
+        guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
+              rootSnapshot == expected, installedSkills == inputSkills, sources == inputSources else {
+            throw CancellationError()
+        }
+        let index = result.index
+        if !index.source.isIndexIncomplete, let expected {
+            guard try await registerDiscoveredLocalSkills([], rootURL: rootURL, expected: expected, sourceID: sourceID) else {
+                throw CancellationError()
+            }
+        }
+        guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
+              sources == inputSources else { throw CancellationError() }
+        let observedSkills = Dictionary(result.skills.map { ($0.assetID, $0) }, uniquingKeysWith: { first, _ in first })
+        let assets = Set(observedSkills.keys)
+        installedSkills = installedSkills.map { skill in
+            guard var observed = observedSkills[skill.assetID] else { return skill }
+            // Keep an association filled by the single writer while updating content facts.
+            observed.candidateID = skill.candidateID
+            observed.canonicalPathComponent = skill.canonicalPathComponent
+            return observed
         }
         // Preserve identities of surviving rows; an incomplete scan cannot prove removal.
         let previous = availableSkills.filter { $0.sourceID == sourceID }
@@ -739,11 +779,11 @@ extension SkillsHubLibraryController {
                 return unavailable
             }
         }
-        availableSkills.removeAll { $0.sourceID == sourceID }
-        availableSkills += observed
-        refreshRelationObservations(for: agentDetections, assetIDs: assets)
+        availableSkills = availableSkills.filter { $0.sourceID != sourceID } + observed
+        await refreshRelationObservations(for: agentDetections, assetIDs: assets)
+        guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID else { throw CancellationError() }
         sourceRecheckResults[sourceID] = index.source.isIndexIncomplete
-            ? LocalizedMessage("Source check incomplete: %@", arguments: [index.source.indexStatusReason ?? "Unknown"])
+            ? LocalizedMessage("Source check incomplete. Diagnostic (original): %@", arguments: [index.source.indexStatusReason ?? "Unknown"])
             : LocalizedMessage("Checked %@ Skills in this source.", arguments: [String(index.availableSkills.count)])
         statusMessage = sourceRecheckResults[sourceID]
     }
@@ -764,6 +804,18 @@ extension SkillsHubLibraryController {
         errorMessage = nil
     }
 
+    func refreshLocalSources() async throws {
+        guard let rootURL else { throw SkillsHubLibraryFailure.missingRoot }
+        if isRefreshingLocalSources {
+            await waitForPendingRechecks()
+            return
+        }
+        isRefreshingLocalSources = true
+        defer { if self.rootURL == rootURL { isRefreshingLocalSources = false } }
+        performLocalSourcesRecheck()
+        await waitForPendingRechecks()
+    }
+
     private func sameRemovalScope(
         _ current: ManagedRelationClearPlan,
         _ confirmed: ManagedRelationClearPlan
@@ -773,6 +825,30 @@ extension SkillsHubLibraryController {
             && current.assetRevision == confirmed.assetRevision
             && current.manifestDigest == confirmed.manifestDigest
             && current.items == confirmed.items
+    }
+
+    @concurrent nonisolated private static func readSourceForRecheck(
+        source: SkillSource, root: URL, skills: [InstalledSkill], fileManager: FileManager
+    ) async throws -> (index: LocalSourceIndexResult, skills: [InstalledSkill]) {
+        try Task.checkCancellation()
+        guard let path = source.localPath else { throw SourceUpdateError.invalidSource }
+        let index = LocalSourceIndexer(fileManager: fileManager)
+            .index(directory: URL(fileURLWithPath: path), sourceID: source.id)
+        let validator = SkillValidator(fileManager: fileManager)
+        let observed = try skills.map { skill in
+            try Task.checkCancellation()
+            var skill = skill
+            skill.validation = validator.validate(skillDirectory: URL(fileURLWithPath: skill.installedPath),
+                rootDirectory: root, sourceMetadataPresent: skill.sourceID != nil)
+            if let candidate = index.availableSkills.first(where: {
+                SkillCatalogPresentationService.matchesLocation(skill, candidate: $0, source: source)
+            }) {
+                skill.name = candidate.name
+                skill.description = candidate.description
+            }
+            return skill
+        }
+        return (index, observed)
     }
 
     private func sourceDirectoryIdentity(_ url: URL) throws -> TargetFileIdentity {

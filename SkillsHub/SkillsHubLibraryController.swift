@@ -1,3 +1,5 @@
+import Darwin
+import AppKit
 import Foundation
 import Observation
 
@@ -33,35 +35,102 @@ final class SkillsHubLibraryController {
     let agentEnvironment: [String: String]
     var rootURL: URL? {
         didSet {
+            requestPresentationObservation()
             defaultAgentDirectoryRefresh = [:]
             agentDirectoryAuditFailures = [:]
             if oldValue?.standardizedFileURL != rootURL?.standardizedFileURL {
+                agentCapabilitySnapshot = [:]
+                catalogItems = []
+                catalogItemsByID = [:]
+                catalogItemsBySource = [:]
+                localSourcesInspectionSnapshot = []
                 agentFindings = []
+                observedLocalSourceNames = nil
+                isRefreshingLocalSources = false
+                resolvedRootPath = nil
+
+                rebuildCatalogPresentation()
             }
         }
     }
-    var availableSkills: [AvailableSkill]
-    var installedSkills: [InstalledSkill]
-    var sources: [SkillSource]
-    var agentLinks: [AgentLinkRecord]
+    var availableSkills: [AvailableSkill] {
+        didSet { if oldValue != availableSkills { rebuildCatalogPresentation(); requestPresentationObservation() } }
+    }
+    var installedSkills: [InstalledSkill] {
+        didSet { if oldValue != installedSkills { rebuildCatalogPresentation(); requestPresentationObservation() } }
+    }
+    var sources: [SkillSource] {
+        didSet { if oldValue != sources { rebuildCatalogPresentation(); requestPresentationObservation() } }
+    }
+    var catalogItems: [Phase1SkillPresentation] = []
+    var catalogItemsByID: [String: Phase1SkillPresentation] = [:]
+    var catalogItemsBySource: [UUID: [Phase1SkillPresentation]] = [:]
+    var localSourcesInspectionSnapshot: [SkillSource] = []
+    var agentLinks: [AgentLinkRecord] {
+        didSet { if oldValue != agentLinks { rebuildAgentPresentation() } }
+    }
     var tags: [TagRecord]
     var statusMessage: LocalizedMessage?
     var errorMessage: LocalizedMessage?
     var scanStatusMessage: LocalizedMessage?
     var isRefreshingInstalled: Bool
+    var isRefreshingLocalSources = false
+    var observedLocalSourceNames: Set<String>? {
+        didSet { if oldValue != observedLocalSourceNames { rebuildCatalogPresentation() } }
+    }
+    @ObservationIgnored var resolvedRootPath: String?
+    @ObservationIgnored var libraryReadGeneration: UInt64 = 0
+    @ObservationIgnored var rootInspectionGeneration: UInt64 = 0
+    @ObservationIgnored var agentObservationGeneration: UInt64 = 0
     var scannedSkillCount: Int
     var searchText: String
     var language: AppLanguage {
         didSet { languagePreferences?.language = language }
     }
     var cachePolicyName: String
-    var agentPathOverrides: [AgentKind: String]
-    var localState: SkillsHubLocalState
-    var agentDetections: [AgentDetectionSnapshot]
+    var agentPathOverrides: [AgentKind: String] {
+        didSet { if oldValue != agentPathOverrides { agentCapabilitySnapshot = [:]; agentPathSettingsSnapshot = []; requestPresentationObservation() } }
+    }
+    var localState: SkillsHubLocalState {
+        didSet { rebuildRelationPresentationIndexes() }
+    }
+    var agentDetections: [AgentDetectionSnapshot] {
+        didSet {
+            if oldValue.map(\.installationEvidence) != agentDetections.map(\.installationEvidence) {
+                desktopIconSnapshot = [:]
+                observedDesktopIconPaths = []
+            }
+            if oldValue != agentDetections { agentCapabilitySnapshot = [:]; rebuildAgentPresentation() }
+        }
+    }
     var agentFindings: [AgentDirectoryFinding]
     var defaultAgentDirectoryRefresh: [AgentKind: AgentDefaultDirectoryRefreshStatus] = [:]
-    var agentDirectoryAuditFailures: [String: String] = [:]
-    var rootSnapshot: RootSnapshot?
+    var agentDirectoryAuditFailures: [String: LocalizedMessage] = [:]
+    var rootSnapshot: RootSnapshot? {
+        didSet {
+            rebuildRelationPresentationIndexes()
+            if oldValue?.metadata.agents != rootSnapshot?.metadata.agents { agentCapabilitySnapshot = [:]; rebuildAgentPresentation() }
+            if oldValue?.metadata.enablementIntents != rootSnapshot?.metadata.enablementIntents {
+                rebuildCatalogPresentation()
+            }
+            requestPresentationObservation()
+        }
+    }
+    var agentDescriptorSnapshot = InstalledAgentDescriptorBuilder().build(
+        detections: [], configurations: AgentConfigurationRecord.phase1BuiltIns, links: []
+    )
+    var agentPathSettingsSnapshot: [AgentPathSettingRecord] = []
+    var agentCapabilitySnapshot: [String: AgentCapabilityPresentation] = [:]
+    var contentObservationSnapshot: [String: TargetObservation] = [:]
+    var desktopIconSnapshot: [String: NSImage] = [:]
+    @ObservationIgnored var observedDesktopIconPaths: Set<String> = []
+    var isRefreshingPresentation = false
+    @ObservationIgnored var presentationObservationGeneration: UInt64 = 0
+    @ObservationIgnored var presentationObservationTask: Task<Void, Never>?
+    var presentationIntents: [String: EnablementIntent] = [:]
+    var presentationObservations: [String: TargetObservation] = [:]
+    var presentationVerifications: [String: VerificationRecord] = [:]
+    var presentationEvidence: [String: ManagedRelationEvidence] = [:]
     var pendingRootInitialization: RootInspectionFacts?
     var lastRootInspectionResult: RootInspectionResult?
     var pendingPhase1OperationPlan: Phase1OperationPlan?
@@ -73,12 +142,14 @@ final class SkillsHubLibraryController {
     var updateCheckSummary: LocalizedMessage?
     var sourceUpdatePreview: SourceUpdatePreview?
     var sourceUpdateResult: SourceUpdateResult?
-    var sourceUpdateFailures: [UUID: String]
+    var sourceUpdateFailures: [UUID: LocalizedMessage]
     var sourceUpdateFocusPath: String?
     var phase1Tasks: [Phase1TaskRecord]
     var relationActionResults: [String: ControllerRelationActionResult]
     var inFlightRelationActionIDs: Set<String>
-    @ObservationIgnored var rootSessionLease: SecurityScopedAccessLease?
+    @ObservationIgnored var rootSessionLease: SecurityScopedAccessLease? {
+        didSet { requestPresentationObservation() }
+    }
     @ObservationIgnored private var pendingInspectionLeases: [String: SecurityScopedAccessLease]
     @ObservationIgnored let observation: FilesystemObservationController
     var observationStatus: ObservationLifecycleStatus
@@ -90,6 +161,7 @@ final class SkillsHubLibraryController {
     @ObservationIgnored var pendingRecheckScopes: Set<ObservationScope>
     @ObservationIgnored var pendingFullRecheck: Bool
     @ObservationIgnored var pendingManagedRootReload: Bool
+    @ObservationIgnored var pendingLocalOnlyRecheck = true
     init(
         metadataStore: SkillsHubMetadataStore = SkillsHubMetadataStore(),
         presentationService: SkillCatalogPresentationService = SkillCatalogPresentationService(),
@@ -194,7 +266,8 @@ final class SkillsHubLibraryController {
             throw SkillsHubLibraryFailure.invalidSource("Folder authorization was not granted.")
         }
         do {
-            try startupAccessStore.saveAccess(to: normalizedURL)
+        try startupAccessStore.saveAccess(to: normalizedURL)
+            requestPresentationObservation()
             pendingInspectionLeases[key] = lease
         } catch {
             do {
@@ -286,7 +359,7 @@ final class SkillsHubLibraryController {
     }
 }
 
-enum SkillsHubLibraryFailure: Error, Equatable {
+nonisolated enum SkillsHubLibraryFailure: Error, Equatable {
     case missingRoot
     case missingSkill(String)
     case invalidSource(LocalizedMessage)
@@ -339,6 +412,18 @@ extension SkillsHubLibraryController {
         guard requiredFiles.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else {
             throw SkillsHubLibraryFailure.invalidSource("The UI test process did not create the complete fixture tree before launch.")
         }
+        if configuration.creationMaterialFixture,
+           FileManager.default.fileExists(atPath: root.appendingPathComponent(".skillshub.json").path) {
+            // Read the persisted fixture without reseeding its canonical metadata.
+            controller.rootURL = root
+            Task {
+                do {
+                    try await controller.reloadFromDisk()
+                    await controller.refreshAgentLightScan(checkInstallation: true)
+                } catch { controller.handle(error) }
+            }
+            return controller
+        }
 
         if let faultInjection = configuration.faultInjection {
             controller.phase1OperationCoordinator = Phase1OperationCoordinator(
@@ -350,7 +435,7 @@ extension SkillsHubLibraryController {
         let sourceID = fixtureUUID("11111111-1111-1111-1111-111111111111")
         let managedSource = configuration.sourceUpdateFixture
             ? root.appending(path: "local/review-fixture", directoryHint: .isDirectory)
-            : sourceRoot
+            : root.appending(path: "local/fixture-source", directoryHint: .isDirectory)
         let externalSource = sourceRoot.appending(path: "review-fixture", directoryHint: .isDirectory)
         let sourceIndex = LocalSourceIndexer().index(directory: managedSource, sourceID: sourceID)
         let baseline = configuration.sourceUpdateFixture
@@ -378,7 +463,7 @@ extension SkillsHubLibraryController {
             AvailableSkill(
                 id: "review-fixture",
                 sourceID: sourceID,
-                skillPath: "review-fixture",
+                skillPath: configuration.sourceUpdateFixture ? "." : "review-fixture",
                 name: "Review Fixture",
                 description: "Reviews refreshed code changes from a fixture source.",
                 validation: .valid,
@@ -402,12 +487,13 @@ extension SkillsHubLibraryController {
                 sourceID: sourceID,
                 name: "Review Fixture",
                 description: "Reviews code changes from a fixture source.",
-                installedPath: root.appendingPathComponent("local/review-fixture", isDirectory: true).path,
+                installedPath: (configuration.sourceUpdateFixture ? managedSource : managedSource.appending(path: "review-fixture")).path,
                 sourceKind: .localDirectory,
                 validation: .valid,
                 purpose: PurposeMetadata(text: "Review fixture purpose.", source: .user, updatedAt: Date(timeIntervalSince1970: 0)),
                 tagIDs: [],
                 installedAt: Date(timeIntervalSince1970: 0),
+                assetID: fixtureUUID("33333333-3333-4333-a333-333333333333"),
                 candidateID: "fixture-review-candidate"
             ),
             InstalledSkill(
@@ -773,7 +859,7 @@ extension SkillsHubLibraryController {
             from: controller.rootSnapshot?.metadata.agents ?? []
         )
         if configuration.installationStatusFixture {
-            controller.refreshAgentLightScan(checkInstallation: true)
+            Task { await controller.refreshAgentLightScan(checkInstallation: true) }
         }
         return controller
     }
@@ -786,8 +872,11 @@ extension SkillsHubLibraryController {
             owner: .rootSession(configuration.runID)
         )
         phase1UITestFixtureLease = lease
-        rootSessionLease = lease
         try configuration.validateAccessibleDirectories(fileManager: fileManager)
+        rootSessionLease = try securityScopedAccessProvider.acquire(
+            url: configuration.root,
+            owner: .rootSession(UUID())
+        )
     }
 
     private static func makeUIFixtureController(
@@ -795,10 +884,18 @@ extension SkillsHubLibraryController {
         languagePreferences: AppLanguagePreferences?
     ) -> SkillsHubLibraryController {
         SkillsHubLibraryController(
+            agentLinkService: configuration.creationMaterialFixture
+                ? AgentLinkService(relationPrimitiveHook: { point, _ in
+                    if point == .afterMaterialIsolation { throw CocoaError(.fileWriteUnknown) }
+                }) : AgentLinkService(),
             agentAuditService: AgentDirectoryAuditService { agent, _ in
                 guard agent == .codex || agent == .claudeCode else { return .absent }
                 if configuration.installationStatusFixture {
                     let value = try? String(contentsOf: configuration.runRoot.appendingPathComponent("installation-status"), encoding: .utf8)
+                    if value?.trimmingCharacters(in: .whitespacesAndNewlines) == "icons-desktop" {
+                        return .present(AgentInstallationEvidence(agent: agent, digest: "fixture-icon-\(agent.rawValue)", cliInstalled: false,
+                                                                 desktopAppPath: configuration.runRoot.appendingPathComponent("\(agent.rawValue).app").path))
+                    }
                     guard agent == .codex else { return .absent }
                     switch value?.trimmingCharacters(in: .whitespacesAndNewlines) {
                     case "desktop":

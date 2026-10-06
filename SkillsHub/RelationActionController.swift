@@ -215,6 +215,19 @@ nonisolated final class RelationActionControllerRuntime: @unchecked Sendable {
         )
     }
 
+    func settleCreationMaterials(
+        operationID: UUID, rootURL: URL, targetAccess: AgentTargetAccess
+    ) throws -> CreationMaterialSettlement {
+        let record = try RelationActionOperationRecordStore().load(operationID: operationID, rootURL: rootURL)
+        let qualification = try targetAccess.revalidatedQualification()
+        guard let target = qualification.target, let creation = record.creation,
+              target.standardizedFileURL.path == URL(fileURLWithPath: record.linkPath).deletingLastPathComponent().path,
+              try LinkNodeIdentity.read(at: target) == creation.parentIdentity else {
+            throw RelationLinkPrimitiveError.identityChanged
+        }
+        return executor.settleCreationMaterials(operationID: operationID, rootURL: rootURL)
+    }
+
     func prepareBrokenLinkDeletionPlan(
         actionID: UUID,
         rootURL: URL,

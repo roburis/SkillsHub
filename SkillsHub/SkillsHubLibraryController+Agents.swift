@@ -31,19 +31,19 @@ nonisolated struct AgentDirectoryChangeBlocker: Hashable, Identifiable, Sendable
 
     var kind: Kind
     var id: String
-    var title: String
-    var detail: String
+    var title: LocalizedMessage
+    var detail: LocalizedMessage
     var skillID: String?
 }
 
 extension SkillsHubLibraryController {
-    func refreshDefaultAgentDirectories() {
+    func refreshDefaultAgentDirectories() async {
         guard hasRoot else {
             defaultAgentDirectoryRefresh = [:]
             return
         }
         let priorFindings = agentFindings
-        refreshAgentLightScan(checkInstallation: true)
+        await refreshAgentLightScan(checkInstallation: true)
         let unavailableIDs = Set(agentDetections.filter { !$0.skillsDirectoryExists || !$0.readable }.map(\.agentID))
         // Keep the last observed entries visible with the verification failure until access is restored.
         agentFindings += priorFindings.filter { finding in
@@ -55,11 +55,11 @@ extension SkillsHubLibraryController {
             let status = inspectDefaultAgentDirectory(agent)
             if status == .manageable {
                 do {
-                    try auditAgentDirectory(agentID: agent.rawValue)
+                    try await auditAgentDirectory(agentID: agent.rawValue)
                     defaultAgentDirectoryRefresh[agent] = .manageable
                 } catch {
                     defaultAgentDirectoryRefresh[agent] = .unverifiable
-                    errorMessage = LocalizedMessage(String(describing: error))
+                    handle(error)
                 }
             } else {
                 defaultAgentDirectoryRefresh[agent] = status
@@ -131,11 +131,14 @@ extension SkillsHubLibraryController {
     }
 
     var installedAgentDescriptorResult: InstalledAgentDescriptorResult {
-        InstalledAgentDescriptorBuilder().build(
-            detections: agentDetections,
-            configurations: agentConfigurations,
-            links: agentLinks
+        agentDescriptorSnapshot
+    }
+
+    func rebuildAgentPresentation() {
+        agentDescriptorSnapshot = InstalledAgentDescriptorBuilder().build(
+            detections: agentDetections, configurations: agentConfigurations, links: agentLinks
         )
+        requestPresentationObservation()
     }
 
     var installedAgentDescriptors: [InstalledAgentDescriptor] {
@@ -161,31 +164,40 @@ extension SkillsHubLibraryController {
     func agentCapabilityPresentation(
         _ descriptor: InstalledAgentDescriptor
     ) -> AgentCapabilityPresentation {
+        if let capability = agentCapabilitySnapshot[descriptor.id] { return capability }
+        let qualifier = AgentTargetQualifier()
+        let qualification = if let agent = descriptor.agent {
+            qualifier.qualify(agent: agent, detected: descriptor.isDetected, candidates: [], authorization: nil)
+        } else {
+            qualifier.qualify(customAgentID: descriptor.id, detected: descriptor.isDetected, candidates: [], authorization: nil)
+        }
+        var capability = capabilityPresentation(
+            for: descriptor,
+            qualification: qualification
+        )
+        capability.unavailableReason = "Checking…"
+        return capability
+    }
+
+    // Observation consumers requalify current facts; display snapshots never authorize a write.
+    func inspectAgentCapabilityPresentation(_ descriptor: InstalledAgentDescriptor) async throws -> AgentCapabilityPresentation {
         let target = descriptor.skillsDirectory.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
             ?? descriptor.agent.map { resolvedAgentSkillsDirectory(for: $0).standardizedFileURL }
-        let detection = agentDetections.first { $0.agentID == descriptor.id }
-        let candidates = target.map { isDirectory($0) ? [$0] : [] } ?? []
-        let authorization = target.flatMap { try? startupAccessStore.resolveAccess(to: $0) }
-        let qualification = if let agent = descriptor.agent {
-            AgentTargetQualifier().qualify(
-                agent: agent,
-                detected: detection?.detected == true,
-                candidates: candidates,
-                authorization: authorization
-            )
-        } else {
-            AgentTargetQualifier().qualify(
-                customAgentID: descriptor.id,
-                detected: detection?.detected == true,
-                candidates: candidates,
-                authorization: authorization
-            )
-        }
-        return AgentCapabilityPresentation(
+        let targets = target.map { [descriptor.id: $0] } ?? [:]
+        let authorizations = try await startupAccessStore.resolvePresentationAccess(to: Array(targets.values))
+        let result = try await Self.observePresentation(root: nil, items: [], descriptors: [descriptor],
+            targets: targets, detections: Set(agentDetections.filter(\.detected).map(\.agentID)),
+            authorizations: authorizations, fileManager: fileManager, iconPaths: [])
+        guard let qualification = result.qualifications[descriptor.id] else { throw CancellationError() }
+        return capabilityPresentation(for: descriptor, qualification: qualification)
+    }
+
+    func capabilityPresentation(for descriptor: InstalledAgentDescriptor, qualification: AgentTargetQualification) -> AgentCapabilityPresentation {
+        AgentCapabilityPresentation(
             agentID: descriptor.id,
             displayName: descriptor.displayName,
             isPresent: qualification.agentDetected,
-            targetPath: qualification.target?.path ?? candidates.first?.path ?? descriptor.skillsDirectory ?? target?.path,
+            targetPath: qualification.target?.path ?? qualification.candidates.first?.path ?? descriptor.skillsDirectory ?? descriptor.agent.map { resolvedAgentSkillsDirectory(for: $0).path },
             authorizationStatus: qualification.authorizationStatus,
             profileID: qualification.profileID,
             profileVersion: qualification.profileVersion,
@@ -204,11 +216,11 @@ extension SkillsHubLibraryController {
                 agentID: descriptor.id,
                 scope: .global
             )
-            let intent = rootSnapshot?.metadata.enablementIntents.first { $0.id == relation.id }
-            let observation = localState.targetObservations.first { $0.relation == relation }
+            let intent = presentationIntents[relation.id]
+            let observation = presentationObservations[relation.id]
             let currentObservation = agentDirectoryAuditFailures[descriptor.id] == nil || observation?.nodeKind == .unreadable
                 ? observation : nil
-            let record = localState.verificationRecords.first { $0.relation == relation }
+            let record = presentationVerifications[relation.id]
             let capability = agentCapabilityPresentation(descriptor)
             let result = relationActionResults[relation.id]
             let verification = currentVerificationConclusion(
@@ -223,17 +235,13 @@ extension SkillsHubLibraryController {
                 safeNextStep(for: verification)
             } else {
                 displaySafeNextStep(
-                    result?.safeNextStep
-                        ?? record?.safeNextStep
-                        ?? capability.unavailableReason,
+                    result?.safeNextStep,
                     conclusion: verification
                 )
             }
             return AgentRelationPresentation(
                 relation: relation,
-                agentKind: descriptor.agent,
                 agentDisplayName: descriptor.displayName,
-                iconMonogram: descriptor.iconMonogram,
                 skillID: skill.id,
                 skillName: skill.name,
                 intendedEnabled: intent?.isEnabled,
@@ -262,24 +270,41 @@ extension SkillsHubLibraryController {
     }
 
     var agentPathSettings: [AgentPathSettingRecord] {
-        AgentKind.allCases.map { agent in
-            let detection = agentDetections.first { $0.agent == agent }
-            let defaultPath = agentPathResolver.globalSkillsDirectory(for: agent, environment: agentEnvironment, homeDirectory: agentHomeDirectory)
-            let resolvedPath = resolvedAgentSkillsDirectory(for: agent)
+        if !agentPathSettingsSnapshot.isEmpty { return agentPathSettingsSnapshot }
+        return AgentKind.allCases.map { agent in
+            let path = agentPathResolver.globalSkillsDirectory(for: agent, environment: agentEnvironment, homeDirectory: agentHomeDirectory)
+            let resolved = resolvedAgentSkillsDirectory(for: agent)
+            return AgentPathSettingRecord(agent: agent, markerPath: path.deletingLastPathComponent().path,
+                configuredPath: agentPathOverrides[agent], defaultPath: path.path, resolvedPath: resolved.path,
+                detected: false, isOverride: agentPathOverrides[agent] != nil, directoryExists: false,
+                skillsDirectoryExists: false, isWritable: false,
+                status: Self.agentPathStatus(isOverride: agentPathOverrides[agent] != nil, skillsDirectoryExists: false, isWritable: false))
+        }
+    }
+
+    @concurrent nonisolated static func inspectAgentPathSettings(
+        detections: [AgentDetectionSnapshot], home: URL, environment: [String: String],
+        overrides: [AgentKind: String], fileManager: FileManager
+    ) async -> [AgentPathSettingRecord] {
+        let agentPathResolver = AgentPathResolver()
+        return AgentKind.allCases.map { agent in
+            let detection = detections.first { $0.agent == agent }
+            let defaultPath = agentPathResolver.globalSkillsDirectory(for: agent, environment: environment, homeDirectory: home)
+            let resolvedPath = overrides[agent].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultPath
             let markerPath = detection?.detected == true
                 ? detection?.markerPath ?? defaultPath.deletingLastPathComponent().path
                 : defaultPath.deletingLastPathComponent().path
             let markerURL = URL(fileURLWithPath: markerPath, isDirectory: true)
-            let markerExists = detection?.detected == true || itemExistsOrIsSymlink(markerURL)
-            let skillsExists = detection?.skillsDirectoryExists == true || isDirectory(resolvedPath)
+            let markerExists = detection?.detected == true || (fileManager.fileExists(atPath: markerURL.path) || FileAccessService(fileManager: fileManager).isSymlink(markerURL))
+            let skillsExists = detection?.skillsDirectoryExists == true || ((try? resolvedPath.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true)
             let isWritable = skillsExists
                 ? fileManager.isWritableFile(atPath: resolvedPath.path)
                 : (markerExists && fileManager.isWritableFile(atPath: markerURL.path))
-            let isOverride = agentPathOverrides[agent] != nil
+            let isOverride = overrides[agent] != nil
             return AgentPathSettingRecord(
                 agent: agent,
                 markerPath: markerPath,
-                configuredPath: agentPathOverrides[agent],
+                configuredPath: overrides[agent],
                 defaultPath: defaultPath.path,
                 resolvedPath: resolvedPath.path,
                 detected: markerExists,
@@ -287,7 +312,7 @@ extension SkillsHubLibraryController {
                 directoryExists: markerExists,
                 skillsDirectoryExists: skillsExists,
                 isWritable: isWritable,
-                status: agentPathStatus(isOverride: isOverride, skillsDirectoryExists: skillsExists, isWritable: isWritable)
+                status: Self.agentPathStatus(isOverride: isOverride, skillsDirectoryExists: skillsExists, isWritable: isWritable)
             )
         }
     }
@@ -391,7 +416,8 @@ extension SkillsHubLibraryController {
                         agentID: agentID,
                         configuration: metadata.agents[index],
                         snapshot: current,
-                        findings: currentAudit.findings
+                        findings: currentAudit.findings,
+                        qualification: oldAccess.qualification
                     )
                     guard blockers.isEmpty else {
                         throw SkillsHubLibraryFailure.invalidSource("Please resolve the listed Agent relationships or operations before changing the directory.")
@@ -418,7 +444,7 @@ extension SkillsHubLibraryController {
         }
         rootSnapshot = saved
         agentPathOverrides = Self.agentPathOverrides(from: saved.metadata.agents)
-        refreshAgentLightScan(checkInstallation: true)
+        await refreshAgentLightScan(checkInstallation: true)
         errorMessage = nil
         setStatus("Agent directory saved. Re-enable Skills explicitly when ready.")
     }
@@ -427,12 +453,16 @@ extension SkillsHubLibraryController {
         agentID: String,
         configuration: AgentConfigurationRecord,
         snapshot: RootSnapshot,
-        findings: [AgentDirectoryFinding]? = nil
+        findings: [AgentDirectoryFinding]? = nil,
+        qualification: AgentTargetQualification? = nil
     ) -> [AgentDirectoryChangeBlocker] {
         var blockers: [AgentDirectoryChangeBlocker] = []
         let currentDirectory = configuredSkillsDirectory(for: configuration)
         let capability = visibleInstalledAgentDescriptors.first(where: { $0.id == agentID })
-            .map(agentCapabilityPresentation)
+            .map { descriptor in
+                qualification.map { capabilityPresentation(for: descriptor, qualification: $0) }
+                    ?? agentCapabilityPresentation(descriptor)
+            }
         if capability?.canManageRelations != true || capability?.targetPath.map({
             URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL
         }) != currentDirectory {
@@ -440,7 +470,7 @@ extension SkillsHubLibraryController {
                 kind: .access,
                 id: "old-directory-unavailable",
                 title: "Current directory cannot be verified",
-                detail: capability?.unavailableReason ?? "Restore access to the current Agent directory and recheck it.",
+                detail: capability?.unavailableReason.map { LocalizedMessage($0) } ?? "Restore access to the current Agent directory and recheck it.",
                 skillID: nil
             ))
         }
@@ -466,7 +496,7 @@ extension SkillsHubLibraryController {
                 blockers.append(AgentDirectoryChangeBlocker(
                     kind: .enabledSelection,
                     id: "enabled-\(relation.id)",
-                    title: skill?.name ?? relation.assetID.uuidString,
+                    title: .verbatim(skill?.name ?? relation.assetID.uuidString),
                     detail: "This Skill is still selected for this Agent. Disable it explicitly before changing directories.",
                     skillID: skill?.id
                 ))
@@ -474,7 +504,7 @@ extension SkillsHubLibraryController {
                 blockers.append(AgentDirectoryChangeBlocker(
                     kind: .managedRelation,
                     id: "managed-\(relation.id)",
-                    title: skill?.name ?? relation.assetID.uuidString,
+                    title: .verbatim(skill?.name ?? relation.assetID.uuidString),
                     detail: "A managed relationship still exists in the current directory.",
                     skillID: skill?.id
                 ))
@@ -483,7 +513,7 @@ extension SkillsHubLibraryController {
                 blockers.append(AgentDirectoryChangeBlocker(
                     kind: .unresolvedRelation,
                     id: "unreadable-\(relation.id)",
-                    title: skill?.name ?? relation.assetID.uuidString,
+                    title: .verbatim(skill?.name ?? relation.assetID.uuidString),
                     detail: "The current relationship could not be verified.",
                     skillID: skill?.id
                 ))
@@ -495,21 +525,25 @@ extension SkillsHubLibraryController {
             blockers.append(AgentDirectoryChangeBlocker(
                 kind: .unresolvedRelation,
                 id: "finding-\(finding.id)",
-                title: finding.entryName,
-                detail: finding.summary,
+                title: .verbatim(finding.entryName),
+                detail: finding.presentationMessage,
                 skillID: finding.primaryMatch?.hubSkillID
             ))
         }
-        for task in phase1Tasks where task.badgeEligible && task.relationEvidence?.relation.agentID == agentID {
+        for task in phase1Tasks where task.badgeEligible && (
+            task.relationEvidence?.relation.agentID == agentID || task.recoveryEvidence?.agentID == agentID
+                || ([.setAgentRelation, .deleteBrokenLink].contains(task.kind)
+                    && task.recoveryEvidence != nil && task.recoveryEvidence?.agentID == nil)
+        ) {
             blockers.append(AgentDirectoryChangeBlocker(
                 kind: .unfinishedOperation,
                 id: "task-\(task.id.uuidString)",
-                title: task.relationEvidence?.skillName ?? localized(task.title),
-                detail: localized(task.result),
+                title: task.relationEvidence.map { .verbatim($0.skillName) } ?? task.title,
+                detail: task.result,
                 skillID: task.relationEvidence?.skillID
             ))
         }
-        if let rootURL {
+        if findings != nil, let rootURL {
             do {
                 let operations = try RelationActionOperationRecordStore(fileManager: fileManager).unfinishedOperationBlockers(
                     agentID: agentID,
@@ -519,7 +553,7 @@ extension SkillsHubLibraryController {
                     AgentDirectoryChangeBlocker(
                         kind: .unfinishedOperation,
                         id: "operation-\(operation.id.uuidString)",
-                        title: operation.title,
+                        title: LocalizedMessage(operation.title),
                         detail: "Review operation \(operation.id.uuidString) before changing this Agent directory.",
                         skillID: nil
                     )
@@ -529,7 +563,7 @@ extension SkillsHubLibraryController {
                     kind: .unfinishedOperation,
                     id: "operation-records-unavailable",
                     title: "Operation records cannot be verified",
-                    detail: String(describing: error),
+                    detail: errorPresentation(for: error),
                     skillID: nil
                 ))
             }
@@ -662,7 +696,7 @@ extension SkillsHubLibraryController {
             relation: relation,
             bindings: bindings,
             observation: observation,
-            evidence: snapshot.metadata.managedRelationEvidence.first { $0.relation == relation },
+            evidence: presentationEvidence[relation.id],
             limitations: []
         )
     }
@@ -685,8 +719,13 @@ extension SkillsHubLibraryController {
         case "observe-current-relation": "Observe current facts before preparing another action."
         case "review-current-relation": "Review the current relation before preparing another action."
         case "restore-current-access-and-observe": "Restore current access and observe the relation again."
-        case .some(let value): value
-        case nil: safeNextStep(for: conclusion)
+        case "reauthorize-current-relation": "Review current relation facts and authorize a new action."
+        case "Wait for the current action on this relation to finish.",
+             "Observe current facts before preparing another action.",
+             "Review the current target authorization before trying again.",
+             "Review target access before preparing another action.",
+             "Review creation materials in Operation Details.": value!
+        default: safeNextStep(for: conclusion)
         }
     }
 
@@ -703,20 +742,20 @@ extension SkillsHubLibraryController {
         }
     }
 
-    func createAgentSkillsDirectory(agent: AgentKind) throws {
-        try createAgentSkillsDirectory(at: resolvedAgentSkillsDirectory(for: agent), displayName: agent.displayName)
+    func createAgentSkillsDirectory(agent: AgentKind) async throws {
+        try await createAgentSkillsDirectory(at: resolvedAgentSkillsDirectory(for: agent), displayName: agent.displayName)
     }
 
-    func createAgentSkillsDirectory(agentID: String) throws {
+    func createAgentSkillsDirectory(agentID: String) async throws {
         if let agent = AgentKind(rawValue: agentID) {
-            try createAgentSkillsDirectory(agent: agent)
+            try await createAgentSkillsDirectory(agent: agent)
             return
         }
         guard let descriptor = installedAgentDescriptors.first(where: { $0.id == agentID }),
               let path = descriptor.skillsDirectory else {
             throw SkillsHubLibraryFailure.invalidSource("Agent not found.")
         }
-        try createAgentSkillsDirectory(
+        try await createAgentSkillsDirectory(
             at: URL(fileURLWithPath: path, isDirectory: true),
             displayName: descriptor.displayName
         )
@@ -775,19 +814,10 @@ extension SkillsHubLibraryController {
             throw error
         }
         try endSelectedInspectionAccess(to: directory)
-        refreshAgentLightScan()
+        await refreshAgentLightScan()
         setStatus("Added custom agent %@.", trimmedName)
         errorMessage = nil
         return record
-    }
-
-    func prepareManagedRelationClearPlan(skillID: String) throws -> ManagedRelationClearPlan {
-        guard let rootURL else { throw SkillsHubLibraryFailure.missingRoot }
-        let snapshot = try metadataStore.loadCurrentSnapshot(from: rootURL)
-        guard let asset = snapshot.metadata.installedSkills.first(where: { $0.id == skillID }) else {
-            throw SkillsHubLibraryFailure.missingSkill(skillID)
-        }
-        return try prepareManagedRelationClearPlan(assetID: asset.assetID, snapshot: snapshot)
     }
 
     func prepareManagedRelationClearPlan(assetID: UUID) throws -> ManagedRelationClearPlan {
@@ -812,6 +842,7 @@ extension SkillsHubLibraryController {
         guard let asset = snapshot.metadata.installedSkills.first(where: { $0.assetID == assetID }) else {
             throw SkillsHubLibraryFailure.missingSkill(assetID.uuidString)
         }
+        try requireUnambiguousIdentity(assetID: assetID, snapshot: snapshot)
 
         let relevantAgentIDs = Set(
             snapshot.metadata.enablementIntents.compactMap { intent in
@@ -851,39 +882,24 @@ extension SkillsHubLibraryController {
                     targetAccess: access,
                     linkURL: linkURL
                 )
-                switch facts.ownership {
-                case .exactManagedLink:
-                    return ManagedRelationClearItem(
-                        relation: relation,
-                        agentDisplayName: descriptor.displayName,
-                        linkPath: facts.linkPath,
-                        disposition: .removable,
-                        detail: "Remove the verified Skills Hub-managed link and disable this relationship."
-                    )
-                case .vacant:
-                    return ManagedRelationClearItem(
-                        relation: relation,
-                        agentDisplayName: descriptor.displayName,
-                        linkPath: facts.linkPath,
-                        disposition: .removable,
-                        detail: "Disable this relationship; no link node is currently present."
-                    )
-                case .unmanagedNode, .externalLink, .brokenLink, .unreadable:
-                    return ManagedRelationClearItem(
-                        relation: relation,
-                        agentDisplayName: descriptor.displayName,
-                        linkPath: facts.linkPath,
-                        disposition: .blocked,
-                        detail: "Current ownership is \(facts.ownership.rawValue); the object remains unchanged."
-                    )
+                let disposition: ManagedRelationClearDisposition = switch facts.ownership {
+                case .exactManagedLink, .vacant: .removable
+                case .unmanagedNode, .externalLink, .brokenLink, .unreadable: .blocked
                 }
+                return ManagedRelationClearItem(
+                    relation: relation,
+                    agentDisplayName: descriptor.displayName,
+                    linkPath: facts.linkPath,
+                    disposition: disposition,
+                    detail: facts.ownership.clearMessage
+                )
             } catch {
                 return ManagedRelationClearItem(
                     relation: relation,
                     agentDisplayName: descriptor.displayName,
                     linkPath: descriptor.skillsDirectory ?? "Unavailable",
                     disposition: .blocked,
-                    detail: "Current facts could not be verified: \(error)"
+                    detail: errorPresentation(for: error)
                 )
             }
         }
@@ -922,7 +938,7 @@ extension SkillsHubLibraryController {
             do {
                 let result = try await setGlobalAgentEnablement(
                     agentID: item.relation.agentID,
-                    skillID: confirmedPlan.skillID,
+                    assetID: confirmedPlan.assetID,
                     enabled: false
                 )
                 items.append(
@@ -930,7 +946,10 @@ extension SkillsHubLibraryController {
                         relation: item.relation,
                         agentDisplayName: item.agentDisplayName,
                         outcome: result.outcome,
-                        detail: result.safeNextStep
+                        detail: LocalizedMessage(displaySafeNextStep(
+                            result.safeNextStep,
+                            conclusion: result.execution?.verification?.conclusion ?? .notVerified
+                        ))
                     )
                 )
             } catch {
@@ -939,7 +958,7 @@ extension SkillsHubLibraryController {
                         relation: item.relation,
                         agentDisplayName: item.agentDisplayName,
                         outcome: .failed,
-                        detail: String(describing: error)
+                        detail: errorPresentation(for: error)
                     )
                 )
             }
@@ -961,7 +980,7 @@ extension SkillsHubLibraryController {
 
     func setGlobalAgentEnablement(
         agentID: String,
-        skillID: String,
+        assetID: UUID,
         enabled: Bool
     ) async throws -> ControllerRelationActionResult {
         guard let descriptor = visibleInstalledAgentDescriptors.first(where: { $0.id == agentID }) else {
@@ -973,9 +992,10 @@ extension SkillsHubLibraryController {
         guard let rootSessionOwner = rootSessionLease?.owner else {
             throw ControllerRelationActionError.missingRootSession
         }
-        guard let asset = snapshot.metadata.installedSkills.first(where: { $0.id == skillID }) else {
-            throw SkillsHubLibraryFailure.missingSkill(skillID)
+        guard let asset = snapshot.metadata.installedSkills.first(where: { $0.assetID == assetID }) else {
+            throw SkillsHubLibraryFailure.missingSkill(assetID.uuidString)
         }
+        try requireUnambiguousIdentity(assetID: assetID, snapshot: snapshot)
 
         let relation = AgentRelationIdentity(
             assetID: asset.assetID,
@@ -1081,6 +1101,7 @@ extension SkillsHubLibraryController {
                 snapshot: currentSnapshot
             )
         }
+        await waitForPresentationObservation()
         let currentRelation = relationPresentations(for: asset).first { $0.relation == relation }
         upsertTask(
             completedRelationTask(
@@ -1092,9 +1113,22 @@ extension SkillsHubLibraryController {
                 currentRelation: currentRelation
             )
         )
-        setRelationActionStatus(result, skillID: skillID, agentDisplayName: descriptor.displayName)
+        setRelationActionStatus(result, skillID: asset.name, agentDisplayName: descriptor.displayName)
         errorMessage = nil
         return result
+    }
+
+    private func requireUnambiguousIdentity(assetID: UUID, snapshot: RootSnapshot) throws {
+        let items = presentationService.phase1Items(
+            availableSkills: snapshot.metadata.availableSkills,
+            installedSkills: snapshot.metadata.installedSkills,
+            sources: snapshot.metadata.sources,
+            enablementIntents: snapshot.metadata.enablementIntents,
+            rootURL: URL(fileURLWithPath: snapshot.metadata.rootConfig.rootPath)
+        )
+        guard let item = items.first(where: { $0.managed?.assetID == assetID }), !item.identityConflict else {
+            throw SkillsHubLibraryFailure.invalidSource("Skill identity conflicts with its source location. Re-check before changing relationships.")
+        }
     }
 
     private func refreshOtherRelationVerifications(
@@ -1233,7 +1267,8 @@ extension SkillsHubLibraryController {
         let limitations = execution?.limitations ?? ["No post-action execution evidence was produced."]
         let safeNextStep = currentRelation?.safeNextStep
             ?? displaySafeNextStep(result.safeNextStep, conclusion: verification)
-        let finalPhase = Phase1RelationTaskProjection.finalPhase(for: result.outcome)
+        let finalPhase: Phase1OperationPhase = execution?.creationMaterials?.status == .retained
+            ? .needsAttention : Phase1RelationTaskProjection.finalPhase(for: result.outcome)
 
         completed.events.append(
             Phase1TaskEvent(
@@ -1278,6 +1313,12 @@ extension SkillsHubLibraryController {
             safeNextStep: safeNextStep
         )
         completed.updatedAt = now
+        if let execution, execution.creationMaterials != nil, let rootURL {
+            let recovery = relationActionRuntime.recoverCurrentFacts(operationID: task.id, rootURL: rootURL)
+            completed.recoveryEvidence = Phase1RecoveryEvidence(components: recovery.components.map {
+                Phase1RecoveryComponent(kind: $0.kind.rawValue, state: Phase1RecoveryState($0.state), path: $0.path, detail: $0.detail)
+            }, creationMaterials: recovery.creationMaterials, agentID: result.relation.agentID)
+        }
         return completed
     }
 
@@ -1316,6 +1357,10 @@ extension SkillsHubLibraryController {
         if execution.metadataDelta != .none {
             descriptions.append("Metadata delta: \(execution.metadataDelta.rawValue).")
         }
+        if let materials = execution.creationMaterials {
+            descriptions.append(materials.status == .settled
+                ? "Creation directory settled" : "Creation materials retained; review current facts.")
+        }
         if descriptions.isEmpty {
             descriptions.append("No filesystem or metadata change.")
         }
@@ -1333,9 +1378,9 @@ extension SkillsHubLibraryController {
         case .noChange:
             setStatus("%@ for %@ is already current.", skillID, agentDisplayName)
         case .blocked, .stale, .replayed:
-            setStatus("%@ for %@ was not changed. %@", skillID, agentDisplayName, result.safeNextStep)
+            setStatus("%@ for %@ was not changed. View the current relationship for the next step.", skillID, agentDisplayName)
         case .failed, .unknown, .cancelled:
-            setStatus("%@ for %@ needs attention. %@", skillID, agentDisplayName, result.safeNextStep)
+            setStatus("%@ for %@ needs attention. View the current relationship for the next step.", skillID, agentDisplayName)
         }
     }
 
@@ -1377,7 +1422,7 @@ extension SkillsHubLibraryController {
         return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
-    private func createAgentSkillsDirectory(at url: URL, displayName: String) throws {
+    private func createAgentSkillsDirectory(at url: URL, displayName: String) async throws {
         guard rootURL != nil else {
             throw SkillsHubLibraryFailure.missingRoot
         }
@@ -1387,7 +1432,7 @@ extension SkillsHubLibraryController {
         }
         guard !itemExistsOrIsSymlink(url) else {
             if isDirectory(url) {
-                refreshAgentLightScan()
+                await refreshAgentLightScan()
                 setStatus("Skills directory already exists for %@.", displayName)
                 errorMessage = nil
                 return
@@ -1395,7 +1440,7 @@ extension SkillsHubLibraryController {
             throw SkillsHubLibraryFailure.invalidSource("Skills directory path is occupied.")
         }
         try fileManager.createDirectory(at: url, withIntermediateDirectories: false)
-        refreshAgentLightScan()
+        await refreshAgentLightScan()
         setStatus("Created skills directory for %@.", displayName)
         errorMessage = nil
         try saveLocalState()
@@ -1435,7 +1480,7 @@ extension SkillsHubLibraryController {
         agentHomeDirectory.appendingPathComponent("skills-hub", isDirectory: true)
     }
 
-    func agentPathStatus(isOverride: Bool, skillsDirectoryExists: Bool, isWritable: Bool) -> AgentPathStatus {
+    nonisolated static func agentPathStatus(isOverride: Bool, skillsDirectoryExists: Bool, isWritable: Bool) -> AgentPathStatus {
         if !isWritable && skillsDirectoryExists {
             return .notWritable
         }
@@ -1484,7 +1529,7 @@ extension SkillsHubLibraryController {
         agentPathOverrides = Self.agentPathOverrides(
             from: snapshot.metadata.agents
         )
-        refreshAgentLightScan(checkInstallation: true)
+        await refreshAgentLightScan(checkInstallation: true)
         errorMessage = nil
     }
 

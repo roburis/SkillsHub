@@ -364,7 +364,8 @@ struct Phase1OperationTests {
             #expect(execution.result.task.phase == .needsAttention)
             if failure == "compensation" {
                 #expect(FileManager.default.fileExists(atPath: fixture.managedSkillFile.path))
-                #expect(execution.result.task.result.contains("compensationFailed"))
+                #expect(execution.result.task.result.template == "Recovery needs attention. Diagnostic (original): %@")
+                #expect(!execution.result.task.result.arguments.isEmpty)
             } else if failure == "target-race" || failure == "rename" {
                 #expect(try String(contentsOf: fixture.managedDirectory.appendingPathComponent("foreign.txt"), encoding: .utf8) == "preserve")
             } else {
@@ -404,7 +405,7 @@ struct Phase1OperationTests {
         let result = await coordinator.commit(plan: plan, confirmation: fixture.planner.confirmation(for: plan))
 
         #expect(!result.succeeded)
-        #expect(result.task.result.contains("sourceChanged"))
+        #expect(result.task.result == "The source or current facts changed. Re-check before continuing.")
         #expect(fileManager.sourceEnumerations == 0)
         #expect(try fixture.initialSnapshot().metadata.sources.isEmpty)
     }
@@ -578,7 +579,7 @@ struct Phase1OperationTests {
         let restarted = Phase1OperationCoordinator(metadataStore: fixture.store)
         let replay = await restarted.commit(plan: plan, confirmation: fixture.planner.confirmation(for: plan))
         #expect(replay.succeeded == false)
-        #expect(replay.task.result == String(describing: Phase1OperationError.confirmationReplayed))
+        #expect(replay.task.result == "The confirmation is no longer valid. Review a new preview.")
         #expect(try Data(contentsOf: fixture.journal) == journalBeforeReplay)
         #expect(try fixture.metadataBytes() == metadataBefore)
     }
@@ -1356,7 +1357,7 @@ private struct Phase1Fixture {
     let planner: Phase1OperationPlanner
     let coordinator: Phase1OperationCoordinator
 
-    init(fault: Phase1OperationFaultInjection? = nil, metadataCheckpoint: ((MetadataWritePhase, URL) throws -> Void)? = nil, fileManager: FileManager = .default) throws {
+    init(fault: Phase1OperationFaultInjection? = nil, metadataCheckpoint: (@Sendable (MetadataWritePhase, URL) throws -> Void)? = nil, fileManager: FileManager = .default) throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

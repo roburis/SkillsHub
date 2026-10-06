@@ -113,7 +113,8 @@ struct Phase1ProductShell: View {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 Phase1ProductSidebar(
                     selection: navigationSelection,
-                    agents: library.sidebarAgentDescriptors
+                    agents: library.sidebarAgentDescriptors,
+                    desktopIcons: library.desktopIconSnapshot
                 )
                 .navigationSplitViewColumnWidth(min: 176, ideal: 196, max: 260)
                 .toolbar(removing: .sidebarToggle)
@@ -143,7 +144,7 @@ struct Phase1ProductShell: View {
                         }.padding(8)
                         Divider()
                     }
-                    if selection == .allSkills, skillReturnSourceID == nil,
+                    if (selection == .allSkills && skillReturnSourceID == nil) || selection == .localSources,
                        let message = library.observationDisplayMessage, message != dismissedObservationMessage {
                         HStack {
                             Label(message, systemImage: library.observationStatus.isUnavailable ? "exclamationmark.triangle" : "checkmark.circle")
@@ -230,9 +231,10 @@ struct Phase1ProductShell: View {
                 language: library.language,
                 expandedTaskIDs: $expandedTaskIDs,
                 scrollID: $taskScrollID,
-                recheck: library.recheckRecoveryTasks,
+                recheck: { Task { await library.recheckRecoveryTasks() } },
                 openObject: openTaskObject,
-                openAgent: openTaskAgent
+                openAgent: openTaskAgent,
+                openDetails: { requestNavigation(.operation($0)) }
             ).toolbar {
                 ToolbarItem(placement: .navigation) {
                     Button(appLocalized("Back to Settings", language: library.language), systemImage: "chevron.left") { requestNavigation(.settings) }
@@ -255,9 +257,15 @@ struct Phase1ProductShell: View {
                 if let task = library.phase1Tasks.first(where: { $0.id == id }) {
                     ScrollView {
                         Phase1TaskRow(task: task, language: library.language, isExpanded: true, toggleExpanded: {},
-                                      openObject: openTaskObject, openAgent: openTaskAgent, isDetailPage: true)
+                                      openObject: openTaskObject, openAgent: openTaskAgent, isDetailPage: true,
+                                      settleMaterials: { operationID in
+                                          Task { await library.settleCreationMaterials(operationID: operationID) }
+                                      }, isSettlingMaterials: task.relationEvidence.map {
+                                          library.inFlightRelationActionIDs.contains($0.relation.id)
+                                      } ?? false)
                             .padding(24)
                     }
+                    .accessibilityIdentifier("operation-detail")
                 } else {
                     ContentUnavailableView(appLocalized("No pending operations", language: library.language), systemImage: "checklist")
                 }
@@ -268,7 +276,7 @@ struct Phase1ProductShell: View {
                         .frame(height: 36)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button(appLocalized("Re-check current facts", language: library.language), systemImage: "arrow.clockwise", action: library.recheckRecoveryTasks)
+                    Button(appLocalized("Re-check current facts", language: library.language), systemImage: "arrow.clockwise", action: { Task { await library.recheckRecoveryTasks() } })
                         .labelStyle(.iconOnly).frame(height: 36).help(appLocalized("Re-check current facts", language: library.language))
                 }
             })
@@ -319,7 +327,7 @@ struct Phase1ProductShell: View {
         }
         if selection == .allSkills, let sourceID = skillReturnSourceID,
            let source = (library.localSourcesForPresentation + library.githubSourcesForPresentation).first(where: { $0.id == sourceID }) {
-            return library.presentationService.sourceName(for: source)
+            return library.sourceName(for: source)
         }
         return appLocalized(selection.title, language: library.language)
     }
@@ -395,10 +403,13 @@ struct Phase1ProductShell: View {
             requestNavigation(kind == .githubRepository ? .githubSources : .localSources)
         } else {
             let objectID = task.relationEvidence?.skillID ?? task.objectID
-            if let managed = library.installedSkills.first(where: {
-                $0.id == objectID || $0.candidateID == objectID || $0.assetID == task.operationPlan?.assetID
-            }) {
-                selectedSkillID = managed.candidateID ?? managed.assetID.uuidString
+            let assetID = task.relationEvidence?.relation.assetID ?? task.operationPlan?.assetID
+            let matches = library.installedSkills.filter {
+                if let assetID { return $0.assetID == assetID }
+                return $0.id == objectID || $0.candidateID == objectID
+            }
+            if matches.count == 1, let managed = matches.first {
+                selectedSkillID = managed.assetID.uuidString
             } else if let candidate = library.availableSkills.first(where: { $0.id == objectID || $0.candidateID == objectID }) {
                 selectedSkillID = candidate.candidateID
             } else {
@@ -540,6 +551,7 @@ struct Phase1ProductShell: View {
 private struct Phase1ProductSidebar: View {
     @Binding var selection: Phase1NavigationDestination
     var agents: [InstalledAgentDescriptor]
+    var desktopIcons: [String: NSImage]
     @Environment(\.appLanguage) private var language
 
     var body: some View {
@@ -577,7 +589,7 @@ private struct Phase1ProductSidebar: View {
                                 selection = .agent(agent.id)
                             } label: {
                                 HStack {
-                                    Phase1AgentIcon(descriptor: agent, size: 22)
+                                    Phase1AgentIcon(descriptor: agent, desktopIcon: agent.desktopAppPath.flatMap { desktopIcons[$0] }, size: 22)
                                     Text(agent.displayName).lineLimit(1).truncationMode(.tail).help(agent.displayName)
                                 }
                             }
@@ -716,13 +728,10 @@ private struct Phase1SkillsWorkspace: View {
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
 
     private var sources: [SkillSource] {
-        library.localSourcesForPresentation + library.githubSourcesForPresentation
+        library.localSourcesForInspection + library.githubSourcesForPresentation
     }
     private var allItems: [Phase1SkillPresentation] {
-        library.presentationService.phase1Items(
-            availableSkills: library.availableSkills, installedSkills: library.installedSkills,
-            sources: sources, enablementIntents: library.rootSnapshot?.metadata.enablementIntents ?? []
-        )
+        library.catalogItems
     }
     private func needsAttention(_ item: Phase1SkillPresentation) -> Bool {
         item.needsAttention || item.managed.map { library.relationPresentations(for: $0).contains(where: \.hasPresentationIssue) } == true
@@ -731,9 +740,12 @@ private struct Phase1SkillsWorkspace: View {
         library.presentationService.filteredPhase1Items(allItems, query: library.searchText, filter: filter, sourceID: selectedSourceID)
             .filter { !needsAttentionOnly || needsAttention($0) }
     }
-    private var selectedItem: Phase1SkillPresentation? { visibleItems.first { $0.id == selectedSkillID } }
+    private var selectedItem: Phase1SkillPresentation? {
+        guard let selectedSkillID, visibleItems.contains(where: { $0.id == selectedSkillID }) else { return nil }
+        return library.catalogItemsByID[selectedSkillID]
+    }
     private var selectedSourceName: String? {
-        sources.first { $0.id == selectedSourceID }.map { library.presentationService.sourceName(for: $0) }
+        sources.first { $0.id == selectedSourceID }.map { library.sourceName(for: $0) }
     }
     private var checkSourceIDs: [UUID] {
         sources.filter { source in
@@ -750,7 +762,6 @@ private struct Phase1SkillsWorkspace: View {
                 if let selectedItem {
                     Phase1SkillDetail(library: library, item: selectedItem,
                                       anchor: detailAnchor, focusRequest: detailFocusRequest, openSource: { openSource(selectedItem) })
-                        .id(selectedItem.id)
                 } else {
                     ContentUnavailableView(localized("Select a Skill"), systemImage: "square.stack.3d.up",
                                            description: Text(localized("Select an item to view its details.")))
@@ -794,7 +805,7 @@ private struct Phase1SkillsWorkspace: View {
                         Picker(localized("Source"), selection: $selectedSourceID) {
                             Text(localized("All Sources")).tag(UUID?.none)
                             ForEach(sources) { source in
-                                Text(library.presentationService.sourceName(for: source)).tag(Optional(source.id))
+                                Text(library.sourceName(for: source)).tag(Optional(source.id))
                             }
                         }
                         .pickerStyle(.menu)
@@ -835,15 +846,26 @@ private struct Phase1SkillsWorkspace: View {
     }
 
     private var skillList: some View {
-        List(selection: $selectedSkillID) {
-            ForEach(visibleItems) { item in
+        let items = visibleItems
+        return List(selection: $selectedSkillID) {
+            ForEach(items) { item in
                 Phase1SkillRow(library: library, item: item,
                               openSource: { selectedSkillID = item.id; detailAnchor = "update"; detailFocusRequest = UUID() },
-                              openProblem: { selectedSkillID = item.id; detailAnchor = "problem"; detailFocusRequest = UUID() },
+                              openProblem: { selectedSkillID = item.id; detailAnchor = item.needsAttention ? "problem" : "relations"; detailFocusRequest = UUID() },
+                              openRelationships: {
+                                  selectedSkillID = item.id
+                                  detailAnchor = "relations"
+                                  detailFocusRequest = UUID()
+                                  if let window = NSApp.keyWindow {
+                                      NSAccessibility.post(element: window, notification: .announcementRequested,
+                                                           userInfo: [.announcement: localized("Agent relationships") + " · " + item.name,
+                                                                      .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+                                  }
+                              },
                               showsSource: returnSourceID == nil)
                     .tag(item.id)
                     .listRowInsets(.horizontal, 16)
-                    .listRowSeparator(item.id == visibleItems.last?.id ? .hidden : .visible, edges: .bottom)
+                    .listRowSeparator(item.id == items.last?.id ? .hidden : .visible, edges: .bottom)
             }
         }
         .listStyle(.plain)
@@ -881,20 +903,39 @@ private struct Phase1SkillRow: View {
     var item: Phase1SkillPresentation
     var openSource: () -> Void
     var openProblem: () -> Void = {}
+    var openRelationships: () -> Void = {}
     var showsSource = true
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
     private var relations: [AgentRelationPresentation] { item.managed.map(library.relationPresentations) ?? [] }
     private var needsAttention: Bool { item.needsAttention || relations.contains(where: \.hasPresentationIssue) }
     private var problemSummary: String {
-        let messages = item.validationMessages.map(localized) + relations.filter(\.hasPresentationIssue).map {
+        let messages = item.validationMessages.map(library.localized) + relations.filter(\.hasPresentationIssue).map {
             "\($0.agentDisplayName): \(localized($0.unavailableReason ?? $0.verification.presentationLabel))"
         }
         return messages.isEmpty ? localized("Needs Attention") : messages.joined(separator: "\n")
+    }
+    private var enablementSummary: String {
+        item.isEnabled
+            ? library.localized(LocalizedMessage("Enabled for %@ Agents", arguments: [String(relations.filter { $0.intendedEnabled == true }.count)]))
+            : localized("Not Enabled")
+    }
+    private var accessibilitySummary: String {
+        ([item.detail] + (showsSource ? [library.localized(item.sourceName)] : [])
+            + [enablementSummary] + (!item.isEnabled ? [localized("Not connected to an Agent")] : [])
+            + (needsAttention ? [problemSummary] : [])).joined(separator: "\n")
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(item.name).font(.headline).lineLimit(1).help(item.name)
+                if !item.isEnabled {
+                    Button(action: openRelationships) { Image(systemName: "link.badge.plus") }
+                        .buttonStyle(.borderless).frame(minWidth: 24, minHeight: 24)
+                        .foregroundStyle(.secondary)
+                        .help(localized("Not connected to an Agent"))
+                        .accessibilityLabel(localized("Not connected to an Agent") + " · " + item.name)
+                        .accessibilityIdentifier("skill-not-connected-\(item.id)")
+                }
                 if let sourceID = item.source?.id, library.sourceHasPreparedUpdate(sourceID) {
                     Button(action: openSource) { Image(systemName: "arrow.up.circle") }
                         .buttonStyle(.borderless).frame(minWidth: 24, minHeight: 24)
@@ -911,17 +952,17 @@ private struct Phase1SkillRow: View {
             }
             Text(item.detail).lineLimit(2).foregroundStyle(.secondary)
             if showsSource {
-                Text(item.source == nil ? localized(item.sourceName) : item.sourceName).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(item.sourceName)
+                Text(library.localized(item.sourceName)).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(library.localized(item.sourceName))
+                    .accessibilityIdentifier("skill-source-summary")
             }
-            Text(item.isEnabled
-                 ? library.localized(LocalizedMessage("Enabled for %@ Agents", arguments: [String(relations.filter { $0.intendedEnabled == true }.count)]))
-                 : localized("Not Enabled"))
+            Text(enablementSummary)
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityLabel(item.name)
+        .accessibilityValue(accessibilitySummary)
         .accessibilityIdentifier("skill-row-\(item.id)")
     }
 }
@@ -934,7 +975,8 @@ private struct Phase1SkillDetail: View {
     var openSource: () -> Void = {}
     var currentAgentID: String? = nil
     @State private var clearPlan: ManagedRelationClearPlan?
-    @State private var clearPlanError: String?
+    @State private var clearPlanError: LocalizedMessage?
+    @State private var showsPaths = false
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
     private var relations: [AgentRelationPresentation] { item.managed.map(library.relationPresentations) ?? [] }
 
@@ -942,23 +984,22 @@ private struct Phase1SkillDetail: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    Text(item.name).font(.title2.weight(.semibold)).textSelection(.enabled)
-                    Text(item.detail).textSelection(.enabled)
-                    if let observed = library.contentNodeObservation(for: item) {
-                        Text(localized(observed.nodeKind.presentationLabel))
-                            .help("\(item.name) · \(localized(observed.nodeKind.presentationLabel)) · \(observed.linkPath)")
-                            .accessibilityLabel("\(item.name) · \(localized(observed.nodeKind.presentationLabel))")
-                            .accessibilityIdentifier("content-node-type")
-                    } else {
-                        Text(localized("Type unverified"))
-                            .accessibilityLabel("\(item.name) · \(localized("Type unverified"))")
-                            .accessibilityIdentifier("content-node-type")
+                    VStack(alignment: .leading, spacing: 24) {
+                        Text(item.name).font(.title2.weight(.semibold)).textSelection(.enabled)
+                            .accessibilityIdentifier("skill-detail-title")
+                        Text(item.detail).textSelection(.enabled)
+                            .accessibilityIdentifier("skill-detail-description")
                     }
+                    .id(item.id)
+                    .id("skill-top")
+                    let address = library.entryAddress(for: item)
+                    Phase1SkillAddress(path: address.path, baseline: localized("Relative to the management directory"),
+                                       status: address.status.map(library.localized))
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(item.sourceName).foregroundStyle(.secondary)
+                        Text(library.localized(item.sourceName)).foregroundStyle(.secondary)
                         if let sourceID = item.source?.id {
                             if let failure = library.sourceUpdateFailures[sourceID] {
-                                Label(localized("Update check failed") + ": " + failure, systemImage: "exclamationmark.triangle")
+                                Label(library.localized(LocalizedMessage("Update check failed: %@", arguments: [library.localized(failure)])), systemImage: "exclamationmark.triangle")
                             } else if let available = library.sourceUpdateChecks[sourceID] {
                                 Text(localized(available ? "Source Update Available" : "No source update was found. Managed content and its success baseline are unchanged."))
                             }
@@ -970,40 +1011,46 @@ private struct Phase1SkillDetail: View {
                     .id("update")
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(item.validationMessages, id: \.self) { message in
-                            Label(localized(message), systemImage: "exclamationmark.triangle")
+                            Label(library.localized(message), systemImage: "exclamationmark.triangle")
                         }
                     }.id("problem")
                     VStack(alignment: .leading, spacing: 8) {
                         Text(localized("Agent relationships")).font(.headline)
+                            .accessibilityIdentifier("skill-relations-heading")
                         ForEach(relations.filter { currentAgentID == nil || $0.relation.agentID == currentAgentID }) { relation in
                             Phase1RelationDetail(library: library, relation: relation)
+                                .disabled(item.identityConflict)
                         }
                         if let currentAgentID {
                             DisclosureGroup(localized("Other Agent relationships")) {
                                 ForEach(relations.filter { $0.relation.agentID != currentAgentID }) { relation in
                                     Phase1RelationDetail(library: library, relation: relation)
+                                        .disabled(item.identityConflict)
                                 }
                             }
                         }
                         if let managed = item.managed {
                             Button(localized("Clear all managed links"), role: .destructive) {
                                 do {
-                                    clearPlan = try library.prepareManagedRelationClearPlan(skillID: managed.id)
+                                    clearPlan = try library.prepareManagedRelationClearPlan(assetID: managed.assetID)
                                     clearPlanError = nil
-                                } catch { clearPlanError = String(describing: error) }
+                                } catch { clearPlanError = library.errorPresentation(for: error) }
                             }
-                            .disabled(!library.inFlightRelationActionIDs.isEmpty)
+                            .disabled(item.identityConflict || !library.inFlightRelationActionIDs.isEmpty)
                             .accessibilityIdentifier("clear-managed-relations")
                         } else {
                             Text(localized("This historical candidate is not part of a complete managed source. Import its whole source folder before enabling an Agent."))
                         }
-                        if let clearPlanError { Text(clearPlanError).foregroundStyle(.red) }
+                        if let clearPlanError { Text(library.localized(clearPlanError)).foregroundStyle(.red) }
                     }
                     .id("relations")
-                    DisclosureGroup(localized("Paths and check details")) {
+                    DisclosureGroup(localized("Paths and check details"), isExpanded: $showsPaths) {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(item.managed?.installedPath ?? item.location)
-                                .font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                            Text(localized(library.contentNodeObservation(for: item)?.nodeKind.presentationLabel ?? "Type unverified"))
+                                .accessibilityIdentifier("content-node-type")
+                            if let path = item.contentDirectoryPath {
+                                Text(path).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                            }
                             if let observed = library.contentNodeObservation(for: item) {
                                 Text(observed.linkPath).textSelection(.enabled)
                                 if let raw = observed.linkText { Text("\(localized("Original target")): \(raw)").textSelection(.enabled) }
@@ -1028,10 +1075,38 @@ private struct Phase1SkillDetail: View {
                 .padding(24)
             }
             .onAppear { if let anchor { proxy.scrollTo(anchor, anchor: .top) } }
+            .onChange(of: item.id) { _, _ in
+                clearPlan = nil
+                clearPlanError = nil
+                showsPaths = false
+                proxy.scrollTo(anchor ?? "skill-top", anchor: .top)
+            }
             .onChange(of: focusRequest) { _, _ in if let anchor { proxy.scrollTo(anchor, anchor: .top) } }
         }
         .accessibilityIdentifier("skill-detail")
         .sheet(item: $clearPlan) { plan in Phase1ClearManagedRelationsSheet(library: library, plan: plan) }
+    }
+}
+
+private struct Phase1SkillAddress: View {
+    var path: String?
+    var baseline: String
+    var status: String?
+    @Environment(\.appLanguage) private var language
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(appLocalized("Skill address", language: language)).font(.headline)
+            Text(baseline).font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("skill-address-baseline")
+            if let path {
+                Text(path).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("skill-entry-address")
+                    .id(path)
+            }
+            if let status { Text(status).accessibilityIdentifier("skill-address-status") }
+        }
     }
 }
 
@@ -1040,30 +1115,10 @@ private struct Phase1ClearManagedRelationsSheet: View {
     @Bindable var library: SkillsHubLibraryController
     var plan: ManagedRelationClearPlan
     @State private var result: ManagedRelationClearResult?
-    @State private var errorMessage: String?
+    @State private var errorMessage: LocalizedMessage?
     @State private var isClearing = false
 
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
-
-    private func localizedDetail(_ detail: String) -> String {
-        let ownershipPrefix = "Current ownership is "
-        let ownershipSuffix = "; the object remains unchanged."
-        if detail.hasPrefix(ownershipPrefix), detail.hasSuffix(ownershipSuffix) {
-            let ownership = String(detail.dropFirst(ownershipPrefix.count).dropLast(ownershipSuffix.count))
-            return SkillsHubLocalization().localized(
-                LocalizedMessage("Current ownership is %@; the object remains unchanged.", arguments: [ownership]),
-                language: library.language
-            )
-        }
-        let factsPrefix = "Current facts could not be verified: "
-        if detail.hasPrefix(factsPrefix) {
-            return SkillsHubLocalization().localized(
-                LocalizedMessage("Current facts could not be verified: %@", arguments: [String(detail.dropFirst(factsPrefix.count))]),
-                language: library.language
-            )
-        }
-        return localized(detail)
-    }
 
     var body: some View {
         ScrollView {
@@ -1091,7 +1146,7 @@ private struct Phase1ClearManagedRelationsSheet: View {
                 }
 
                 if let errorMessage {
-                    Text(localized(errorMessage))
+                    Text(library.localized(errorMessage))
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("clear-managed-relations-sheet-error")
                 }
@@ -1125,7 +1180,7 @@ private struct Phase1ClearManagedRelationsSheet: View {
             Text(item.agentDisplayName).font(.headline)
             Text(localized(item.disposition == .removable ? "Will clear" : "Blocked"))
                 .foregroundStyle(item.disposition == .removable ? Color.primary : Color.orange)
-            Text(localizedDetail(item.detail))
+            Text(library.localized(item.detail))
             Text(item.linkPath)
                 .font(.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
@@ -1139,7 +1194,7 @@ private struct Phase1ClearManagedRelationsSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(item.agentDisplayName).font(.headline)
             Text(localized(item.outcome.rawValue))
-            Text(localizedDetail(item.detail)).foregroundStyle(.secondary)
+            Text(library.localized(item.detail)).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
@@ -1155,7 +1210,7 @@ private struct Phase1ClearManagedRelationsSheet: View {
             } catch ManagedRelationClearError.planChanged {
                 errorMessage = "The Skill or Agent scope changed after confirmation. Review a new preview before clearing."
             } catch {
-                errorMessage = String(describing: error)
+                errorMessage = library.errorPresentation(for: error)
             }
             isClearing = false
         }
@@ -1173,7 +1228,7 @@ private struct Phase1SourcesWorkspace: View {
     var returnToSkills: (() -> Void)?
     @Binding var query: String
     @State private var removalPlan: SourceRemovalPlan?
-    @State private var removalError: String?
+    @State private var removalError: LocalizedMessage?
     @State private var isPreparingPreview = false
     private var isGitHub: Bool { kind == .githubRepository }
     private var sources: [SkillSource] { isGitHub ? library.githubSourcesForPresentation : library.localSourcesForPresentation }
@@ -1234,6 +1289,21 @@ private struct Phase1SourcesWorkspace: View {
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                if !isGitHub {
+                    Button {
+                        Task {
+                            do { try await library.refreshLocalSources() }
+                            catch { library.handle(error) }
+                        }
+                    } label: {
+                        if library.isRefreshingInstalled { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "arrow.clockwise") }
+                    }
+                    .help(localized("Refresh"))
+                    .accessibilityLabel(localized("Refresh"))
+                    .disabled(!library.hasRoot || library.isRefreshingInstalled)
+                    .accessibilityIdentifier("refresh-local-sources")
+                }
                 Button(action: addSource) { Image(systemName: "plus") }
                     .help(localized(isGitHub ? "Add GitHub Source" : "Add Local Source"))
                     .accessibilityLabel(localized(isGitHub ? "Add GitHub Source" : "Add Local Source"))
@@ -1310,19 +1380,19 @@ private struct Phase1SourcesWorkspace: View {
                     Menu(localized("More")) {
                         Button(localized("Remove Source…"), role: .destructive) {
                             do { removalError = nil; removalPlan = try library.prepareLocalSourceRemoval(sourceID: source.id) }
-                            catch { removalError = String(describing: error) }
+                            catch { removalError = library.errorPresentation(for: error) }
                         }
                         .accessibilityIdentifier("remove-source")
                     }
                     .fixedSize().accessibilityIdentifier("source-more")
                 }
                 if let error = library.sourceUpdateFailures[source.id] {
-                    Label(localized("Update check failed") + ": " + error, systemImage: "exclamationmark.triangle")
+                    Label(library.localized(LocalizedMessage("Update check failed: %@", arguments: [library.localized(error)])), systemImage: "exclamationmark.triangle")
                 } else if let available = library.sourceUpdateChecks[source.id] {
                     Text(localized(available ? "Source Update Available" : "No source update was found. Managed content and its success baseline are unchanged."))
                 }
                 if let date = library.sourceUpdateCheckDates[source.id] { Text(date, style: .time).font(.caption).foregroundStyle(.secondary) }
-                if let removalError { Text(removalError).foregroundStyle(.red) }
+                if let removalError { Text(library.localized(removalError)).foregroundStyle(.red) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)
@@ -1330,11 +1400,7 @@ private struct Phase1SourcesWorkspace: View {
         .accessibilityIdentifier("source-detail")
     }
     private func skills(in source: SkillSource) -> [Phase1SkillPresentation] {
-        library.presentationService.phase1Items(
-            availableSkills: library.availableSkills, installedSkills: library.installedSkills,
-            sources: library.localSourcesForPresentation + library.githubSourcesForPresentation,
-            enablementIntents: library.rootSnapshot?.metadata.enablementIntents ?? []
-        ).filter { $0.source?.id == source.id }
+        library.catalogItemsBySource[source.id] ?? []
     }
 }
 
@@ -1345,7 +1411,7 @@ private struct Phase1SourceUpdateSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isUpdating = false
     @State private var result: SourceUpdateResult?
-    @State private var errorMessage: String?
+    @State private var errorMessage: LocalizedMessage?
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
 
     var body: some View {
@@ -1363,7 +1429,7 @@ private struct Phase1SourceUpdateSheet: View {
                     if let result {
                         GroupBox(localized(result.updateSucceeded ? "Update Applied" : "Update Needs Attention")) {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(localized(result.detail))
+                                Text(library.localized(result.detail))
                                 Text(localized(result.contentApplied ? "Content: prepared source is active" : "Content: not verified as applied"))
                                 Text(localized(result.metadataCommitted ? "Metadata and baseline: committed" : "Metadata and baseline: not committed"))
                                 Text(localized(result.oldContentMovedToTrash ? "Old content: moved to Trash" : "Old content: retained for recovery"))
@@ -1373,7 +1439,7 @@ private struct Phase1SourceUpdateSheet: View {
                                         .textSelection(.enabled)
                                 }
                                 ForEach(result.relationResults) { item in
-                                    Text("\(item.agentDisplayName): \(localized(item.outcome.rawValue)) — \(localized(item.detail))")
+                                    Text("\(item.agentDisplayName): \(localized(item.outcome.rawValue)) — \(library.localized(item.detail))")
                                 }
                             }
                         }
@@ -1415,7 +1481,7 @@ private struct Phase1SourceUpdateSheet: View {
                                 }
                             }
                         }
-                        if let errorMessage { Text(localized(errorMessage)).foregroundStyle(.red) }
+                        if let errorMessage { Text(library.localized(errorMessage)).foregroundStyle(.red) }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1445,7 +1511,7 @@ private struct Phase1SourceUpdateSheet: View {
                                 do {
                                     result = try await library.applySourceUpdate(using: preview)
                                 } catch {
-                                    errorMessage = String(describing: error)
+                                    errorMessage = library.errorPresentation(for: error)
                                 }
                             }
                         }
@@ -1486,7 +1552,7 @@ private struct Phase1SourceRemovalSheet: View {
     var completed: (SourceRemovalResult) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var result: SourceRemovalResult?
-    @State private var errorMessage: String?
+    @State private var errorMessage: LocalizedMessage?
     @State private var isRemoving = false
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
 
@@ -1520,12 +1586,12 @@ private struct Phase1SourceRemovalSheet: View {
                     if let result {
                         GroupBox(localized("Actual result")) {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(localized(result.detail))
+                                Text(library.localized(result.detail))
                                 if result.relationResults.isEmpty {
                                     Text(localized("Relationships: no managed relationships"))
                                 } else {
                                     ForEach(result.relationResults, id: \.relation.id) { item in
-                                        Text("\(item.agentDisplayName): \(localized(item.outcome.rawValue)) — \(localized(item.detail))")
+                                        Text("\(item.agentDisplayName): \(localized(item.outcome.rawValue)) — \(library.localized(item.detail))")
                                     }
                                 }
                                 Text(localized(result.contentMovedToTrash ? "Content: moved to Trash" : "Content: not verified as moved; inspect current paths"))
@@ -1538,7 +1604,7 @@ private struct Phase1SourceRemovalSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    if let errorMessage { Text(localized(errorMessage)).foregroundStyle(.red) }
+                    if let errorMessage { Text(library.localized(errorMessage)).foregroundStyle(.red) }
                 }
                 .padding(24)
             }
@@ -1568,7 +1634,7 @@ private struct Phase1SourceRemovalSheet: View {
                 result = value
                 completed(value)
             } catch {
-                errorMessage = String(describing: error)
+                errorMessage = library.errorPresentation(for: error)
             }
             isRemoving = false
         }
@@ -1661,8 +1727,8 @@ private struct Phase1AgentWorkspace: View {
             List(selection: $selectedID) {
                 if let failure = descriptor.flatMap({ library.agentDirectoryAuditFailures[$0.id] }) {
                     Text(failure == "Agent directory has not been verified."
-                        ? localized(failure)
-                        : localized("Agent directory has not been verified.") + " " + localized(failure))
+                        ? library.localized(failure)
+                        : localized("Agent directory has not been verified.") + " " + library.localized(failure))
                         .foregroundStyle(.orange)
                         .listRowInsets(.horizontal, 16)
                 }
@@ -1687,7 +1753,7 @@ private struct Phase1AgentWorkspace: View {
                 ForEach(shownFindings) { finding in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(finding.entryName).font(.headline).lineLimit(1)
-                        Text(localized(finding.summary)).lineLimit(2).foregroundStyle(.secondary)
+                        Text(library.localized(finding.presentationMessage)).lineLimit(2).foregroundStyle(.secondary)
                         Text(localized(agentOwnedFindings.contains { $0.id == finding.id } ? "Not managed by Skills Hub" : "Ownership needs verification")).font(.caption)
                         Text(localized(auditFailed ? "Type unverified" : finding.entryKind.presentationLabel))
                             .font(.caption).foregroundStyle(.secondary)
@@ -1712,15 +1778,18 @@ private struct Phase1AgentWorkspace: View {
             if auditFailed {
                 ContentUnavailableView(localized("Agent directory has not been verified."), systemImage: "exclamationmark.triangle")
             } else if let relation = shownRelations.first(where: { "relation:" + $0.id == selectedID }),
-               let skill = library.installedSkills.first(where: { $0.id == relation.skillID }),
-               let item = library.presentationService.phase1Items(availableSkills: library.availableSkills, installedSkills: [skill], sources: library.localSourcesForPresentation + library.githubSourcesForPresentation, enablementIntents: library.rootSnapshot?.metadata.enablementIntents ?? []).first(where: { $0.managed?.id == skill.id }) {
+               let skill = library.installedSkills.first(where: { $0.assetID == relation.relation.assetID }),
+               let item = library.catalogItemsByID[skill.assetID.uuidString] {
                 Phase1SkillDetail(library: library, item: item, openSource: { openSource(item) }, currentAgentID: descriptor?.id)
-                    .id(item.id)
             } else if let finding = shownFindings.first(where: { "finding:" + $0.id == selectedID }) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         Text(finding.entryName).font(.title2.bold())
-                        Text(localized(finding.summary))
+                        Text(library.localized(finding.presentationMessage))
+                        let address = library.entryAddress(for: finding)
+                        Phase1SkillAddress(path: address.path,
+                                           baseline: library.localized(LocalizedMessage("Relative to %@ skills directory", arguments: [finding.agentDisplayName])),
+                                           status: address.status.map(library.localized))
                         Phase1AgentFindingRow(finding: finding,
                             classification: agentOwnedFindings.contains { $0.id == finding.id } ? "Not managed by Skills Hub" : "Ownership needs verification",
                             selection: "See relationship evidence",
@@ -1739,7 +1808,7 @@ private struct Phase1AgentWorkspace: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     guard let id = descriptor?.id else { return }
-                    do { try library.auditAgentDirectory(agentID: id) } catch { library.handle(error) }
+                    Task { do { try await library.auditAgentDirectory(agentID: id) } catch { library.handle(error) } }
                 } label: { Image(systemName: "arrow.clockwise") }
                 .accessibilityLabel(localized("Recheck Agent directory"))
                 .help(localized("Recheck Agent directory"))
@@ -1769,7 +1838,7 @@ private struct Phase1AgentWorkspace: View {
                   !library.agentFindings.contains(where: {
                       $0.agentID == id && $0.domain == .agentDirectory && $0.type != .pendingAudit
                   }) else { return }
-            do { try library.auditAgentDirectory(agentID: id) } catch { library.handle(error) }
+            Task { do { try await library.auditAgentDirectory(agentID: id) } catch { library.handle(error) } }
         }
         .accessibilityIdentifier("agent-workspace")
         .alert(localized("Delete this link node?"), item: $pendingBrokenLinkDeletion) { plan in
@@ -1818,9 +1887,12 @@ private struct Phase1AgentFindingRow: View {
         VStack(alignment: .leading, spacing: 8) {
             DisclosureGroup {
             VStack(alignment: .leading, spacing: 5) {
-                Text(localized(finding.summary))
+                Text(SkillsHubLocalization().localized(finding.presentationMessage, language: language))
+                Text(SkillsHubLocalization().localized(LocalizedMessage("Check detail (original): %@", arguments: [finding.summary]), language: language))
                 Text("\(localized("Node")): \(localized(finding.entryKind.presentationLabel))")
-                if let path = finding.sourcePath { Text(path).textSelection(.enabled) }
+                if let path = finding.linkPath ?? finding.sourcePath {
+                    Text(path).textSelection(.enabled)
+                }
                 if let raw = finding.symlinkTarget { Text("\(localized("Original target")): \(raw)").textSelection(.enabled) }
                 if let target = finding.targetPath { Text("\(localized("Resolved target")): \(target)").textSelection(.enabled) }
                 Text("\(localized("Selection")): \(localized(selection))")
@@ -1917,11 +1989,12 @@ private struct Phase1SettingsWorkspace: View {
                     ForEach(library.visibleInstalledAgentDescriptors) { descriptor in
                         Phase1AgentSettingsRow(
                             descriptor: descriptor,
+                            desktopIcon: descriptor.desktopAppPath.flatMap { library.desktopIconSnapshot[$0] },
                             capability: library.agentCapabilityPresentation(descriptor),
                             refreshStatus: descriptor.agent.flatMap { library.defaultAgentDirectoryRefresh[$0] },
                             authorize: descriptor.agent.flatMap { agent in
                                 agent == .codex || agent == .claudeCode ? {
-                                    chooseExactAgentTarget(agent) { library.refreshDefaultAgentDirectories() }
+                                    chooseExactAgentTarget(agent) { Task { await library.refreshDefaultAgentDirectories() } }
                                 } : nil
                             }
                         ) {
@@ -1957,7 +2030,7 @@ private struct Phase1SettingsWorkspace: View {
                             .accessibilityIdentifier("settings-agents-heading")
                         Spacer()
                         Button(localized("Refresh default Agent directories")) {
-                            library.refreshDefaultAgentDirectories()
+                            Task { await library.refreshDefaultAgentDirectories() }
                         }
                         .disabled(!library.hasRoot)
                         .accessibilityIdentifier("refresh-default-agent-directories")
@@ -2044,6 +2117,7 @@ private struct Phase1SettingsWorkspace: View {
 
 private struct Phase1AgentSettingsRow: View {
     var descriptor: InstalledAgentDescriptor
+    var desktopIcon: NSImage?
     var capability: AgentCapabilityPresentation
     var refreshStatus: AgentDefaultDirectoryRefreshStatus?
     var authorize: (() -> Void)?
@@ -2053,7 +2127,7 @@ private struct Phase1AgentSettingsRow: View {
 
     var body: some View {
         HStack {
-            Phase1AgentIcon(descriptor: descriptor, size: 30)
+            Phase1AgentIcon(descriptor: descriptor, desktopIcon: desktopIcon, size: 30)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(capability.displayName).font(.headline)
@@ -2117,7 +2191,7 @@ private struct Phase1AgentConfigurationForm: View {
     var chooseTarget: (AgentKind?, @escaping (URL) -> Void) -> Void
     var openAgent: (String) -> Void
     var close: () -> Void
-    @State private var saveError: String?
+    @State private var saveError: LocalizedMessage?
     @State private var isSaving = false
     @State private var isSavingDirectory = false
     @State private var showDiscardConfirmation = false
@@ -2194,8 +2268,8 @@ private struct Phase1AgentConfigurationForm: View {
                                 .foregroundStyle(.orange)
                             ForEach(blockers) { blocker in
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(blocker.title).font(.callout.bold())
-                                    Text(blocker.detail).font(.caption).foregroundStyle(.secondary)
+                                    Text(library.localized(blocker.title)).font(.callout.bold())
+                                    Text(library.localized(blocker.detail)).font(.caption).foregroundStyle(.secondary)
                                 }
                                 .accessibilityIdentifier("agent-directory-blocker-\(blocker.id)")
                             }
@@ -2220,7 +2294,7 @@ private struct Phase1AgentConfigurationForm: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("agent-configuration-relation-write-boundary")
                 if let saveError {
-                    Label(localized(saveError), systemImage: "exclamationmark.triangle")
+                    Label(library.localized(saveError), systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .accessibilityIdentifier("agent-configuration-error")
                 }
@@ -2297,7 +2371,7 @@ private struct Phase1AgentConfigurationForm: View {
                     close()
                 }
             } catch {
-                saveError = String(describing: error)
+                saveError = library.errorPresentation(for: error)
                 isSaving = false
             }
         }
@@ -2314,7 +2388,7 @@ private struct Phase1AgentConfigurationForm: View {
                 draft.proposedTarget = nil
                 isSavingDirectory = false
             } catch {
-                saveError = String(describing: error)
+                saveError = library.errorPresentation(for: error)
                 isSavingDirectory = false
             }
         }
@@ -2328,16 +2402,9 @@ private struct Phase1AgentIcon: View {
     var showsBackground = true
     @Environment(\.appLanguage) private var language
 
-    init(descriptor: InstalledAgentDescriptor, size: CGFloat, showsBackground: Bool = true) {
+    init(descriptor: InstalledAgentDescriptor, desktopIcon: NSImage? = nil, size: CGFloat, showsBackground: Bool = true) {
         presentation = AgentPresentation(descriptor: descriptor)
-        desktopIcon = AgentIconCatalog.desktopIcon(at: descriptor.desktopAppPath)
-        self.size = size
-        self.showsBackground = showsBackground
-    }
-
-    init(presentation: AgentPresentation, size: CGFloat, showsBackground: Bool = true) {
-        self.presentation = presentation
-        desktopIcon = nil
+        self.desktopIcon = desktopIcon
         self.size = size
         self.showsBackground = showsBackground
     }
@@ -2345,51 +2412,30 @@ private struct Phase1AgentIcon: View {
     var body: some View {
         Group {
             if presentation.monogramRows.isEmpty == false {
-                VStack(spacing: -2) {
+                VStack(spacing: -size / 18) {
                     ForEach(presentation.monogramRows.indices, id: \.self) { index in
                         Text(presentation.monogramRows[index])
                     }
                 }
-                .font(.system(size: size >= 24 ? 12 : 10, weight: .semibold))
-                .frame(width: min(size, 24), height: min(size, 24))
+                .font(.system(size: size * (presentation.monogramRows.count == 1 ? 0.45 : 0.38), weight: .semibold))
             } else if let desktopIcon {
-                Image(nsImage: desktopIcon).resizable().scaledToFit()
-                    .frame(width: min(size, 20), height: min(size, 20))
+                Image(nsImage: desktopIcon).renderingMode(.original).resizable().scaledToFit()
             } else if let assetName = presentation.iconSpecification.assetName {
-                agentAsset(assetName)
+                Image(assetName)
+                    .renderingMode(presentation.iconSpecification.renderingMode == .original ? .original : .template)
+                    .resizable().scaledToFit()
             } else {
                 Image(systemName: presentation.iconSpecification.fallbackSystemImage)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: min(size, 20), height: min(size, 20))
+                    .resizable().scaledToFit()
             }
         }
+        .foregroundStyle(.primary)
+        .frame(width: size * presentation.iconSpecification.opticalScale, height: size * presentation.iconSpecification.opticalScale)
+        .offset(y: size * presentation.iconSpecification.verticalOffset)
         .frame(width: size, height: size)
         .background(showsBackground ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityLabel("\(presentation.displayName) \(appLocalized("icon", language: language))")
-    }
-
-    @ViewBuilder
-    private func agentAsset(_ name: String) -> some View {
-        let specification = presentation.iconSpecification
-        if specification.renderingMode == .original {
-            Image(name)
-                .renderingMode(.original)
-                .resizable()
-                .scaledToFit()
-                .frame(width: min(size, 20), height: min(size, 20))
-                .scaleEffect(specification.opticalScale)
-                .offset(y: size * specification.verticalOffset)
-        } else {
-            Image(name)
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .foregroundStyle(.primary)
-                .frame(width: min(size, 20), height: min(size, 20))
-                .scaleEffect(specification.opticalScale)
-                .offset(y: size * specification.verticalOffset)
-        }
+        .accessibilityIdentifier("agent-icon-\(presentation.id)")
     }
 }
 
@@ -2450,7 +2496,10 @@ private struct Phase1RelationDetail: View {
 
     private var agentIdentity: some View {
         HStack {
-            Phase1AgentIcon(presentation: relation.agentPresentation, size: 36)
+            if let descriptor = library.visibleInstalledAgentDescriptors.first(where: { $0.id == relation.relation.agentID }) {
+                Phase1AgentIcon(descriptor: descriptor,
+                                desktopIcon: descriptor.desktopAppPath.flatMap { library.desktopIconSnapshot[$0] }, size: 36)
+            }
             Text(relation.agentDisplayName).font(.headline)
         }
     }
@@ -2480,13 +2529,13 @@ private struct Phase1RelationActionButton: View {
     var body: some View {
         Button {
             let agentID = relation.relation.agentID
-            let skillID = relation.skillID
+            let assetID = relation.relation.assetID
             let enabled = reestablish ? true : relation.desiredEnabled
             Task {
                 do {
                     _ = try await library.setGlobalAgentEnablement(
                         agentID: agentID,
-                        skillID: skillID,
+                        assetID: assetID,
                         enabled: enabled
                     )
                 } catch {

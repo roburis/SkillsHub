@@ -149,6 +149,7 @@ struct Phase1TasksView: View {
     var recheck: () -> Void = {}
     var openObject: (Phase1TaskRecord) -> Void = { _ in }
     var openAgent: ((String) -> Void)? = nil
+    var openDetails: ((UUID) -> Void)? = nil
 
     var body: some View {
         if tasks.isEmpty {
@@ -213,7 +214,8 @@ struct Phase1TasksView: View {
                             }
                         },
                         openObject: openObject,
-                        openAgent: openAgent
+                        openAgent: openAgent,
+                        openDetails: openDetails
                     )
                     .id(task.id)
                 }
@@ -231,6 +233,9 @@ struct Phase1TaskRow: View {
     var openAgent: ((String) -> Void)?
 
     var isDetailPage = false
+    var openDetails: ((UUID) -> Void)? = nil
+    var settleMaterials: ((UUID) -> Void)? = nil
+    var isSettlingMaterials = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -312,6 +317,23 @@ struct Phase1TaskRow: View {
             }
             if let recovery = task.recoveryEvidence {
                 recoveryEvidence(recovery)
+                if let materials = recovery.creationMaterials, isDetailPage {
+                    Text(localized("Creation materials"))
+                        .font(.subheadline.weight(.semibold))
+                    Text(materials.path).font(.caption.monospaced()).textSelection(.enabled)
+                        .accessibilityIdentifier("creation-material-path")
+                    Text(localized(materials.detail))
+                        .accessibilityIdentifier("creation-material-qualification")
+                    Text(localized("Only this recorded empty directory is considered. Current facts are checked again when you act."))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let settleMaterials {
+                        Button(localized(isSettlingMaterials ? "Settling creation materials…" : "Settle empty creation directory")) {
+                            settleMaterials(task.id)
+                        }
+                        .disabled(!materials.canSettle || isSettlingMaterials)
+                        .accessibilityIdentifier("settle-creation-materials")
+                    }
+                }
                 Divider()
             }
             ForEach(task.events) { event in
@@ -335,6 +357,10 @@ struct Phase1TaskRow: View {
                 .fixedSize(horizontal: false, vertical: true)
             Text(localized(task.safeNextStep))
                 .accessibilityIdentifier("task-safe-next-step-\(task.id.uuidString)")
+            if !isDetailPage, let openDetails {
+                Button(localized("Operation Details")) { openDetails(task.id) }
+                    .accessibilityIdentifier("task-open-details-\(task.id.uuidString)")
+            }
             Button(localized(openObjectTitle)) {
                 openObject(task)
             }
@@ -384,7 +410,7 @@ struct Phase1TaskRow: View {
             Text(localized("Actual delta"))
                 .font(.subheadline.weight(.semibold))
             ForEach(evidence.actualDelta, id: \.self) { delta in
-                Text(localized(delta))
+                Text(localized(LocalizedMessage("Historical record (original): %@", arguments: [delta])))
             }
             Text(localized("Evidence limitations"))
                 .font(.subheadline.weight(.semibold))
@@ -392,10 +418,10 @@ struct Phase1TaskRow: View {
                 Text(localized("No recorded limitations."))
             } else {
                 ForEach(evidence.limitations, id: \.self) { limitation in
-                    Text(localized(limitation))
+                    Text(localized(LocalizedMessage("Historical record (original): %@", arguments: [limitation])))
                 }
             }
-            Text("\(localized("Safe next step")): \(localized(evidence.safeNextStep))")
+            Text("\(localized("Safe next step")): \(localized(LocalizedMessage("Historical record (original): %@", arguments: [evidence.safeNextStep])))")
         }
         .font(.callout)
     }
@@ -435,9 +461,18 @@ struct Phase1TaskRow: View {
     }
 
     private var accessibilitySummary: String {
-        let base = "\(localized(task.title)). \(localized(task.phase.presentationLabel)). Operation \(task.id.uuidString). \(localized(task.result)). Object \(task.objectID). \(localized(task.safeNextStep))"
+        let base = localized(LocalizedMessage("%@. %@. Operation %@. %@. Object %@. %@", arguments: [
+            localized(task.title), localized(task.phase.presentationLabel), task.id.uuidString,
+            localized(task.result), task.objectID, localized(task.safeNextStep)
+        ]))
         guard let evidence = task.relationEvidence else { return base }
-        return "\(base). Target \(evidence.agentDisplayName) and \(evidence.skillName). Requested \(evidence.desiredEnabled ? "enabled" : "disabled"). Outcome \(evidence.outcome). Current conclusion \(evidence.verification.presentationLabel). Actual delta \(evidence.actualDelta.joined(separator: " ")). Evidence limitations \(evidence.limitations.joined(separator: " ")). Safe next step \(evidence.safeNextStep)"
+        return base + ". " + localized(LocalizedMessage("Target %@ / %@. Requested %@. Outcome %@. Current conclusion %@. %@. %@. Safe next step %@", arguments: [
+            evidence.agentDisplayName, evidence.skillName, localized(evidence.desiredEnabled ? "Enabled" : "Disabled"),
+            localized(evidence.outcome), localized(evidence.verification.presentationLabel),
+            localized(LocalizedMessage("Historical record (original): %@", arguments: [evidence.actualDelta.joined(separator: " ")])),
+            localized(LocalizedMessage("Historical record (original): %@", arguments: [evidence.limitations.joined(separator: " ")])),
+            localized(LocalizedMessage("Historical record (original): %@", arguments: [evidence.safeNextStep]))
+        ]))
     }
 
     private func localized(_ text: String) -> String {
@@ -445,6 +480,8 @@ struct Phase1TaskRow: View {
     }
 
     private func localized(_ message: LocalizedMessage) -> String {
-        SkillsHubLocalization().localized(message, language: language)
+        let presentation = message.isVerbatim
+            ? LocalizedMessage("Historical record (original): %@", arguments: [message.template]) : message
+        return SkillsHubLocalization().localized(presentation, language: language)
     }
 }

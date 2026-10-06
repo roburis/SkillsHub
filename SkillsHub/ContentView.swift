@@ -114,7 +114,7 @@ struct ContentView: View {
             chooseExactAgentTarget: chooseExactAgentTarget
         )
         .task {
-            bootstrapDefaultRoot()
+            await bootstrapDefaultRoot()
         }
         .sheet(item: $library.pendingPhase1OperationPlan) { plan in
             Phase1OperationConfirmationSheet(
@@ -223,9 +223,9 @@ struct ContentView: View {
     }
     #endif
 
-    private func bootstrapDefaultRoot() {
+    private func bootstrapDefaultRoot() async {
         do {
-            try library.bootstrapDefaultRootIfPresent()
+            try await library.bootstrapDefaultRootIfPresent()
         } catch {
             // A missing default Root or a lost permission is a silent no-op (handled
             // inside bootstrap); any other failure surfaces to the user.
@@ -250,7 +250,12 @@ struct ContentView: View {
     private func connectRoot() {
         chooseDirectory(
             defaultDirectoryURL: library.suggestedRootURL,
-            action: library.connectSelectedRoot,
+            action: { url in
+                Task {
+                    do { try await library.connectSelectedRoot(url) }
+                    catch { library.handle(error) }
+                }
+            },
             onCancel: {
                 _ = library.cancelRootSelection()
             }

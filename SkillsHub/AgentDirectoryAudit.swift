@@ -376,10 +376,10 @@ nonisolated final class AgentDirectoryAuditService {
     private let fileManager: FileManager
     private let access: FileAccessService
     private let frontmatterParser: SkillFrontmatterParser
-    private let now: () -> Date
+    private let now: @Sendable () -> Date
     let installationPresence: @Sendable (AgentKind, URL) -> AgentInstallationResult
 
-    init(fileManager: FileManager = .default, now: @escaping () -> Date = Date.init,
+    init(fileManager: FileManager = .default, now: @escaping @Sendable () -> Date = Date.init,
          frontmatterParser: SkillFrontmatterParser = SkillFrontmatterParser(),
          installationPresence: @escaping @Sendable (AgentKind, URL) -> AgentInstallationResult = { AgentInstallationDetector().detect(agent: $0, home: $1) }) {
         self.fileManager = fileManager

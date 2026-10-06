@@ -4,6 +4,84 @@ import Testing
 @testable import SkillsHub
 
 struct PresentationSettingsAndLocalizationTests {
+    @Test func bundledThirdPartyNoticesIncludeCompleteLicensesAndIconUsage() throws {
+        let notices = try AppSettingsService().thirdPartyNotices()
+        let sections = notices.components(separatedBy: "Copyright (c) ")
+        #expect(sections.count == 6)
+        for owner in ["2016 JP Simard.", "2017-2020 Ingy döt Net", "2006-2016 Kirill Simonov",
+                      "2023 LobeHub", "2026 GitHub Inc."] {
+            #expect(notices.contains(owner))
+        }
+        #expect(notices.components(separatedBy: "Permission is hereby granted").count == 5)
+        #expect(notices.components(separatedBy: "The above copyright notice and this permission notice").count == 5)
+        #expect(notices.components(separatedBy: "THE SOFTWARE IS PROVIDED \"AS IS\"").count == 5)
+        #expect(notices.components(separatedBy: "OUT OF OR IN CONNECTION WITH THE SOFTWARE").count == 5)
+        for usage in ["Yams 6.0.2", "libyaml", "GitHubSourceIcon", "CodexAgentIcon", "ClaudeAgentIcon",
+                      "never redistributed", "does not imply endorsement", "brand usage terms"] {
+            #expect(notices.contains(usage))
+        }
+        for key in ["About Skills Hub", "Third-party notices",
+                    "Could not read third-party notices. Original diagnostic: %@"] {
+            for language in [AppLanguage.chinese, .japanese] {
+                #expect(SkillsHubLocalization().localized(key, language: language) != key)
+            }
+        }
+        #expect(throws: CocoaError.self) {
+            try AppSettingsService().thirdPartyNotices(bundle: Bundle(for: NSApplication.self))
+        }
+    }
+
+    @Test(arguments: [
+        ("/root/local/L2", "L2"),
+        ("/root/local/roles-skills/workflows/apple", "roles-skills"),
+        ("/root/local/長いソース と空白 abcdefghijklmnopqrstuvwxyz", "長いソース と空白 abcdefghijklmnopqrstuvwxyz"),
+        ("/root/local", nil), ("/root-other/local/L2", nil), ("/root/local/../../outside", nil)
+    ] as [(String, String?)])
+    func localSourceSummaryUsesManagedFirstFolder(sample: (String, String?)) {
+        for kind in [SkillSourceKind.localDirectory, .manualFilesystem] {
+            let source = SkillSource(kind: kind, name: "External display alias", localPath: sample.0,
+                                     externalLocalPath: "/external/original-folder")
+            let message = SkillCatalogPresentationService().sourceName(for: source, relativeTo: URL(fileURLWithPath: "/root"))
+            if let folder = sample.1 {
+                #expect(message == LocalizedMessage("Local/%@", arguments: [folder]))
+                for (language, prefix) in [(AppLanguage.english, "Local"), (.chinese, "本地"), (.japanese, "ローカル")] {
+                    #expect(SkillsHubLocalization().localized(message, language: language) == prefix + "/" + folder)
+                }
+            } else {
+                #expect(message == "Unknown Source")
+            }
+        }
+    }
+
+    @Test func contradictoryCandidateAssociationStaysVisibleAsConflict() throws {
+        let source = SkillSource(kind: .localDirectory, name: "Source", localPath: "/fixture/source")
+        let candidate = AvailableSkill(id: "review", sourceID: source.id, skillPath: "review",
+            name: "Review", description: "Fixture", validation: .valid, candidateID: "candidate-review")
+        let managed = InstalledSkill(id: "review", sourceID: source.id, name: "Review", description: "Fixture",
+            installedPath: "/fixture/source/other", sourceKind: .localDirectory, validation: .valid,
+            purpose: nil, tagIDs: [], installedAt: .distantPast, candidateID: candidate.candidateID)
+        let items = SkillCatalogPresentationService().phase1Items(availableSkills: [candidate],
+            installedSkills: [managed], sources: [source], enablementIntents: [])
+        #expect(items.count == 2)
+        #expect(items.allSatisfy { $0.identityConflict })
+        #expect(items.allSatisfy { $0.needsAttention })
+        #expect(items.first { $0.managed != nil }?.id == managed.assetID.uuidString)
+        #expect(items.first { $0.candidate != nil }?.contentDirectoryPath == "/fixture/source/review")
+        #expect(items.first { $0.managed != nil }?.contentDirectoryPath == "/fixture/source/other")
+        var unsafe = try #require(items.first { $0.candidate != nil })
+        unsafe.candidate?.skillPath = "../outside"
+        #expect(unsafe.contentDirectoryPath == nil)
+        unsafe.candidate?.skillPath = "/outside"
+        #expect(unsafe.contentDirectoryPath == nil)
+        unsafe.candidate?.skillPath = "."
+        #expect(unsafe.contentDirectoryPath == "/fixture/source")
+        unsafe.source?.localPath = "/"
+        unsafe.candidate?.skillPath = "review"
+        #expect(unsafe.contentDirectoryPath == "/review")
+        unsafe.source?.localPath = "/fixture/source\0other"
+        #expect(unsafe.contentDirectoryPath == nil)
+    }
+
     @MainActor
     @Test func nativeListWidthClampsWithoutOverwritingTheSavedPreference() {
         let key = "SkillsHub.test-width.\(UUID())"
@@ -38,7 +116,7 @@ struct PresentationSettingsAndLocalizationTests {
             id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
             kind: .localDirectory,
             name: "Local Source",
-            localPath: "/fixture/local-source"
+            localPath: "/fixture/local/local-source"
         )
         let invalid = AvailableSkill(
             id: "invalid",
@@ -80,11 +158,11 @@ struct PresentationSettingsAndLocalizationTests {
                     isEnabled: true,
                     generation: 1
                 )
-            ]
+            ], rootURL: URL(fileURLWithPath: "/fixture")
         )
 
         #expect(items.map(\.name) == ["Review", "Unnamed skill · nested/invalid"])
-        #expect(service.filteredPhase1Items(items, query: "local source", filter: .needsAttention).map(\.id) == ["invalid-candidate"])
+        #expect(service.filteredPhase1Items(items, query: "local-source", filter: .needsAttention).map(\.id) == ["invalid-candidate"])
         #expect(service.filteredPhase1Items(items, query: "", filter: .notEnabled).map(\.id) == ["invalid-candidate"])
     }
 
@@ -94,6 +172,9 @@ struct PresentationSettingsAndLocalizationTests {
             "Preparing", "Waiting for confirmation", "Executing", "Observing",
             "Verifying", "Completed", "Needs attention", "Running",
             "Recently completed", "View current Root", "View authoritative object",
+            "Skill address", "Relative to the management directory", "Relative to %@ skills directory",
+            "Skill address could not be verified.", "Recorded address; the Skill entry is missing.",
+            "Recorded address; SKILL.md has not been verified.", "SKILL.md is missing or unreadable.",
             "Re-observe the current object before preparing a new plan.",
             "Cancelled before confirmation; no authorized write occurred."
         ]
@@ -156,8 +237,8 @@ struct PresentationSettingsAndLocalizationTests {
         #expect(localization.localized(SourceUpdateConfirmationKind.overwriteLocalChanges.title, language: .japanese) == "ローカルの変更を上書きして更新")
         #expect(localization.localized(SourceUpdateConfirmationKind.replaceUnknownBaseline.title, language: .chinese) == "确认整体替换")
         #expect(localization.localized(SourceUpdateConfirmationKind.replaceUnknownBaseline.title, language: .japanese) == "ソース全体の置き換えを確認")
-        #expect(localization.localized(LocalizedMessage("Current ownership is %@; the object remains unchanged.", arguments: ["unmanaged-node"]), language: .chinese) == "当前归属为 unmanaged-node；对象保持不变。")
-        #expect(localization.localized(LocalizedMessage("Current ownership is %@; the object remains unchanged.", arguments: ["unmanaged-node"]), language: .japanese) == "現在の所有状態は unmanaged-node です。対象は変更されません。")
+        #expect(localization.localized(RelationOwnershipClassification.unmanagedNode.clearMessage, language: .chinese) == "当前节点不受 Skills Hub 管理；对象保持不变。")
+        #expect(localization.localized(RelationOwnershipClassification.unmanagedNode.clearMessage, language: .japanese) == "現在のノードは Skills Hub の管理対象ではありません。対象は変更されません。")
         let workspaceCopy = [
             "Search All Skills…", "Search This Source’s Skills…", "Check for Updates…", "Needs Attention", "View Source…",
             "Add Agent", "Agent Configuration", "Save name and abbreviation", "Custom Agent", "Built-in Agent",
@@ -166,7 +247,10 @@ struct PresentationSettingsAndLocalizationTests {
             "Remove the verified Skills Hub-managed link and disable this relationship.",
             "Disable this relationship; no link node is currently present.",
             "Agent configuration is unavailable; no cleanup was authorized.",
-            "Current ownership is %@; the object remains unchanged.", "Current facts could not be verified: %@",
+            "The current node is not managed by Skills Hub; the object remains unchanged.",
+            "The current link points outside the Management Directory; the object remains unchanged.",
+            "The current link is broken; the object remains unchanged.",
+            "Current ownership could not be verified; the object remains unchanged.",
             "Remove GitHub Source", "Remove Local Source", "Update Applied", "Update Needs Attention",
             "Cancel and Keep Current Content", "Content: moved to Trash", "Content: not verified as moved; inspect current paths",
             "Content: prepared source is active", "Content: not verified as applied", "Metadata and baseline: committed",
@@ -175,7 +259,7 @@ struct PresentationSettingsAndLocalizationTests {
             "Operation record: needs attention",
             "No source update was found. Managed content and its success baseline are unchanged."
         ]
-        for key in ["All Sources", "Enabled", "Not Enabled", "Not set", "No current observation", "Not verified", "Verified consistent", "Drifted", "Currently unverifiable", "Agent name is required.", "Enter 1–4 visible characters for the icon abbreviation."] + workspaceCopy {
+        for key in ["All Sources", "Enabled", "Not Enabled", "Not connected to an Agent", "Not set", "No current observation", "Not verified", "Verified consistent", "Drifted", "Currently unverifiable", "Agent name is required.", "Enter 1–4 visible characters for the icon abbreviation."] + workspaceCopy {
             for language in [AppLanguage.chinese, .japanese] {
                 #expect(localization.localized(key, language: language) != key)
             }
@@ -213,7 +297,10 @@ struct PresentationSettingsAndLocalizationTests {
 
     @MainActor
     @Test func producedMessagesRerenderWithoutReplayingOrChangingArguments() throws {
-        let controller = SkillsHubLibraryController()
+        let suiteName = "PresentationSettingsAndLocalizationTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let controller = SkillsHubLibraryController(languagePreferences: AppLanguagePreferences(defaults: defaults))
         controller.setStatus("Updated %@ for %@.", "原始 Skill", "Codex")
         let status = try #require(controller.statusMessage)
 
@@ -232,6 +319,133 @@ struct PresentationSettingsAndLocalizationTests {
         #expect(SkillsHubLocalization().localized(recovery, language: .chinese) == "当前事实：2 项已完成、1 项未完成、0 项未知。未重放任何操作。")
         #expect(SkillsHubLocalization().localized(recovery, language: .japanese) == "現在の情報：完了2件、未完了1件、不明0件。操作は再実行していません。")
         #expect(recovery.arguments == ["2", "1", "0"])
+
+        let sourceID = UUID()
+        controller.recordSourceUpdateFailure(sourceID: sourceID, error: SourceUpdateError.preparedSourceIncomplete)
+        controller.handle(Phase1OperationError.targetConflict("/原始/長いパス %20"))
+        let sourceFailure = try #require(controller.sourceUpdateFailures[sourceID])
+        let producedError = try #require(controller.errorMessage)
+        for language in [AppLanguage.english, .chinese, .japanese] {
+            controller.language = language
+            #expect(controller.localized(producedError).contains("/原始/長いパス %20"))
+            if language != .english {
+                #expect(controller.localized(sourceFailure) != sourceFailure.template)
+            }
+            #expect(controller.sourceUpdateFailures[sourceID] == sourceFailure)
+            #expect(controller.errorMessage == producedError)
+        }
+        #expect(producedError.arguments == ["/原始/長いパス %20"])
+        for failure in [AgentTargetQualificationFailure.profileUnavailable(.profileMissing), .targetMissing,
+                        .targetAmbiguous, .permissionRequired, .bookmarkStale, .authorizationTargetMismatch] {
+            let message = LocalizedMessage(controller.agentQualificationFailureDescription(failure))
+            for language in [AppLanguage.chinese, .japanese] {
+                controller.language = language
+                #expect(controller.localized(message) != message.template)
+            }
+        }
+    }
+
+    @Test func domainFeedbackAndOriginalDiagnosticsHaveCompleteTranslations() throws {
+        let errors: [any Error] = [
+            Phase1OperationError.invalidPlan, Phase1OperationError.staleFacts,
+            Phase1OperationError.confirmationMismatch, Phase1OperationError.candidateUnavailable,
+            Phase1OperationError.targetConflict("/原始"), Phase1OperationError.stagingVerificationFailed,
+            Phase1OperationError.metadataCommitFailed("errno=13"), Phase1OperationError.compensationFailed("raw % %@"),
+            Phase1OperationError.journalUnavailable,
+            SourceUpdateError.invalidSource, SourceUpdateError.sourceChangedDuringPreparation,
+            SourceUpdateError.preparedSourceIncomplete, SourceUpdateError.confirmationChanged,
+            SourceUpdateError.writeUnavailable, SourceUpdateError.relationshipCleanupIncomplete,
+            SourceUpdateError.operationRecordUnavailable,
+            SourceRemovalError.invalidScope, SourceRemovalError.planChanged, SourceRemovalError.relationshipsRemain,
+            SourceRemovalError.recordUnavailable, SourceRemovalError.trashFailed("原始診断"),
+            SourceRemovalError.trashResultUnverified, SourceRemovalError.metadataCommitFailed("raw error"),
+            GitHubSourceIssue.networkFailure, GitHubSourceIssue.rateLimited, GitHubSourceIssue.treeTruncated,
+            GitHubSourceIssue.repositoryTooLarge, GitHubSourceIssue.pathRestricted, GitHubSourceIssue.unsupportedProvider,
+            GitHubSourceIssue.unsupportedVersion, GitHubSourceIssue.invalidURL, GitHubSourceIssue.repositoryChanged,
+            GitHubSourceIssue.branchUnavailable, GitHubSourceIssue.timedOut, GitHubSourceIssue.cancelled,
+            GitHubSourceIssue.archiveInvalid, GitHubSourceIssue.contentMismatch, GitHubSourceIssue.noSkills,
+            GitHubAPIClientFailure.branchUnavailable,
+            FileAccessFailure.outsideAuthorizedDirectory(path: "/原始"), FileAccessFailure.unreadable(path: "/原始"),
+            FileAccessFailure.symlinkEscapesRoot(path: "/原始"), FileAccessFailure.symlinkCycle(path: "/原始"),
+            RootInspectionFailure.missing(path: "/原始"), RootInspectionFailure.notDirectory(path: "/原始"),
+            RootInspectionFailure.symbolicLink(path: "/原始"), RootInspectionFailure.unreadable(path: "/原始"),
+            RootInspectionFailure.invalidMetadata(path: "/原始", reason: "raw reason"),
+            SecurityScopedAccessError.startDenied(path: "/原始", ownerIdentity: "owner"),
+            RootWriteUnavailableReason.heldByAnotherProcess, RootWriteUnavailableReason.lockUnavailable(errno: 13),
+            ControllerRelationActionError.unsupportedAgent("Agent 原文"), ControllerRelationActionError.invalidSkillAlias("Name %"),
+            ControllerRelationActionError.missingRootSession, ManagedRelationClearError.planChanged,
+            AgentTargetAccessError.leaseUnavailable, MetadataCommitError.staleDigest,
+            ContentManifestFailure.unsupportedNode(path: "/原始"), RelationActionTokenBuildError.targetUnavailable,
+            NSError(domain: "External 原文 %", code: 7)
+        ] + [
+            "Agent configuration not found.",
+            "The selected Agent skills target is not a directory.",
+            "The Agent skills target cannot be a symbolic link.",
+            "Authorize the exact Agent skills target before saving.",
+            "Agent directory facts changed before saving. The old configuration was kept.",
+            "Please resolve the listed Agent relationships or operations before changing the directory.",
+            "Another Agent already uses this skills directory.",
+            "The saved Agent directory could not be verified.",
+            "Local source already registered.", "Local source already imported.",
+            "Candidate is blocked or unreadable.", "Local source path is unavailable.",
+            "No Phase 1 operation is waiting for confirmation.",
+            "Root establishment must start from the Establish Management Directory button.",
+            "Root selection access is unavailable.", "Folder authorization was not granted.",
+            "The repository check did not produce a publishable source."
+        ].map { SkillsHubLibraryFailure.invalidSource(LocalizedMessage($0)) }
+        let localization = SkillsHubLocalization()
+        for error in errors {
+            let message = SkillsHubLocalization.errorPresentation(for: error)
+            #expect(!message.isVerbatim)
+            for language in [AppLanguage.chinese, .japanese] {
+                #expect(localization.localized(message.template, language: language) != message.template)
+                let rendered = localization.localized(message, language: language)
+                for argument in message.arguments { #expect(rendered.contains(argument)) }
+            }
+        }
+        #expect(SkillsHubLocalization.errorPresentation(for: SourceUpdateError.preparedSourceIncomplete)
+            == "The prepared source is incomplete. Current content was retained.")
+        let diagnostic = SkillsHubLocalization.errorPresentation(for: Phase1OperationError.compensationFailed("raw % %@"))
+        #expect(diagnostic.arguments == ["raw % %@"])
+        #expect(localization.localized(diagnostic, language: .chinese) == "恢复需要处理。诊断原文：raw % %@")
+        let original = LocalizedMessage("Historical record (original): %@", arguments: ["unrecognized legacy: 已发生 %@"])
+        #expect(localization.localized(original, language: .japanese) == "履歴記録の原文：unrecognized legacy: 已发生 %@")
+        for type in AgentFindingType.allCases {
+            for language in [AppLanguage.chinese, .japanese] {
+                #expect(localization.localized(type.presentationMessage, language: language) != type.presentationMessage.template)
+            }
+        }
+        for id in ["missing-skill-file", "unreadable-skill-file", "content-changed", "empty-skill-id", "skill-id-conflict",
+                   "name-directory-mismatch", "description-length", "missing-source-metadata", "frontmatter-syntax",
+                   "frontmatter-format", "frontmatter-capability", "frontmatter-budget"] {
+            let message = ValidationMessage(id: id, severity: .error, message: "Original check").presentationMessage
+            for language in [AppLanguage.chinese, .japanese] {
+                #expect(localization.localized(message, language: language) != message.template)
+            }
+        }
+        let unknown = ValidationMessage(id: "frontmatter-format-unknown", severity: .error, message: "原始 check %").presentationMessage
+        #expect(unknown == LocalizedMessage("Check detail (original): %@", arguments: ["原始 check %"]))
+        for title in ["Unfinished relationship operation", "Unfinished broken-link operation", "Unverifiable operation record",
+                      "Wait for the current action on this relation to finish.",
+                      "Review the current target authorization before trying again.",
+                      "Review target access before preparing another action."] {
+            for language in [AppLanguage.chinese, .japanese] {
+                #expect(localization.localized(title, language: language) != title)
+            }
+        }
+        for phase in [Phase1OperationPhase.preparing, .waitingConfirmation, .executing, .observing, .verifying, .completed, .needsAttention] {
+            let record = Phase1JournalRecord(operationID: UUID(), kind: .initializeRoot, operationPlan: nil,
+                sequence: 1, planDigest: "digest", event: .phase, phase: phase, objectID: "原始对象",
+                result: "unrecognized historical result %@", confirmationTokenID: nil, occurredAt: .distantPast)
+            let message = record.progressMessage
+            #expect(!message.isVerbatim)
+            for language in [AppLanguage.chinese, .japanese] {
+                #expect(localization.localized(message, language: language) != message.template)
+            }
+            let stored = try JSONDecoder().decode(Phase1JournalRecord.self, from: JSONEncoder().encode(record))
+            #expect(stored.result == "unrecognized historical result %@")
+            #expect(stored.progressMessage == message)
+        }
     }
 
     @Test func systemLanguageResolvesFromPreferredLanguages() {

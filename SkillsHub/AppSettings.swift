@@ -26,6 +26,13 @@ nonisolated final class AppLanguagePreferences {
 }
 
 nonisolated final class AppSettingsService {
+    func thirdPartyNotices(bundle: Bundle = .main) throws -> String {
+        guard let url = bundle.url(forResource: "ThirdPartyNotices", withExtension: "txt") else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
     func state(rootPath: String, defaultRootPath: String = UserHomeDirectoryResolver.currentHomeDirectory().appendingPathComponent("skills-hub").path, language: AppLanguage, cachePolicyName: String) -> AppSettingsState {
         AppSettingsState(
             rootPath: rootPath,

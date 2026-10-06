@@ -43,6 +43,13 @@ nonisolated struct RelationActionExecutionResult: Sendable {
     let verification: VerificationRecord?
     let limitations: [String]
     let safeNextStep: String
+    var creationMaterials: CreationMaterialSettlement? = nil
+}
+
+nonisolated struct CreationMaterialReview: Codable, Hashable, Sendable {
+    let path: String
+    let canSettle: Bool
+    let detail: String
 }
 
 nonisolated struct BrokenLinkDeletionExecutionResult: Equatable, Sendable {
@@ -59,6 +66,7 @@ nonisolated struct RelationActionRecoveryResult: Sendable {
     let components: [RelationActionRecoveryComponent]
     let limitations: [String]
     let safeNextStep: String
+    let creationMaterials: CreationMaterialReview?
 
     init(
         relation: AgentRelationIdentity?,
@@ -66,7 +74,8 @@ nonisolated struct RelationActionRecoveryResult: Sendable {
         verification: VerificationRecord?,
         components: [RelationActionRecoveryComponent] = [],
         limitations: [String],
-        safeNextStep: String
+        safeNextStep: String,
+        creationMaterials: CreationMaterialReview? = nil
     ) {
         self.relation = relation
         self.observation = observation
@@ -74,6 +83,7 @@ nonisolated struct RelationActionRecoveryResult: Sendable {
         self.components = components
         self.limitations = limitations
         self.safeNextStep = safeNextStep
+        self.creationMaterials = creationMaterials
     }
 }
 
@@ -91,6 +101,7 @@ nonisolated struct RelationActionRecoveryComponent: Codable, Equatable, Sendable
         case operationMaterials = "operation-materials"
         case preparationNode = "preparation-node"
         case isolationNode = "isolation-node"
+        case creationDirectory = "creation-directory"
     }
 
     let kind: Kind
@@ -143,6 +154,7 @@ nonisolated struct RelationActionOperationRecord: Codable, Equatable, Sendable {
     var targetNodeIdentity: LinkNodeIdentity? = nil
     var creation: LinkCreationEvidence? = nil
     var removal: LinkRemovalEvidence? = nil
+    var creationMaterials: CreationMaterialSettlement? = nil
 }
 
 nonisolated struct BrokenLinkDeletionOperationRecord: Codable, Equatable, Sendable {
@@ -483,6 +495,26 @@ nonisolated final class RelationActionOperationRecordStore: @unchecked Sendable 
                 throw RelationActionOperationRecordError.invalidRecord
             }
         }
+        if let materials = record.creationMaterials {
+            guard record.desiredEnabled, record.creation != nil, record.completedAt != nil else {
+                throw RelationActionOperationRecordError.invalidRecord
+            }
+            if let path = materials.isolationPath {
+                let directory = SkillsHubMetadataStore(fileManager: fileManager).rootLayout(for: normalizedRoot)
+                    .operationRecoveryDirectory.appendingPathComponent(operationID.uuidString, isDirectory: true)
+                guard path == directory.appendingPathComponent("creation-settlement/directory").path,
+                      materials.operationDirectoryIdentity?.file == record.operationDirectoryIdentity,
+                      materials.isolationDirectoryIdentity?.kind == S_IFDIR,
+                      materials.operationDirectoryIdentity?.kind == S_IFDIR,
+                      materials.isolationDirectoryIdentity?.file.volumeNumber == record.creation?.parentIdentity.file.volumeNumber,
+                      materials.status != .settled || materials.observedIdentity == record.creation?.stagingDirectoryIdentity else {
+                    throw RelationActionOperationRecordError.invalidRecord
+                }
+            } else if materials.status != .retained || materials.operationDirectoryIdentity != nil
+                || materials.isolationDirectoryIdentity != nil || materials.observedIdentity != nil {
+                throw RelationActionOperationRecordError.invalidRecord
+            }
+        }
     }
 
     private func validate(
@@ -622,6 +654,8 @@ nonisolated enum RelationActionExecutionFaultPoint: Equatable, Sendable {
     case afterMetadataCAS
     case beforeFinalObservation
     case beforeCompensation
+    case beforeMaterialResultRecord
+    case beforeMaterialSettlement
 }
 
 nonisolated struct BrokenLinkDeletionInspector: @unchecked Sendable {
@@ -1088,7 +1122,7 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                 completed: final.verification.conclusion == .verifiedConsistent
             )
             let changed = fileEvents.isEmpty == false || metadataNeedsCommit
-            return RelationActionExecutionResult(
+            var result = RelationActionExecutionResult(
                 relation: relation,
                 status: final.verification.conclusion == .verifiedConsistent
                     ? (changed ? .succeeded : .noChange) : .unknown,
@@ -1102,6 +1136,20 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                     ? "none"
                     : "observe-current-relation"
             )
+            if createdNode != nil, final.verification.conclusion == .verifiedConsistent,
+               let record = operationRecord {
+                result.creationMaterials = settleCreationMaterials(operationID: record.operationID, rootURL: rootURL)
+                let current = recoverCurrentFacts(authorization: authorization, rootURL: rootURL,
+                    currentInstallation: currentInstallation)
+                if current.verification?.conclusion != .verifiedConsistent {
+                    return RelationActionExecutionResult(relation: relation, status: .unknown, blockReason: nil,
+                        fileEvents: fileEvents, metadataDelta: metadataDelta,
+                        observation: current.observation, verification: current.verification,
+                        limitations: current.limitations, safeNextStep: current.safeNextStep,
+                        creationMaterials: result.creationMaterials)
+                }
+            }
+            return result
         } catch {
             if case RelationLinkPrimitiveError.isolationFailed(let code) = error,
                [EXDEV, ENOTSUP, EINVAL, EACCES, EPERM, EROFS].contains(code), fileEvents.isEmpty {
@@ -1251,6 +1299,116 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                 safeNextStep: "restore-current-access-and-observe"
             )
         }
+    }
+
+    /// Explicit calls reuse the same primitive as new creation; recovery never calls this method.
+    func settleCreationMaterials(operationID: UUID, rootURL: URL) -> CreationMaterialSettlement {
+        var record: RelationActionOperationRecord?
+        do {
+            record = try operationRecordStore.load(operationID: operationID, rootURL: rootURL)
+            guard let current = record, let creation = current.creation else {
+                throw RelationActionOperationRecordError.invalidRecord
+            }
+            let review = try reviewCreationMaterials(record: current, rootURL: rootURL)
+            guard review.canSettle else { throw RelationLinkPrimitiveError.identityChanged }
+            let directory = metadataStore.rootLayout(for: rootURL).operationRecoveryDirectory
+                .appendingPathComponent(operationID.uuidString, isDirectory: true)
+            try faultHook?(.beforeMaterialSettlement)
+            try linkService.settleCreationDirectory(creation: creation,
+                operationDirectory: directory, expectedOperationIdentity: current.operationDirectoryIdentity,
+                previous: current.creationMaterials,
+                recordSettlement: { materials in
+                    guard var updated = record else { throw RelationActionOperationRecordError.recordUnavailable }
+                    updated.creationMaterials = materials
+                    if materials.status == .settled { try faultHook?(.beforeMaterialResultRecord) }
+                    let originalPath = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent().path
+                    if materials.status != .settled, materials.observedIdentity != nil, let path = materials.isolationPath {
+                        updated.retainedPaths.removeAll { $0 == originalPath }
+                        if !updated.retainedPaths.contains(path) { updated.retainedPaths.append(path) }
+                    }
+                    if materials.status == .settled {
+                        updated.retainedPaths.removeAll { $0 == review.path || $0 == originalPath || $0 == materials.isolationPath }
+                    }
+                    try operationRecordStore.save(updated, rootURL: rootURL)
+                    record = updated
+                }, verifyRecord: {
+                    guard let current = record,
+                          try operationRecordStore.load(operationID: operationID, rootURL: rootURL) == current,
+                          try reviewCreationMaterials(record: current, rootURL: rootURL, checkMaterial: false).canSettle else {
+                        throw RelationActionOperationRecordError.readbackFailed
+                    }
+                })
+            return record?.creationMaterials ?? CreationMaterialSettlement(status: .retained)
+        } catch {
+            var result = record?.creationMaterials ?? CreationMaterialSettlement(status: .retained)
+            result.status = .retained
+            result.limitation = String(describing: error)
+            if var current = record {
+                current.creationMaterials = result
+                // Best effort only. Missing writeback is explained from durable pending facts on restart.
+                try? operationRecordStore.save(current, rootURL: rootURL)
+            }
+            return result
+        }
+    }
+
+    private func reviewCreationMaterials(
+        record: RelationActionOperationRecord, rootURL: URL, checkMaterial: Bool = true
+    ) throws -> CreationMaterialReview {
+        guard let creation = record.creation else { throw RelationActionOperationRecordError.invalidRecord }
+        let staging = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
+        let snapshot = try metadataStore.loadCurrentSnapshot(from: rootURL)
+        let evidence = snapshot.metadata.managedRelationEvidence.first { $0.relation == record.relation }
+        let inspection = try inspector.inspect(linkURL: URL(fileURLWithPath: record.linkPath),
+            relation: record.relation, canonicalTargetPath: record.canonicalTargetPath, evidence: evidence)
+        let intent = currentIntent(in: snapshot, relation: record.relation)
+        let relationResolved = (intent?.isEnabled == true && evidence?.creation == creation
+            && inspection.classification == .exactManagedLink)
+            || (intent?.isEnabled == false && evidence == nil && inspection.classification == .vacant)
+        let ready = record.completedAt != nil && record.desiredEnabled && relationResolved
+            && inspection.observation.parentIdentity == creation.parentIdentity
+        let path = record.creationMaterials?.isolationPath ?? staging.path
+        guard ready else { return CreationMaterialReview(path: path, canSettle: false, detail: "Creation responsibilities are not resolved.") }
+        if !checkMaterial { return CreationMaterialReview(path: path, canSettle: true, detail: "Ready to settle empty creation directory") }
+        func identity(_ url: URL) throws -> LinkNodeIdentity? {
+            var status = stat()
+            if Darwin.lstat(url.path, &status) == 0 { return LinkNodeIdentity(status) }
+            if errno == ENOENT { return nil }
+            throw RelationLinkPrimitiveError.parentUnavailable(errno)
+        }
+        var materialURL = staging
+        let original = try identity(staging)
+        if let materials = record.creationMaterials, let isolationPath = materials.isolationPath {
+            let isolated = URL(fileURLWithPath: isolationPath)
+            guard try identity(isolated.deletingLastPathComponent()) == materials.isolationDirectoryIdentity,
+                  try identity(isolated.deletingLastPathComponent().deletingLastPathComponent()) == materials.operationDirectoryIdentity else {
+                return CreationMaterialReview(path: isolationPath, canSettle: false, detail: "Creation directory identity changed.")
+            }
+            let isolatedIdentity = try identity(isolated)
+            if isolatedIdentity != nil {
+                guard original == nil else { return CreationMaterialReview(path: isolationPath, canSettle: false, detail: "Creation directory identity changed.") }
+                materialURL = isolated
+            }
+        }
+        guard let actual = try identity(materialURL) else {
+            return CreationMaterialReview(path: materialURL.path, canSettle: false,
+                detail: record.creationMaterials?.status == .settled ? "Creation directory settled" : "Creation directory absent; deletion history unverified.")
+        }
+        guard actual == creation.stagingDirectoryIdentity else {
+            return CreationMaterialReview(path: materialURL.path, canSettle: false, detail: "Creation directory identity changed.")
+        }
+        guard try fileManager.contentsOfDirectory(atPath: materialURL.path).isEmpty else {
+            return CreationMaterialReview(path: materialURL.path, canSettle: false, detail: "Creation directory contains unknown contents.")
+        }
+        let operation = metadataStore.rootLayout(for: rootURL).operationRecoveryDirectory.appendingPathComponent(record.operationID.uuidString)
+        if record.creationMaterials?.isolationPath == nil,
+           try identity(operation.appendingPathComponent("creation-settlement")) != nil {
+            return CreationMaterialReview(path: materialURL.path, canSettle: false, detail: "Creation materials could not be verified.")
+        }
+        guard try LinkNodeIdentity.read(at: operation).file.volumeNumber == creation.parentIdentity.file.volumeNumber else {
+            return CreationMaterialReview(path: materialURL.path, canSettle: false, detail: "Creation directory retained: no same-volume private isolation.")
+        }
+        return CreationMaterialReview(path: materialURL.path, canSettle: true, detail: "Ready to settle empty creation directory")
     }
 
     private func recoverCurrentFacts(
@@ -1417,12 +1575,22 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                     : "retained-paths:\(retainedPaths.joined(separator: ","))"
             )
         ]
+        var materialReview: CreationMaterialReview?
         if let creation = record.creation {
             let stagingURL = URL(fileURLWithPath: creation.stagingPath)
             let staged = try? inspector.inspect(linkURL: stagingURL, relation: record.relation,
                 canonicalTargetPath: record.canonicalTargetPath, evidence: nil).observation
             let state: RelationActionRecoveryState
-            if directoryState != .completed || staged?.parentIdentity != creation.stagingDirectoryIdentity {
+            materialReview = (try? reviewCreationMaterials(record: record, rootURL: rootURL))
+                ?? CreationMaterialReview(path: stagingURL.deletingLastPathComponent().path,
+                    canSettle: false, detail: "Creation materials could not be verified.")
+            let materialAbsent = materialReview?.detail == "Creation directory settled"
+                || materialReview?.detail == "Creation directory absent; deletion history unverified."
+            if directoryState == .completed,
+               inspection?.observation.nodeIdentity == creation.nodeIdentity,
+               inspection?.observation.linkText == creation.linkText {
+                state = .completed
+            } else if directoryState != .completed || staged?.parentIdentity != creation.stagingDirectoryIdentity {
                 state = .unknown
             } else if staged?.nodeIdentity == creation.nodeIdentity, staged?.linkText == creation.linkText {
                 state = .notCompleted
@@ -1435,6 +1603,12 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             }
             components.append(RelationActionRecoveryComponent(kind: .preparationNode, state: state,
                 path: creation.stagingPath, detail: "creation-publication-observation-only"))
+            if let review = materialReview {
+                components.append(RelationActionRecoveryComponent(kind: .creationDirectory,
+                    state: review.detail == "Creation directory settled" ? .completed
+                        : (review.canSettle ? .notCompleted : .unknown),
+                    path: review.path, detail: review.detail))
+            }
         }
         if let removal = record.removal {
             let isolated = try? inspector.inspect(linkURL: URL(fileURLWithPath: removal.isolationPath),
@@ -1467,7 +1641,8 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             limitations: limitations,
             safeNextStep: components.allSatisfy { $0.state == .completed }
                 ? "none"
-                : "reauthorize-current-relation"
+                : (materialReview != nil ? "Review creation materials in Operation Details." : "reauthorize-current-relation"),
+            creationMaterials: materialReview
         )
     }
 

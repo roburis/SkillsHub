@@ -107,11 +107,11 @@ nonisolated final class SkillsHubMetadataStore {
     private let fileManager: FileManager
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    private let writeCheckpoint: ((MetadataWritePhase, URL) throws -> Void)?
+    private let writeCheckpoint: (@Sendable (MetadataWritePhase, URL) throws -> Void)?
 
     init(
         fileManager: FileManager = .default,
-        writeCheckpoint: ((MetadataWritePhase, URL) throws -> Void)? = nil
+        writeCheckpoint: (@Sendable (MetadataWritePhase, URL) throws -> Void)? = nil
     ) {
         self.fileManager = fileManager
         self.writeCheckpoint = writeCheckpoint
@@ -143,7 +143,7 @@ nonisolated final class SkillsHubMetadataStore {
         )
     }
 
-    func inspectRoot(at rootURL: URL) -> RootInspectionResult {
+    @concurrent func inspectRoot(at rootURL: URL) async -> RootInspectionResult {
         let normalizedURL = rootURL.standardizedFileURL
         let path = normalizedURL.path
         var isDirectory: ObjCBool = false

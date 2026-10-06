@@ -25,11 +25,11 @@ struct RootInspectionTests {
             securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter())
         )
         switch entry {
-        case "startup": try controller.bootstrapDefaultRootIfPresent()
+        case "startup": try await controller.bootstrapDefaultRootIfPresent()
         case "establish":
             try controller.rememberUserSelectedAccess(to: root)
             await controller.establishSelectedRoot(root)
-        default: try controller.connectExistingRoot(root)
+        default: try await controller.connectExistingRoot(root)
         }
         await controller.waitForPendingRechecks()
         let snapshot = try #require(controller.rootSnapshot)
@@ -39,15 +39,15 @@ struct RootInspectionTests {
         #expect(controller.agentAuditLocalState.managedRelationEvidence.isEmpty)
         #expect(controller.errorMessage == nil)
         #expect(try Data(contentsOf: skill.appendingPathComponent("SKILL.md")) == content)
-        try controller.reloadFromDisk()
+        try await controller.reloadFromDisk()
         #expect(controller.rootSnapshot?.metadata.rootConfig.id == snapshot.metadata.rootConfig.id)
     }
 
-    @Test func unsettledOperationBlocksRootSwitchAndIdentifiesTheOperation() throws {
+    @Test func unsettledOperationBlocksRootSwitchAndIdentifiesTheOperation() async throws {
         let firstRoot = try initializedRoot(generation: 0)
         let secondRoot = try initializedRoot(generation: 0)
         let controller = rootInspectionController(adapter: RecordingSecurityScopedResourceAccessAdapter())
-        try controller.connectExistingRoot(firstRoot)
+        try await controller.connectExistingRoot(firstRoot)
         let tasks = [Phase1OperationPhase.waitingConfirmation, .needsAttention].map { phase in
             Phase1TaskRecord(
                 id: UUID(), kind: .registerLocalSource, title: "Historical task", objectID: "source",
@@ -55,12 +55,12 @@ struct RootInspectionTests {
             )
         }
         controller.phase1Tasks = tasks
-        try controller.reloadFromDisk()
+        try await controller.reloadFromDisk()
         #expect(Set(controller.phase1Tasks) == Set(tasks))
-        try controller.connectExistingRoot(firstRoot)
+        try await controller.connectExistingRoot(firstRoot)
         #expect(Set(controller.phase1Tasks) == Set(tasks))
-        #expect(throws: SkillsHubLibraryFailure.self) {
-            try controller.connectExistingRoot(secondRoot)
+        await #expect(throws: SkillsHubLibraryFailure.self) {
+            try await controller.connectExistingRoot(secondRoot)
         }
         #expect(controller.rootURL == firstRoot.standardizedFileURL)
         #expect(controller.errorMessage == nil)
@@ -69,7 +69,7 @@ struct RootInspectionTests {
             completed.phase = .completed
             return completed
         }
-        try controller.connectExistingRoot(secondRoot)
+        try await controller.connectExistingRoot(secondRoot)
         #expect(controller.phase1Tasks.isEmpty)
     }
 
@@ -79,11 +79,11 @@ struct RootInspectionTests {
         let source = try temporaryDirectory()
         try "---\nname: Review\ndescription: Review changes.\n---\nBody.".write(to: source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         let controller = rootInspectionController(adapter: RecordingSecurityScopedResourceAccessAdapter())
-        try controller.connectExistingRoot(root)
+        try await controller.connectExistingRoot(root)
         try controller.prepareLocalSourceRegistration(from: source)
         if cancelled { await controller.cancelPendingPhase1Operation() }
         let task = try #require(controller.phase1Tasks.first)
-        try controller.reloadFromDisk()
+        try await controller.reloadFromDisk()
         #expect(controller.phase1Tasks.contains(task))
     }
 
@@ -93,7 +93,7 @@ struct RootInspectionTests {
         let source = try temporaryDirectory()
         try "---\nname: Review\ndescription: Review changes.\n---\nBody.".write(to: source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         let controller = rootInspectionController(adapter: RecordingSecurityScopedResourceAccessAdapter())
-        try controller.connectExistingRoot(root)
+        try await controller.connectExistingRoot(root)
         controller.phase1OperationCoordinator = Phase1OperationCoordinator(
             metadataStore: controller.metadataStore, faultInjection: .journal(.final, "source-registered")
         )
@@ -115,7 +115,7 @@ struct RootInspectionTests {
         let controller = rootInspectionController(adapter: adapter)
 
         try controller.rememberUserSelectedAccess(to: root)
-        let result = try controller.inspectSelectedRoot(root)
+        let result = try await controller.inspectSelectedRoot(root)
 
         #expect(result == .initializationRequired(.init(url: root.standardizedFileURL)))
         #expect(controller.pendingRootInitialization == nil)
@@ -144,7 +144,7 @@ struct RootInspectionTests {
         #expect(try Data(contentsOf: marker) == Data("unchanged".utf8))
     }
 
-    @Test func selectingExistingRootPreservesBytesGenerationAndTreeThenStartsRootSession() throws {
+    @Test func selectingExistingRootPreservesBytesGenerationAndTreeThenStartsRootSession() async throws {
         let root = try temporaryDirectory()
         let store = SkillsHubMetadataStore()
         try store.save(
@@ -163,7 +163,7 @@ struct RootInspectionTests {
         var controller: SkillsHubLibraryController? = rootInspectionController(adapter: adapter)
 
         try controller?.rememberUserSelectedAccess(to: root)
-        try controller?.connectSelectedRoot(root)
+        try await controller?.connectSelectedRoot(root)
         let result = try #require(controller?.lastRootInspectionResult)
 
         guard case .existingRoot(let facts) = result else {
@@ -182,14 +182,16 @@ struct RootInspectionTests {
         }
         #expect(try Data(contentsOf: metadataFile) == metadataBefore)
         #expect(try rootTreeSnapshot(root) == treeBefore)
-        #expect(adapter.startRecords.count == 2)
-        #expect(adapter.stoppedURLs == [root.standardizedFileURL])
+        await controller?.waitForPendingRechecks()
+        await controller?.waitForPresentationObservation()
+        #expect(adapter.startRecords.filter { $0.owner.isRootSession }.count == 1)
+        #expect(adapter.activeAccessCount == 1)
 
         controller = nil
-        #expect(adapter.stoppedURLs == [root.standardizedFileURL, root.standardizedFileURL])
+        #expect(adapter.activeAccessCount == 0)
     }
 
-    @Test func inspectionReportsInvalidNodeAndInitializationWithoutWriting() throws {
+    @Test func inspectionReportsInvalidNodeAndInitializationWithoutWriting() async throws {
         let container = try temporaryDirectory()
         let regularFile = container.appendingPathComponent("not-a-root")
         try Data("file".utf8).write(to: regularFile)
@@ -197,7 +199,7 @@ struct RootInspectionTests {
         let invalidController = rootInspectionController(adapter: invalidAdapter)
 
         try invalidController.rememberUserSelectedAccess(to: regularFile)
-        let invalidResult = try invalidController.inspectSelectedRoot(regularFile)
+        let invalidResult = try await invalidController.inspectSelectedRoot(regularFile)
 
         #expect(invalidResult == .invalid(.notDirectory(path: regularFile.standardizedFileURL.path)))
         #expect(invalidController.hasRoot == false)
@@ -217,7 +219,7 @@ struct RootInspectionTests {
         let schemaController = rootInspectionController(adapter: schemaAdapter)
 
         try schemaController.rememberUserSelectedAccess(to: root)
-        let schemaResult = try schemaController.inspectSelectedRoot(root)
+        let schemaResult = try await schemaController.inspectSelectedRoot(root)
 
         #expect(schemaResult == .initializationRequired(.init(url: root.standardizedFileURL)))
         #expect(schemaController.hasRoot == false)
@@ -227,7 +229,7 @@ struct RootInspectionTests {
         #expect(schemaAdapter.stoppedURLs == [root.standardizedFileURL])
     }
 
-    @Test func inspectionOfMismatchedRootRequiresInitializationWithoutWriting() throws {
+    @Test func inspectionOfMismatchedRootRequiresInitializationWithoutWriting() async throws {
         let root = try temporaryDirectory()
         let store = SkillsHubMetadataStore()
         try store.save(
@@ -242,7 +244,7 @@ struct RootInspectionTests {
         let controller = rootInspectionController(adapter: adapter)
 
         try controller.rememberUserSelectedAccess(to: root)
-        let result = try controller.inspectSelectedRoot(root)
+        let result = try await controller.inspectSelectedRoot(root)
 
         #expect(result == .initializationRequired(.init(url: root.standardizedFileURL)))
         #expect(controller.hasRoot == false)
@@ -261,7 +263,7 @@ struct RootInspectionTests {
         #expect(adapter.stoppedURLs.isEmpty)
     }
 
-    @Test func symbolicLinkRootIsRejectedWithoutFollowingItsTarget() throws {
+    @Test func symbolicLinkRootIsRejectedWithoutFollowingItsTarget() async throws {
         let container = try temporaryDirectory()
         let target = try temporaryDirectory()
         let link = container.appendingPathComponent("linked-root")
@@ -270,7 +272,7 @@ struct RootInspectionTests {
         let controller = rootInspectionController(adapter: adapter)
 
         try controller.rememberUserSelectedAccess(to: link)
-        let result = try controller.inspectSelectedRoot(link)
+        let result = try await controller.inspectSelectedRoot(link)
 
         #expect(result == .invalid(.symbolicLink(path: link.standardizedFileURL.path)))
         #expect(controller.hasRoot == false)
@@ -286,28 +288,32 @@ struct RootInspectionTests {
 
 
 
-    @Test func rootSessionStartFailurePreservesPreviousSessionAndReleasesNewInspection() throws {
+    @Test func rootSessionStartFailurePreservesPreviousSessionAndReleasesNewInspection() async throws {
         let firstRoot = try initializedRoot(generation: 2)
         let secondRoot = try initializedRoot(generation: 4)
         let secondTreeBefore = try rootTreeSnapshot(secondRoot)
-        let adapter = RecordingSecurityScopedResourceAccessAdapter(
-            startResults: [true, true, true, false]
-        )
+        let adapter = RecordingSecurityScopedResourceAccessAdapter()
+        adapter.denyStart = { url, owner in url == secondRoot.standardizedFileURL && owner.isRootSession }
         let controller = rootInspectionController(adapter: adapter)
 
         try controller.rememberUserSelectedAccess(to: firstRoot)
-        try controller.connectSelectedRoot(firstRoot)
+        try await controller.connectSelectedRoot(firstRoot)
+        await controller.waitForPendingRechecks()
+        await controller.waitForPresentationObservation()
         try controller.rememberUserSelectedAccess(to: secondRoot)
 
-        #expect(throws: SecurityScopedAccessError.self) {
-            try controller.connectSelectedRoot(secondRoot)
+        await #expect(throws: SecurityScopedAccessError.self) {
+            try await controller.connectSelectedRoot(secondRoot)
         }
+        await controller.waitForPendingRechecks()
+        await controller.waitForPresentationObservation()
 
         #expect(controller.rootURL == firstRoot.standardizedFileURL)
         #expect(controller.rootSnapshot?.generation == 2)
         #expect(try rootTreeSnapshot(secondRoot) == secondTreeBefore)
-        #expect(adapter.startRecords.count == 4)
-        #expect(adapter.stoppedURLs == [firstRoot.standardizedFileURL, secondRoot.standardizedFileURL])
+        #expect(adapter.startRecords.filter { $0.owner.isRootSession }.count == 2)
+        #expect(adapter.activeAccessCount == 1)
+        #expect(adapter.stoppedURLs.contains(secondRoot.standardizedFileURL))
     }
 }
 
