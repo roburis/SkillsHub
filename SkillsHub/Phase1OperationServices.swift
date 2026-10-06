@@ -28,35 +28,6 @@ nonisolated private func sourceImportURL(source: SkillSource, fileManager: FileM
     return url
 }
 
-nonisolated private func managedCopySourceURL(candidate: AvailableSkill, source: SkillSource, fileManager: FileManager) throws -> URL {
-    guard source.kind == .localDirectory, let path = source.localPath,
-          candidate.sourceID == source.id, candidate.manifestDigest != nil,
-          candidate.validation.canInstall, candidate.checkStatus == .valid || candidate.checkStatus == .warning else {
-        throw Phase1OperationError.candidateUnavailable
-    }
-    let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-    let attributes = try fileManager.attributesOfItem(atPath: root.path)
-    guard let identity = source.directoryIdentity,
-          attributes[.type] as? FileAttributeType == .typeDirectory,
-          (attributes[.systemNumber] as? NSNumber)?.uint64Value == identity.volumeNumber,
-          (attributes[.systemFileNumber] as? NSNumber)?.uint64Value == identity.fileNumber else {
-        throw Phase1OperationError.sourceChanged
-    }
-    if candidate.skillPath == "." { return root }
-    let components = candidate.skillPath.components(separatedBy: "/")
-    guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
-        throw Phase1OperationError.candidateUnavailable
-    }
-    var directory = root
-    for component in components {
-        directory.appendPathComponent(component, isDirectory: true)
-        guard try fileManager.attributesOfItem(atPath: directory.path)[.type] as? FileAttributeType == .typeDirectory else {
-            throw Phase1OperationError.sourceChanged
-        }
-    }
-    return directory
-}
-
 nonisolated enum Phase1OperationKind: String, Codable, Hashable, Sendable {
     case initializeRoot
     case importLocalSource
@@ -454,7 +425,6 @@ nonisolated struct Phase1JournalRecord: Codable, Hashable, Sendable {
 
 nonisolated struct Phase1OperationResult: Sendable {
     var snapshot: RootSnapshot?
-    var installedSkill: InstalledSkill?
     var task: Phase1TaskRecord
     var succeeded: Bool
 }
@@ -487,16 +457,13 @@ nonisolated enum Phase1OperationFaultInjection: Hashable, Sendable {
 nonisolated struct Phase1OperationPlanner {
     private let fileManager: FileManager
     private let manifestBuilder: ContentManifestBuilder
-    private let normalizer: SkillIDNormalizer
 
     init(
         fileManager: FileManager = .default,
-        manifestBuilder: ContentManifestBuilder? = nil,
-        normalizer: SkillIDNormalizer = SkillIDNormalizer()
+        manifestBuilder: ContentManifestBuilder? = nil
     ) {
         self.fileManager = fileManager
         self.manifestBuilder = manifestBuilder ?? ContentManifestBuilder(fileManager: fileManager)
-        self.normalizer = normalizer
     }
 
     func rootInitializationPlan(facts: RootInspectionFacts) throws -> Phase1OperationPlan {
@@ -592,78 +559,6 @@ nonisolated struct Phase1OperationPlanner {
             fileNumber: observed.fileNumber
         )
         return try finalizedPlan(plan)
-    }
-
-    func sourceRegistrationPlan(
-        directory: URL,
-        snapshot: RootSnapshot,
-        sourceID: UUID = UUID()
-    ) throws -> Phase1OperationPlan {
-        let root = URL(fileURLWithPath: snapshot.metadata.rootConfig.rootPath, isDirectory: true)
-        guard !FileAccessService(fileManager: fileManager).isDescendant(directory, of: root) else {
-            throw Phase1OperationError.candidateUnavailable
-        }
-        if let existing = snapshot.metadata.sources.first(where: { $0.id == sourceID }) {
-            guard existing.kind == .localDirectory,
-                  existing.localPath == directory.standardizedFileURL.path else {
-                throw Phase1OperationError.sourceChanged
-            }
-            if let identity = existing.directoryIdentity {
-                let attributes = try fileManager.attributesOfItem(atPath: directory.path)
-                guard attributes[.type] as? FileAttributeType == .typeDirectory,
-                      (attributes[.systemNumber] as? NSNumber)?.uint64Value == identity.volumeNumber,
-                      (attributes[.systemFileNumber] as? NSNumber)?.uint64Value == identity.fileNumber else {
-                    throw Phase1OperationError.sourceChanged
-                }
-            }
-        }
-        var index = LocalSourceIndexer(fileManager: fileManager).index(
-            directory: directory,
-            sourceID: sourceID,
-            generation: snapshot.generation + 1
-        )
-        guard index.isPlannable else {
-            throw Phase1OperationError.candidateUnavailable
-        }
-        for candidateIndex in index.availableSkills.indices {
-            let key = StableIdentity.candidateID(
-                sourceID: sourceID, relativePath: index.availableSkills[candidateIndex].skillPath
-            )
-            if let previous = snapshot.metadata.availableSkills.first(where: {
-                StableIdentity.candidateID(sourceID: $0.sourceID, relativePath: $0.skillPath) == key
-            }) {
-                index.availableSkills[candidateIndex].candidateID = previous.candidateID
-            }
-        }
-        let factDigest = SHA256Digest.hex(
-            Data("\(snapshot.metadataDigest)|\(index.source.contentFingerprint ?? "none")".utf8)
-        )
-        return try finalizedPlan(
-            Phase1OperationPlan(
-                id: UUID(),
-                kind: .registerLocalSource,
-                rootPath: snapshot.metadata.rootConfig.rootPath,
-                expectedGeneration: snapshot.generation,
-                metadataDigest: snapshot.metadataDigest,
-                factDigest: factDigest,
-                planDigest: "",
-                createdAt: Date(),
-                source: index.source,
-                candidates: index.availableSkills,
-                observations: index.observations,
-                selectedCandidate: nil,
-                sourceCandidatePath: nil,
-                sourceManifest: nil,
-                assetID: nil,
-                targetPath: nil,
-                steps: ["Recheck the selected directory", "Register the source and candidate snapshot", "Read back metadata"],
-                expectedWrites: [".skillshub.json", ".skillshub.operations.jsonl"],
-                excludedActions: ["No Skill is copied or executed", "No directory outside the selected source is scanned"],
-                compensationPaths: [],
-                metadataFileIdentity: snapshot.metadataFileIdentity,
-                metadataParentIdentity: snapshot.metadataParentIdentity
-            )
-        )
     }
 
     func localSourceImportPlan(
@@ -885,87 +780,6 @@ nonisolated struct Phase1OperationPlanner {
         return TargetFileIdentity(volumeNumber: volume.uint64Value, fileNumber: file.uint64Value)
     }
 
-    func managedCopyPlan(
-        candidate: AvailableSkill,
-        source: SkillSource,
-        rootURL: URL,
-        snapshot: RootSnapshot,
-        assetID: UUID = UUID()
-    ) throws -> Phase1OperationPlan {
-        let candidateURL = try managedCopySourceURL(candidate: candidate, source: source, fileManager: fileManager)
-        let manifest = try manifestBuilder.build(for: candidateURL, authorizedRoot: candidateURL)
-        guard candidate.manifestDigest == manifest.digest else {
-            throw Phase1OperationError.sourceChanged
-        }
-        let component = normalizer.normalize(candidate.name)
-        guard !component.isEmpty else {
-            throw Phase1OperationError.candidateUnavailable
-        }
-        let localDirectory = SkillsHubMetadataStore(fileManager: fileManager)
-            .rootLayout(for: rootURL)
-            .localDirectory
-        let access = FileAccessService(fileManager: fileManager)
-        guard !access.isSymlink(localDirectory),
-              fileManager.fileExists(atPath: localDirectory.path) else {
-            throw Phase1OperationError.targetConflict(localDirectory.path)
-        }
-        let target = localDirectory.appendingPathComponent(component, isDirectory: true)
-        guard !access.isSymlink(target), access.linkConflict(at: target, expectedDestination: target) == nil else {
-            throw Phase1OperationError.targetConflict(target.path)
-        }
-        let factDigest = SHA256Digest.hex(
-            Data("\(snapshot.metadataDigest)|\(candidate.candidateID)|\(manifest.digest)|\(target.path)".utf8)
-        )
-        let operationID = UUID()
-        let steps = [
-            "Recheck source manifest and empty target",
-            "Copy into operation-owned staging",
-            "Verify staging manifest and publish by rename",
-            "Commit metadata with expected generation",
-            "Observe source and managed copy"
-        ]
-        let expectedWrites = [
-            ".skillshub-staging/\(operationID.uuidString)",
-            target.path,
-            ".skillshub.json",
-            ".skillshub.operations.jsonl"
-        ]
-        let excludedActions = [
-            "The original source is not modified",
-            "No Agent relationship is enabled",
-            "No Skill, script, npm command, or build command is executed"
-        ]
-        return try finalizedPlan(
-            Phase1OperationPlan(
-                id: operationID,
-                kind: .publishManagedCopy,
-                rootPath: rootURL.path,
-                expectedGeneration: snapshot.generation,
-                metadataDigest: snapshot.metadataDigest,
-                factDigest: factDigest,
-                planDigest: "",
-                createdAt: Date(),
-                source: source,
-                candidates: [],
-                observations: [],
-                selectedCandidate: candidate,
-                sourceCandidatePath: candidateURL.path,
-                sourceManifest: manifest,
-                assetID: assetID,
-                targetPath: target.path,
-                steps: steps,
-                expectedWrites: expectedWrites,
-                excludedActions: excludedActions,
-                compensationPaths: [
-                    rootURL.appendingPathComponent(".skillshub-staging/\(operationID.uuidString)").path,
-                    target.path
-                ],
-                metadataFileIdentity: snapshot.metadataFileIdentity,
-                metadataParentIdentity: snapshot.metadataParentIdentity
-            )
-        )
-    }
-
     func confirmation(for plan: Phase1OperationPlan) -> Phase1ConfirmationToken {
         Phase1ConfirmationToken(
             id: UUID(),
@@ -990,7 +804,6 @@ actor Phase1OperationCoordinator {
     private let faultInjection: Phase1OperationFaultInjection?
     private let rootMutationOwner: RootMutationOwner
     private var consumedConfirmationIDs: Set<UUID> = []
-    private var cancelledPlanIDs: Set<UUID> = []
 
     init(
         metadataStore: SkillsHubMetadataStore,
@@ -1025,6 +838,9 @@ actor Phase1OperationCoordinator {
         var events: [Phase1TaskEvent] = []
         let objectID = operationObjectID(for: plan)
         do {
+            guard plan.kind != .registerLocalSource, plan.kind != .publishManagedCopy else {
+                throw Phase1OperationError.invalidPlan
+            }
             let journal = Phase1OperationJournal(rootURL: URL(fileURLWithPath: plan.rootPath), fileManager: fileManager, progress: progress)
             try validate(plan: plan, confirmation: confirmation, journal: journal)
             try preflight(plan: plan)
@@ -1047,7 +863,7 @@ actor Phase1OperationCoordinator {
                 phase: .waitingConfirmation,
                 result: plan.kind == .initializeRoot
                     ? "establishment-authorized"
-                    : (plan.kind == .importLocalSource || plan.kind == .importGitHubSource ? "source-import-authorized" : "confirmed"),
+                    : "source-import-authorized",
                 confirmationTokenID: confirmation.id
             )
             consumedConfirmationIDs.insert(confirmation.id)
@@ -1055,7 +871,7 @@ actor Phase1OperationCoordinator {
                 .waitingConfirmation,
                 plan.kind == .initializeRoot
                     ? "Root establishment authorized."
-                    : (plan.kind == .importLocalSource || plan.kind == .importGitHubSource ? "Source import authorized." : "Plan confirmed.")
+                    : "Source import authorized."
             ))
 
             switch plan.kind {
@@ -1075,28 +891,13 @@ actor Phase1OperationCoordinator {
                     sequence: &sequence,
                     events: &events
                 )
-            case .registerLocalSource:
-                return try commitSourceRegistration(
-                    plan: plan,
-                    journal: journal,
-                    objectID: objectID,
-                    sequence: &sequence,
-                    events: &events
-                )
-            case .publishManagedCopy:
-                return try commitManagedCopy(
-                    plan: plan,
-                    journal: journal,
-                    objectID: objectID,
-                    sequence: &sequence,
-                    events: &events
-                )
+            case .registerLocalSource, .publishManagedCopy:
+                throw Phase1OperationError.invalidPlan
             }
         } catch {
             events.append(event(.needsAttention, SkillsHubLocalization.errorPresentation(for: error)))
             return Phase1OperationResult(
                 snapshot: plan.kind == .initializeRoot ? nil : try? metadataStore.loadCurrentSnapshot(from: URL(fileURLWithPath: plan.rootPath)),
-                installedSkill: nil,
                 task: task(
                     plan: plan,
                     objectID: objectID,
@@ -1107,23 +908,6 @@ actor Phase1OperationCoordinator {
                 succeeded: false
             )
         }
-    }
-
-    func recoveredTasks(rootURL: URL) -> [Phase1TaskRecord] {
-        (try? Phase1OperationJournal(rootURL: rootURL, fileManager: fileManager).recoverTasks()) ?? []
-    }
-
-    func cancel(plan: Phase1OperationPlan) -> Phase1TaskRecord {
-        cancelledPlanIDs.insert(plan.id)
-        let objectID = operationObjectID(for: plan)
-        let message: LocalizedMessage = "Cancelled before confirmation; no authorized write occurred."
-        return task(
-            plan: plan,
-            objectID: objectID,
-            phase: .completed,
-            result: message,
-            events: [event(.completed, message)]
-        )
     }
 
     private func commitRootInitialization(
@@ -1259,7 +1043,6 @@ actor Phase1OperationCoordinator {
         events.append(event(.completed, "Root established from the authorized plan."))
         return Phase1OperationResult(
             snapshot: verifiedSnapshot,
-            installedSkill: nil,
             task: task(
                 plan: plan,
                 objectID: objectID,
@@ -1534,7 +1317,6 @@ actor Phase1OperationCoordinator {
             events.append(event(.needsAttention, "Source metadata committed, but final observation evidence is incomplete: \(error)"))
             return Phase1OperationResult(
                 snapshot: snapshot,
-                installedSkill: installed.first,
                 task: task(
                     plan: plan,
                     objectID: objectID,
@@ -1547,258 +1329,7 @@ actor Phase1OperationCoordinator {
         }
         return Phase1OperationResult(
             snapshot: snapshot,
-            installedSkill: installed.first,
             task: task(plan: plan, objectID: objectID, phase: .completed, result: "Source imported.", events: events),
-            succeeded: true
-        )
-    }
-
-    private func commitSourceRegistration(
-        plan: Phase1OperationPlan,
-        journal: Phase1OperationJournal,
-        objectID: String,
-        sequence: inout Int,
-        events: inout [Phase1TaskEvent]
-    ) throws -> Phase1OperationResult {
-        guard let source = plan.source else {
-            throw Phase1OperationError.invalidPlan
-        }
-        let currentIndex = try observeSource(source, generation: plan.expectedGeneration)
-        guard currentIndex.source.contentFingerprint == source.contentFingerprint else {
-            throw Phase1OperationError.sourceChanged
-        }
-        try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepStarted, phase: .executing, result: "metadata-cas")
-        events.append(event(.executing, "Registering source metadata."))
-        let rootURL = URL(fileURLWithPath: plan.rootPath, isDirectory: true)
-        if faultInjection == .metadataCommitBeforeCAS {
-            throw Phase1OperationError.injectedFailure("metadata-commit-before-cas")
-        }
-        let expectedSnapshot = try currentSnapshot(matching: plan)
-        let snapshot = try metadataStore.commit(
-            at: rootURL,
-            expected: expectedSnapshot
-        ) { metadata in
-            guard !metadata.sources.contains(where: { existing in
-                existing.kind == .localDirectory && existing.localPath == source.localPath && existing.id != source.id
-            }) else {
-                throw Phase1OperationError.targetConflict(source.localPath ?? source.name)
-            }
-            metadata.sources.removeAll { $0.id == source.id }
-            metadata.sources.append(source)
-            metadata.availableSkills.removeAll { $0.sourceID == source.id }
-            metadata.availableSkills.append(contentsOf: plan.candidates)
-        }
-        do {
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepResult, phase: .executing, result: "metadata-committed")
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .phase, phase: .observing, result: "source-readback")
-            guard try metadataStore.loadCurrentSnapshot(from: rootURL) == snapshot else {
-                throw Phase1OperationError.staleFacts
-            }
-            let observed = try observeSource(source, generation: snapshot.generation)
-            guard observed.source.contentFingerprint == source.contentFingerprint else {
-                throw Phase1OperationError.sourceChanged
-            }
-            events.append(event(.observing, "Metadata read back at generation \(snapshot.generation)."))
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .phase, phase: .verifying, result: "source-verified")
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .final, phase: .completed, result: "source-registered")
-            try journal.verifyCompletedPlan(plan)
-            events.append(event(.verifying, "Source and candidate snapshot verified."))
-            events.append(event(.completed, "Source registered; no Skill was copied."))
-        } catch {
-            events.append(event(.needsAttention, "Source metadata committed, but final observation evidence is incomplete: \(error)"))
-            return Phase1OperationResult(
-                snapshot: snapshot,
-                installedSkill: nil,
-                task: task(
-                    plan: plan,
-                    objectID: objectID,
-                    phase: .needsAttention,
-                    result: "Source metadata committed; final journal evidence requires attention.",
-                    events: events
-                ),
-                succeeded: false
-            )
-        }
-        return Phase1OperationResult(
-            snapshot: snapshot,
-            installedSkill: nil,
-            task: task(plan: plan, objectID: objectID, phase: .completed, result: "Source registered.", events: events),
-            succeeded: true
-        )
-    }
-
-    private func commitManagedCopy(
-        plan: Phase1OperationPlan,
-        journal: Phase1OperationJournal,
-        objectID: String,
-        sequence: inout Int,
-        events: inout [Phase1TaskEvent]
-    ) throws -> Phase1OperationResult {
-        guard let candidate = plan.selectedCandidate,
-              let source = plan.source,
-              let sourcePath = plan.sourceCandidatePath,
-              let plannedManifest = plan.sourceManifest,
-              let targetPath = plan.targetPath,
-              let assetID = plan.assetID
-        else {
-            throw Phase1OperationError.invalidPlan
-        }
-        let rootURL = URL(fileURLWithPath: plan.rootPath, isDirectory: true)
-        let sourceURL = try managedCopySourceURL(candidate: candidate, source: source, fileManager: fileManager)
-        guard sourceURL.path == sourcePath else { throw Phase1OperationError.invalidPlan }
-        let targetURL = URL(fileURLWithPath: targetPath, isDirectory: true)
-        let currentManifest = try manifestBuilder.build(for: sourceURL, authorizedRoot: sourceURL)
-        guard currentManifest.digest == plannedManifest.digest else {
-            throw Phase1OperationError.sourceChanged
-        }
-        let access = FileAccessService(fileManager: fileManager)
-        if access.isSymlink(targetURL) || access.linkConflict(at: targetURL, expectedDestination: targetURL) != nil {
-            throw Phase1OperationError.targetConflict(targetPath)
-        }
-
-        let layout = metadataStore.rootLayout(for: rootURL)
-        let stagingRoot = layout.operationStagingDirectory.appendingPathComponent(plan.id.uuidString, isDirectory: true)
-        let stagingAsset = stagingRoot.appendingPathComponent("asset", isDirectory: true)
-        try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepStarted, phase: .executing, result: "staging-copy")
-        try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
-        let stagingIdentity = try directoryIdentity(stagingRoot)
-        var stagingManifest: ContentManifest?
-        var stagingNeedsCleanup = true
-        defer {
-            if stagingNeedsCleanup {
-                do {
-                    try removeOwnedStaging(stagingRoot, identity: stagingIdentity, manifest: stagingManifest, plan: plan)
-                    try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .compensation, phase: .needsAttention, result: "staging-removed")
-                } catch {
-                    events.append(event(.needsAttention, "Operation staging was preserved because cleanup could not be verified: \(error)"))
-                }
-            }
-        }
-
-        events.append(event(.executing, "Copying the candidate into operation staging."))
-        try fileManager.copyItem(at: sourceURL, to: stagingAsset)
-        stagingManifest = try manifestBuilder.build(for: stagingAsset, authorizedRoot: stagingAsset)
-        if faultInjection == .afterStagingCopy {
-            throw Phase1OperationError.injectedFailure("after-staging-copy")
-        }
-        guard stagingManifest?.digest == plannedManifest.digest else {
-            throw Phase1OperationError.stagingVerificationFailed
-        }
-        let sourceAfterCopy = try managedCopySourceURL(candidate: candidate, source: source, fileManager: fileManager)
-        guard try manifestBuilder.build(for: sourceAfterCopy, authorizedRoot: sourceAfterCopy).digest == plannedManifest.digest else {
-            throw Phase1OperationError.sourceChanged
-        }
-        try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepResult, phase: .executing, result: "staging-verified")
-        try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepStarted, phase: .executing, result: "target-publish")
-        guard !access.isSymlink(targetURL.deletingLastPathComponent()),
-              !access.isSymlink(targetURL), access.linkConflict(at: targetURL, expectedDestination: targetURL) == nil else {
-            throw Phase1OperationError.targetConflict(targetPath)
-        }
-        if faultInjection == .beforeTargetPublish {
-            throw Phase1OperationError.injectedFailure("before-target-publish")
-        }
-        let publishedIdentity = try directoryIdentity(stagingAsset)
-        guard publishedIdentity.volumeNumber == (try directoryIdentity(targetURL.deletingLastPathComponent())).volumeNumber else {
-            throw Phase1OperationError.targetConflict(targetPath)
-        }
-        try fileManager.moveItem(at: stagingAsset, to: targetURL)
-        try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepResult, phase: .executing, result: "target-published")
-
-        let installed = InstalledSkill(
-            id: normalizerID(candidate.name),
-            sourceID: candidate.sourceID,
-            name: candidate.name,
-            description: candidate.description,
-            installedPath: targetURL.path,
-            sourceKind: .localDirectory,
-            validation: candidate.validation,
-            purpose: nil,
-            tagIDs: [],
-            installedAt: Date(),
-            assetID: assetID,
-            candidateID: candidate.candidateID,
-            canonicalPathComponent: targetURL.lastPathComponent,
-            currentRevision: plannedManifest.digest,
-            manifestDigest: plannedManifest.digest,
-            managedGeneration: plan.expectedGeneration + 1
-        )
-
-        let snapshot: RootSnapshot
-        do {
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepStarted, phase: .executing, result: "metadata-cas")
-            if faultInjection == .metadataCommitBeforeCAS {
-                throw Phase1OperationError.injectedFailure("metadata-commit-before-cas")
-            }
-            snapshot = try metadataStore.commit(
-                at: rootURL,
-                expected: try currentSnapshot(matching: plan)
-            ) { metadata in
-                guard !metadata.installedSkills.contains(where: { $0.assetID == assetID || $0.installedPath == targetPath }) else {
-                    throw Phase1OperationError.targetConflict(targetPath)
-                }
-                metadata.installedSkills.append(installed)
-            }
-        } catch {
-            let publishedManifest = try? manifestBuilder.build(for: targetURL, authorizedRoot: targetURL)
-            let current = try? metadataStore.loadCurrentSnapshot(from: rootURL)
-            guard plan.compensationPaths?.contains(targetPath) == true,
-                  (try? directoryIdentity(targetURL)) == publishedIdentity,
-                  publishedManifest?.digest == plannedManifest.digest,
-                  let current,
-                  !current.metadata.installedSkills.contains(where: { $0.assetID == assetID || $0.installedPath == targetPath }) else {
-                stagingNeedsCleanup = false
-                throw Phase1OperationError.compensationFailed(targetPath)
-            }
-            do {
-                try fileManager.removeItem(at: targetURL)
-                try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .compensation, phase: .needsAttention, result: "published-target-removed")
-            } catch {
-                stagingNeedsCleanup = false
-                throw Phase1OperationError.compensationFailed(targetPath)
-            }
-            throw Phase1OperationError.metadataCommitFailed(String(describing: error))
-        }
-
-        do {
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .stepResult, phase: .executing, result: "metadata-committed")
-            if faultInjection == .afterMetadataCommit {
-                throw Phase1OperationError.injectedFailure("after-metadata-commit")
-            }
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .phase, phase: .observing, result: "managed-readback")
-            events.append(event(.observing, "Managed target and original source were read back."))
-            let targetManifest = try manifestBuilder.build(for: targetURL, authorizedRoot: targetURL)
-            let observedSource = try managedCopySourceURL(candidate: candidate, source: source, fileManager: fileManager)
-            let sourceAfter = try manifestBuilder.build(for: observedSource, authorizedRoot: observedSource)
-            guard targetManifest.digest == plannedManifest.digest, sourceAfter.digest == plannedManifest.digest,
-                  try metadataStore.loadCurrentSnapshot(from: rootURL) == snapshot else {
-                throw Phase1OperationError.stagingVerificationFailed
-            }
-            try removeOwnedStaging(stagingRoot, identity: stagingIdentity, manifest: nil, plan: plan)
-            stagingNeedsCleanup = false
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .phase, phase: .verifying, result: "managed-verified")
-            try append(journal: journal, plan: plan, objectID: objectID, sequence: &sequence, event: .final, phase: .completed, result: "managed-copy-verified")
-            try journal.verifyCompletedPlan(plan)
-            events.append(event(.verifying, "Manifest, metadata, and source preservation verified."))
-            events.append(event(.completed, "One canonical managed copy was published."))
-        } catch {
-            events.append(event(.needsAttention, "Managed metadata committed, but final observation evidence is incomplete: \(error)"))
-            return Phase1OperationResult(
-                snapshot: snapshot,
-                installedSkill: installed,
-                task: task(
-                    plan: plan,
-                    objectID: objectID,
-                    phase: .needsAttention,
-                    result: "Managed asset committed; final observation requires attention.",
-                    events: events
-                ),
-                succeeded: false
-            )
-        }
-        return Phase1OperationResult(
-            snapshot: snapshot,
-            installedSkill: installed,
-            task: task(plan: plan, objectID: objectID, phase: .completed, result: "Managed copy published.", events: events),
             succeeded: true
         )
     }
@@ -1811,22 +1342,9 @@ actor Phase1OperationCoordinator {
               confirmation.factDigest == plan.factDigest else {
             throw Phase1OperationError.confirmationMismatch
         }
-        guard !consumedConfirmationIDs.contains(confirmation.id),
-              !cancelledPlanIDs.contains(plan.id) else {
+        guard !consumedConfirmationIDs.contains(confirmation.id) else {
             throw Phase1OperationError.confirmationReplayed
         }
-    }
-
-    private func observeSource(_ source: SkillSource, generation: UInt64) throws -> LocalSourceIndexResult {
-        guard let path = source.localPath else { throw Phase1OperationError.invalidPlan }
-        let directory = URL(fileURLWithPath: path, isDirectory: true)
-        guard let identity = source.directoryIdentity,
-              (try? directoryIdentity(directory)) == identity else {
-            throw Phase1OperationError.sourceChanged
-        }
-        return LocalSourceIndexer(fileManager: fileManager).index(
-            directory: directory, sourceID: source.id, generation: generation
-        )
     }
 
     private func directoryIdentity(_ url: URL) throws -> TargetFileIdentity {
@@ -1846,7 +1364,7 @@ actor Phase1OperationCoordinator {
         }
         let children = try fileManager.contentsOfDirectory(atPath: root.path)
         if !children.isEmpty {
-            let childName = plan.kind == .importLocalSource || plan.kind == .importGitHubSource ? "source" : "asset"
+            let childName = "source"
             let asset = root.appendingPathComponent(childName)
             guard children == [childName], let manifest,
                   try manifestBuilder.build(
@@ -1881,13 +1399,10 @@ actor Phase1OperationCoordinator {
                 layout.operationRecoveryDirectory.appendingPathComponent(plan.id.uuidString).path,
                 plan.targetPath ?? ""
             ]
-        case .publishManagedCopy:
-            expectedCompensation = [
-                layout.operationStagingDirectory.appendingPathComponent(plan.id.uuidString).path,
-                plan.targetPath ?? ""
-            ]
-        case .initializeRoot, .registerLocalSource:
+        case .initializeRoot:
             expectedCompensation = []
+        case .registerLocalSource, .publishManagedCopy:
+            throw Phase1OperationError.invalidPlan
         }
         guard plan.compensationPaths == expectedCompensation else {
             throw Phase1OperationError.invalidPlan
@@ -1971,46 +1486,8 @@ actor Phase1OperationCoordinator {
                   access.linkConflict(at: targetURL, expectedDestination: targetURL) == nil else {
                 throw Phase1OperationError.targetConflict(targetPath)
             }
-        case .registerLocalSource:
-            guard let source = plan.source else {
-                throw Phase1OperationError.invalidPlan
-            }
-            let current = try observeSource(source, generation: plan.expectedGeneration)
-            guard current.source.contentFingerprint == source.contentFingerprint else {
-                throw Phase1OperationError.sourceChanged
-            }
-        case .publishManagedCopy:
-            guard let candidate = plan.selectedCandidate,
-                  let source = plan.source,
-                  let sourcePath = plan.sourceCandidatePath,
-                  let plannedManifest = plan.sourceManifest,
-                  let targetPath = plan.targetPath else {
-                throw Phase1OperationError.invalidPlan
-            }
-            let sourceURL = try managedCopySourceURL(candidate: candidate, source: source, fileManager: fileManager)
-            guard sourceURL.path == sourcePath else { throw Phase1OperationError.invalidPlan }
-            let currentManifest = try manifestBuilder.build(for: sourceURL, authorizedRoot: sourceURL)
-            guard currentManifest.digest == plannedManifest.digest else {
-                throw Phase1OperationError.sourceChanged
-            }
-            let targetURL = URL(fileURLWithPath: targetPath, isDirectory: true)
-            let access = FileAccessService(fileManager: fileManager)
-            let staging = metadataStore.rootLayout(for: rootURL).operationStagingDirectory
-            if fileManager.fileExists(atPath: staging.path) || access.isSymlink(staging) {
-                _ = try directoryIdentity(staging)
-            }
-            let operationStaging = staging.appendingPathComponent(plan.id.uuidString)
-            guard !fileManager.fileExists(atPath: operationStaging.path), !access.isSymlink(operationStaging) else {
-                throw Phase1OperationError.targetConflict(operationStaging.path)
-            }
-            guard !access.isSymlink(targetURL.deletingLastPathComponent()),
-                  !access.isSymlink(targetURL),
-                  access.linkConflict(
-                at: targetURL,
-                expectedDestination: targetURL
-            ) == nil else {
-                throw Phase1OperationError.targetConflict(targetPath)
-            }
+        case .registerLocalSource, .publishManagedCopy:
+            throw Phase1OperationError.invalidPlan
         }
     }
 
@@ -2132,9 +1609,6 @@ actor Phase1OperationCoordinator {
         }
     }
 
-    private func normalizerID(_ name: String) -> String {
-        SkillIDNormalizer().normalize(name)
-    }
 }
 
 nonisolated final class Phase1OperationJournal {

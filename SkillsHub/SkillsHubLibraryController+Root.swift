@@ -5,10 +5,6 @@ extension SkillsHubLibraryController {
         rootURL != nil
     }
 
-    var rootPathDisplay: String {
-        rootURL?.path ?? localization.localized("No root selected", language: language)
-    }
-
     var settingsRootPathDisplay: String {
         rootURL?.path ?? suggestedRootURL.path
     }
@@ -477,11 +473,6 @@ extension SkillsHubLibraryController {
     func ensureRootSwitchAllowed(to requestedURL: URL) throws {
         let requestedPath = requestedURL.standardizedFileURL.path
         if rootURL?.standardizedFileURL.path == requestedPath { return }
-        if let plan = pendingPhase1OperationPlan {
-            throw SkillsHubLibraryFailure.invalidSource(
-                "Operation \(plan.id.uuidString) is still waiting for action. Open Operation and Recovery before switching the Root."
-            )
-        }
         if let task = phase1Tasks
             .filter({ $0.phase != .completed })
             .max(by: { $0.updatedAt < $1.updatedAt }) {
@@ -552,7 +543,6 @@ extension SkillsHubLibraryController {
                plan.expectedGeneration != rootSnapshot?.generation {
                 task.phase = .needsAttention
                 task.result = "Current facts changed; prepare a new plan."
-                if pendingPhase1OperationPlan?.id == task.id { pendingPhase1OperationPlan = nil }
             }
             if !phase1Tasks.contains(where: { $0.id == task.id })
                 || [.preparing, .executing, .observing, .verifying].contains(task.phase) {
@@ -804,11 +794,6 @@ let resolvedRootPath: String?
         }
     }
 
-    func ensuredAppContainerLayout() throws -> AppContainerLayout {
-        try metadataStore.ensureAppContainerLayout(at: appSupportURL)
-        return metadataStore.appContainerLayout(for: appSupportURL)
-    }
-
     private struct ReloadSnapshot {
         var availableSkills: [AvailableSkill]
         var installedSkills: [InstalledSkill]
@@ -825,7 +810,6 @@ let resolvedRootPath: String?
         var agentDetections: [AgentDetectionSnapshot]
         var agentFindings: [AgentDirectoryFinding]
         var rootSnapshot: RootSnapshot?
-        var pendingPhase1OperationPlan: Phase1OperationPlan?
         var phase1Tasks: [Phase1TaskRecord]
         var missingCatalogItemIDs: Set<String>
         var observedLocalSourceNames: Set<String>?
@@ -846,7 +830,6 @@ let resolvedRootPath: String?
             agentDetections = controller.agentDetections
             agentFindings = controller.agentFindings
             rootSnapshot = controller.rootSnapshot
-            pendingPhase1OperationPlan = controller.pendingPhase1OperationPlan
             phase1Tasks = controller.phase1Tasks
             missingCatalogItemIDs = controller.missingCatalogItemIDs
             observedLocalSourceNames = controller.observedLocalSourceNames
@@ -868,7 +851,6 @@ let resolvedRootPath: String?
             controller.agentDetections = agentDetections
             controller.agentFindings = agentFindings
             controller.rootSnapshot = rootSnapshot
-            controller.pendingPhase1OperationPlan = pendingPhase1OperationPlan
             controller.phase1Tasks = phase1Tasks
             controller.missingCatalogItemIDs = missingCatalogItemIDs
             controller.observedLocalSourceNames = observedLocalSourceNames

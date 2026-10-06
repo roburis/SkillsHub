@@ -43,7 +43,6 @@ struct AgentLinkMatrixTests {
             authorization: StartupAccessBookmarkResolution(url: target, isStale: false)
         )
         #expect(qualification.allowsManagedWrite)
-        #expect(qualification.allowsVerifiedConsistent)
     }
 
     enum ProfileQualificationSample: CaseIterable {
@@ -51,7 +50,6 @@ struct AgentLinkMatrixTests {
         case validClaudeCode
         case missing
         case stale
-        case invalidDefinition
         case invalidSchema
         case scopeMismatch
         case additionalAgent
@@ -84,10 +82,6 @@ struct AgentLinkMatrixTests {
             let current = try #require(registry.profile(for: .codex, scope: .global))
             let stale = profile(from: current, profileVersion: 0)
             #expect(registry.qualification(of: stale, for: .codex, scope: .global) == .unavailable(.profileStale))
-        case .invalidDefinition:
-            let current = try #require(registry.profile(for: .codex, scope: .global))
-            let invalid = profile(from: current, globalTargetRule: .claudeCodeSkillsDirectory)
-            #expect(registry.qualification(of: invalid, for: .codex, scope: .global) == .unavailable(.profileInvalid))
         case .invalidSchema:
             let current = try #require(registry.profile(for: .codex, scope: .global))
             let invalid = profile(from: current, schemaVersion: AgentCapabilityProfileRegistry.currentSchemaVersion + 1)
@@ -98,33 +92,6 @@ struct AgentLinkMatrixTests {
         case .additionalAgent:
             #expect(registry.qualification(for: .cursor, scope: .global) == .unavailable(.unsupportedAgent))
         }
-    }
-
-    @Test(arguments: [
-        (AgentKind.codex, "skillshub.agent-profile.codex.global@1", AgentGlobalTargetRule.codexSkillsDirectory, "phase-007/T-008/codex-global@1"),
-        (AgentKind.claudeCode, "skillshub.agent-profile.claude-code.global@1", AgentGlobalTargetRule.claudeCodeSkillsDirectory, "phase-007/T-008/claude-code-global@1")
-    ])
-    func builtInProfilesExposeCompleteVersionedContracts(
-        agent: AgentKind,
-        profileID: String,
-        targetRule: AgentGlobalTargetRule,
-        evidenceLocation: String
-    ) throws {
-        let profile = try #require(AgentCapabilityProfileRegistry.builtIn.profile(for: agent, scope: .global))
-
-        #expect(profile.profileID == profileID)
-        #expect(profile.profileVersion == 1)
-        #expect(profile.schemaVersion == AgentCapabilityProfileRegistry.currentSchemaVersion)
-        #expect(profile.agent == agent)
-        #expect(profile.scope == .global)
-        #expect(profile.globalTargetRule == targetRule)
-        #expect(profile.linkNamingRule == .validatedManifestIdentity)
-        #expect(profile.allowedDirectActions == Set(AgentDirectAction.allCases))
-        #expect(profile.ownershipRule == .managedEvidenceAndExactNodeIdentity)
-        #expect(profile.observationRule == .currentTargetAndCanonicalFacts)
-        #expect(profile.verificationRule == .completeCurrentObservation)
-        #expect(profile.invalidationConditions == Set(AgentProfileInvalidationCondition.allCases))
-        #expect(profile.evidenceLocation == evidenceLocation)
     }
 
     @Test(
@@ -208,30 +175,20 @@ struct AgentLinkMatrixTests {
         #expect(qualification.candidates == candidates.map(\.standardizedFileURL).sorted { $0.path < $1.path })
         #expect(qualification.authorizationStatus == expectedAuthorizationStatus)
         #expect(qualification.allowsManagedWrite == (expectedFailure == nil))
-        #expect(qualification.allowsVerifiedConsistent == (expectedFailure == nil))
         #expect(qualification.target == expectedTarget)
     }
 
     private func profile(
         from source: AgentCapabilityProfileDefinition,
         profileVersion: Int? = nil,
-        schemaVersion: Int? = nil,
-        globalTargetRule: AgentGlobalTargetRule? = nil
+        schemaVersion: Int? = nil
     ) -> AgentCapabilityProfileDefinition {
         AgentCapabilityProfileDefinition(
             profileID: source.profileID,
             profileVersion: profileVersion ?? source.profileVersion,
             schemaVersion: schemaVersion ?? source.schemaVersion,
             agent: source.agent,
-            scope: source.scope,
-            globalTargetRule: globalTargetRule ?? source.globalTargetRule,
-            linkNamingRule: source.linkNamingRule,
-            allowedDirectActions: source.allowedDirectActions,
-            ownershipRule: source.ownershipRule,
-            observationRule: source.observationRule,
-            verificationRule: source.verificationRule,
-            invalidationConditions: source.invalidationConditions,
-            evidenceLocation: source.evidenceLocation
+            scope: source.scope
         )
     }
 
@@ -248,31 +205,6 @@ struct AgentLinkMatrixTests {
         #expect(qualification.agent == nil)
         #expect(qualification.allowsManagedWrite)
         #expect(qualification.target == target)
-    }
-
-    @Test func matrixSummarizesParentChildMixedAndDisabledAgentStates() throws {
-        let parent = InstallableEntry(
-            id: "roles-skills",
-            name: "roles-skills",
-            path: "/root/roles-skills",
-            kind: .composite,
-            validation: .valid,
-            children: [
-                InstallableEntry(id: "workflow-apple-feature-delivery", name: "workflow-apple-feature-delivery", path: "/root/roles-skills/workflows/apple", kind: .skill, validation: .valid)
-            ]
-        )
-        let service = AgentLinkMatrixService()
-        let childLink = AgentLinkRecord(agent: .codex, scope: .global, skillID: "workflow-apple-feature-delivery", linkPath: "/agent/workflow", targetPath: "/root/roles-skills/workflows/apple")
-
-        var state = service.state(for: parent, agent: .codex, links: [childLink], agentTargetExists: true)
-        #expect(state == .partialChildren(count: 1))
-
-        let parentLink = AgentLinkRecord(agent: .codex, scope: .global, skillID: "roles-skills", linkPath: "/agent/roles-skills", targetPath: "/root/roles-skills")
-        state = service.state(for: parent, agent: .codex, links: [parentLink, childLink], agentTargetExists: true)
-        #expect(state == .linkedWithChildren(count: 1))
-
-        state = service.state(for: parent, agent: .claudeCode, links: [], agentTargetExists: false)
-        #expect(state == .disabled)
     }
 
 }

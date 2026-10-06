@@ -584,22 +584,22 @@ struct SourceAndLifecycleServicesTests {
         #expect(result.availableSkills.isEmpty)
     }
 
-    @Test func sourceRegistrationPlannerRejectsUnplannableRootObservation() throws {
+    @Test func sourceImportPlannerRejectsUnplannableRootObservation() throws {
         let root = try temporaryDirectory()
-        let missingSource = root.appendingPathComponent("missing-source", isDirectory: true)
+        let missingSource = root.appendingPathExtension("missing-source")
         let metadata = SkillsHubMetadata(rootConfig: RootConfig(rootPath: root.path))
         let snapshot = RootSnapshot(metadata: metadata, generation: 0, metadataDigest: "metadata")
 
         #expect(throws: Phase1OperationError.candidateUnavailable) {
-            _ = try Phase1OperationPlanner().sourceRegistrationPlan(
-                directory: missingSource,
+            _ = try Phase1OperationPlanner().localSourceImportPlan(
+                directory: missingSource, rootURL: root,
                 snapshot: snapshot,
                 sourceID: UUID()
             )
         }
     }
 
-    @Test func sourceRegistrationPlannerRejectsACompletelyScannedEmptySource() throws {
+    @Test func sourceImportPlannerRejectsACompletelyScannedEmptySource() throws {
         let fixture = try sourceDiscoveryDirectory()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let root = fixture.appendingPathComponent("root", isDirectory: true)
@@ -613,8 +613,8 @@ struct SourceAndLifecycleServicesTests {
         )
 
         #expect(throws: Phase1OperationError.candidateUnavailable) {
-            _ = try Phase1OperationPlanner().sourceRegistrationPlan(
-                directory: source,
+            _ = try Phase1OperationPlanner().localSourceImportPlan(
+                directory: source, rootURL: root,
                 snapshot: snapshot,
                 sourceID: UUID()
             )
@@ -755,7 +755,7 @@ struct SourceAndLifecycleServicesTests {
     }
 
     @Test(arguments: [".", "local"])
-    func localSourceRegistrationRejectsRootStorage(relativePath: String) throws {
+    func localSourceImportRejectsRootStorage(relativePath: String) throws {
         let fixture = try sourceDiscoveryDirectory()
         defer { try? FileManager.default.removeItem(at: fixture) }
         let root = fixture.appendingPathComponent("root")
@@ -766,8 +766,8 @@ struct SourceAndLifecycleServicesTests {
         )
 
         #expect(throws: Phase1OperationError.candidateUnavailable) {
-            _ = try Phase1OperationPlanner().sourceRegistrationPlan(
-                directory: root.appendingPathComponent(relativePath), snapshot: snapshot
+            _ = try Phase1OperationPlanner().localSourceImportPlan(
+                directory: root.appendingPathComponent(relativePath), rootURL: root, snapshot: snapshot
             )
         }
     }
@@ -1194,13 +1194,10 @@ struct SourceAndLifecycleServicesTests {
         #expect(entryReads == 2)
     }
 
-    @Test func managedCopyPlannerRejectsManifestReadFailure() throws {
+    @Test func sourceImportPlannerRejectsManifestReadFailure() throws {
         let sourceRoot = try temporaryDirectory()
         let candidateURL = sourceRoot.appendingPathComponent("review", isDirectory: true)
         try writeSkill(candidateURL, name: "Review", description: "Reviews local skills safely.")
-        let indexed = LocalSourceIndexer().index(directory: sourceRoot, sourceID: UUID())
-        let source = indexed.source
-        let candidate = try #require(indexed.availableSkills.first)
         let skillFile = candidateURL.appendingPathComponent("SKILL.md")
         let live = ManifestReadAccess()
         let observedSkillFile = try #require(
@@ -1225,23 +1222,11 @@ struct SourceAndLifecycleServicesTests {
         )) {
             _ = try Phase1OperationPlanner(
                 manifestBuilder: ContentManifestBuilder(readAccess: contentDenied)
-            ).managedCopyPlan(
-                candidate: candidate,
-                source: source,
-                rootURL: root,
-                snapshot: snapshot
+            ).localSourceImportPlan(
+                directory: sourceRoot, rootURL: root, snapshot: snapshot
             )
         }
 
-        try Data("drift".utf8).write(to: candidateURL.appendingPathComponent("changed.txt"))
-        #expect(throws: Phase1OperationError.sourceChanged) {
-            _ = try Phase1OperationPlanner().managedCopyPlan(
-                candidate: candidate,
-                source: source,
-                rootURL: root,
-                snapshot: snapshot
-            )
-        }
     }
 
     @Test func userHomeResolverPrefersLoginHomeOverSandboxContainerHome() {

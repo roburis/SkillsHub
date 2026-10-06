@@ -344,10 +344,6 @@ nonisolated final class SkillsHubLocalStateStore {
         rootURL.appendingPathComponent(".skillshub.local.json")
     }
 
-    func operationLogFile(for rootURL: URL) -> URL {
-        rootURL.appendingPathComponent(".skillshub.operations.jsonl")
-    }
-
     func load(from rootURL: URL) throws -> SkillsHubLocalState {
         let file = localStateFile(for: rootURL)
         guard fileManager.fileExists(atPath: file.path) else {
@@ -596,11 +592,6 @@ nonisolated final class AgentDirectoryAuditService {
             )
         }
         return builtIns + custom
-    }
-
-    func shortID(originAgent: String, originPath: String, skillFileHash: String?, entryName: String) -> String {
-        let basis = [originAgent, normalizedPath(URL(fileURLWithPath: originPath)), skillFileHash ?? entryName].joined(separator: "|")
-        return String(Self.sha256Hex(Data(basis.utf8)).prefix(8))
     }
 
     private func findingsForEntry(

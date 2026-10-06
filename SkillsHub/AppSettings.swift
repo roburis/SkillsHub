@@ -1,12 +1,5 @@
 import Foundation
 
-nonisolated struct AppSettingsState: Equatable {
-    var rootPath: String
-    var language: AppLanguage
-    var cachePolicyName: String
-    var customRootWarning: String?
-}
-
 nonisolated final class AppLanguagePreferences {
     private static let key = "appLanguage"
     private let defaults: UserDefaults
@@ -32,14 +25,4 @@ nonisolated final class AppSettingsService {
         }
         return try String(contentsOf: url, encoding: .utf8)
     }
-
-    func state(rootPath: String, defaultRootPath: String = UserHomeDirectoryResolver.currentHomeDirectory().appendingPathComponent("skills-hub").path, language: AppLanguage, cachePolicyName: String) -> AppSettingsState {
-        AppSettingsState(
-            rootPath: rootPath,
-            language: language,
-            cachePolicyName: cachePolicyName,
-            customRootWarning: rootPath == defaultRootPath ? nil : "Custom root is only applied inside Skills Hub."
-        )
-    }
-
 }

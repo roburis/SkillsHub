@@ -138,7 +138,6 @@ struct SkillsHubLibraryControllerTests {
         await controller.waitForPendingRechecks()
 
         #expect(controller.hasRoot)
-        #expect(controller.rootPathDisplay == root.path)
         // T-006: connecting a Root discovers manual local/ content and registers it as
         // a manual-filesystem skill, but never enables it for any Agent and never
         // records a source (REQ-003 auto-discovery, REQ-014 re-check).
@@ -169,17 +168,8 @@ struct SkillsHubLibraryControllerTests {
         try await connectInitializedTestRoot(controller, at: root)
         await controller.refreshAgentLightScan(checkInstallation: true)
 
-        #expect(controller.rootPathDisplay == root.path)
         #expect(controller.settingsRootPathDisplay == root.path)
         #expect(controller.suggestedRootURL.path == root.path)
-    }
-
-    @Test func settingsStateTreatsControllerDefaultRootAsDefault() {
-        let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
-        let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home)
-
-        #expect(controller.settingsState.rootPath == "/Users/test/skills-hub")
-        #expect(controller.settingsState.customRootWarning == nil)
     }
 
     @Test func localRootDiscoveryExposesCandidatesWithoutExternalSourceOrEnablement() async throws {
@@ -322,38 +312,6 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.settingsRootPathDisplay == defaultRoot.path)
     }
 
-    @Test func startupAuthorizationRequestIncludesDefaultRootAndDetectedBuiltInAgentsWithoutWriteAccess() async throws {
-        let home = try temporaryDirectory()
-        let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
-        let codexMarker = home.appendingPathComponent(".codex", isDirectory: true)
-        let claudeSkills = home.appendingPathComponent(".claude/skills", isDirectory: true)
-        try FileManager.default.createDirectory(at: defaultRoot, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: codexMarker, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: claudeSkills, withIntermediateDirectories: true)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: defaultRoot.path)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: codexMarker.path)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: home.appendingPathComponent(".claude", isDirectory: true).path)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: claudeSkills.path)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: defaultRoot.path)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codexMarker.path)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: home.appendingPathComponent(".claude", isDirectory: true).path)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claudeSkills.path)
-        }
-
-        let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home, agentEnvironment: [:])
-        try await controller.bootstrapDefaultRootIfPresent()
-
-        #expect(controller.hasRoot == false)
-        let request = try #require(try await controller.startupAuthorizationRequest())
-        #expect(request.targets.map(\.id) == ["default-root", "agent-claudeCode", "agent-codex"])
-        #expect(request.targets.first?.authorizationURL.path == defaultRoot.path)
-        let claudeTarget = try #require(request.targets.first { $0.id == "agent-claudeCode" })
-        #expect(claudeTarget.authorizationURL.path == claudeSkills.path)
-        let codexTarget = try #require(request.targets.first { $0.id == "agent-codex" })
-        #expect(codexTarget.authorizationURL.path == codexMarker.path)
-    }
-
     @Test func startupAuthorizationRestoresPersistedDefaultRootAccessWithoutPromptingAgain() async throws {
         let home = try temporaryDirectory()
         let defaultRoot = home.appendingPathComponent("skills-hub", isDirectory: true)
@@ -368,8 +326,6 @@ struct SkillsHubLibraryControllerTests {
         try await controller.bootstrapDefaultRootIfPresent()
 
         #expect(controller.hasRoot)
-        let request = try await controller.startupAuthorizationRequest()
-        #expect(request == nil)
         #expect(accessStore.restoredPaths.contains(defaultRoot.standardizedFileURL.path))
     }
 
@@ -400,26 +356,6 @@ struct SkillsHubLibraryControllerTests {
         #expect(store.savedPaths.isEmpty)
     }
 
-    @Test func startupAuthorizationSkipsBuiltInAgentWhenPersistedAccessRestores() async throws {
-        let root = try temporaryDirectory()
-        let home = try temporaryDirectory()
-        let codexMarker = home.appendingPathComponent(".codex", isDirectory: true)
-        try FileManager.default.createDirectory(at: codexMarker, withIntermediateDirectories: true)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: codexMarker.path)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codexMarker.path)
-        }
-        let accessStore = InMemoryStartupAccessStore(restorablePaths: [codexMarker.standardizedFileURL.path])
-        let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home, agentEnvironment: [:], startupAccessStore: accessStore)
-        try await connectInitializedTestRoot(controller, at: root)
-        await controller.refreshAgentLightScan(checkInstallation: true)
-
-        let request = try await controller.startupAuthorizationRequest()
-
-        #expect(request?.targets.contains(where: { $0.id == "agent-codex" }) != true)
-        #expect(accessStore.restoredPaths.contains(codexMarker.standardizedFileURL.path))
-    }
-
     @Test func rememberUserSelectedAccessRejectsSelectionWhenAuthorizationCannotBeRetained() throws {
         let selectedDirectory = try temporaryDirectory()
         let accessStore = InMemoryStartupAccessStore()
@@ -439,26 +375,6 @@ struct SkillsHubLibraryControllerTests {
         }
 
         #expect(accessStore.savedPaths.isEmpty)
-    }
-
-    @Test func authorizationTargetReturnsDetectedBuiltInAgentDirectoryNeedingAccess() async throws {
-        let root = try temporaryDirectory()
-        let home = try temporaryDirectory()
-        let codexMarker = home.appendingPathComponent(".codex", isDirectory: true)
-        try FileManager.default.createDirectory(at: codexMarker, withIntermediateDirectories: true)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: codexMarker.path)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codexMarker.path)
-        }
-
-        let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation), agentHomeDirectory: home, agentEnvironment: [:])
-        try await connectInitializedTestRoot(controller, at: root)
-        await controller.refreshAgentLightScan(checkInstallation: true)
-
-        let target = try await controller.authorizationTarget(for: .codex)
-
-        #expect(target?.id == "agent-codex")
-        #expect(target?.authorizationURL.path == codexMarker.path)
     }
 
     @Test func globalRelationActionUsesCoordinatorAndWritesOwnershipEvidence() async throws {

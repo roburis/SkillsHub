@@ -78,22 +78,10 @@ nonisolated struct RootLayout: Equatable {
 
     var localDirectory: URL
     var githubDirectory: URL
-    var skillsDirectory: URL
     var skillshubMetadataFile: URL
     var writeLockFile: URL
     var operationJournalFile: URL
     var operationRecoveryDirectory: URL
-    var operationStagingDirectory: URL
-
-    func installedEntryURL(for id: String) -> URL {
-        skillsDirectory.appendingPathComponent(id, isDirectory: true)
-    }
-}
-
-nonisolated struct AppContainerLayout: Equatable {
-    var cacheDirectory: URL
-    var indexesDirectory: URL
-    var logsDirectory: URL
 }
 
 nonisolated final class SkillsHubMetadataStore {
@@ -121,20 +109,10 @@ nonisolated final class SkillsHubMetadataStore {
         RootLayout(
             localDirectory: rootURL.appendingPathComponent("local", isDirectory: true),
             githubDirectory: rootURL.appendingPathComponent("github", isDirectory: true),
-            skillsDirectory: rootURL.appendingPathComponent("local", isDirectory: true),
             skillshubMetadataFile: rootURL.appendingPathComponent(".skillshub.json"),
             writeLockFile: rootURL.appendingPathComponent(RootLayout.writeLockFileName),
             operationJournalFile: rootURL.appendingPathComponent(".skillshub.operations.jsonl"),
-            operationRecoveryDirectory: rootURL.appendingPathComponent(".skillshub-operations", isDirectory: true),
-            operationStagingDirectory: rootURL.appendingPathComponent(".skillshub-staging", isDirectory: true)
-        )
-    }
-
-    func appContainerLayout(for appSupportURL: URL) -> AppContainerLayout {
-        AppContainerLayout(
-            cacheDirectory: appSupportURL.appendingPathComponent("Cache", isDirectory: true),
-            indexesDirectory: appSupportURL.appendingPathComponent("Indexes", isDirectory: true),
-            logsDirectory: appSupportURL.appendingPathComponent("Logs", isDirectory: true)
+            operationRecoveryDirectory: rootURL.appendingPathComponent(".skillshub-operations", isDirectory: true)
         )
     }
 
@@ -191,13 +169,6 @@ nonisolated final class SkillsHubMetadataStore {
             }
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-    }
-
-    func ensureAppContainerLayout(at appSupportURL: URL) throws {
-        let layout = appContainerLayout(for: appSupportURL)
-        try fileManager.createDirectory(at: layout.cacheDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: layout.indexesDirectory, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: layout.logsDirectory, withIntermediateDirectories: true)
     }
 
     func save(_ metadata: SkillsHubMetadata, to rootURL: URL) throws {

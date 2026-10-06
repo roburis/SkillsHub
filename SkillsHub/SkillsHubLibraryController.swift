@@ -140,7 +140,6 @@ final class SkillsHubLibraryController {
     var presentationVerifications: [String: VerificationRecord] = [:]
     var pendingRootInitialization: RootInspectionFacts?
     var lastRootInspectionResult: RootInspectionResult?
-    var pendingPhase1OperationPlan: Phase1OperationPlan?
     var sourceRecheckResults: [UUID: LocalizedMessage] = [:]
     var recheckingSourceIDs: Set<UUID> = []
     var sourceUpdateChecks: [UUID: Bool] = [:]
@@ -237,7 +236,6 @@ final class SkillsHubLibraryController {
         self.rootSnapshot = nil
         self.pendingRootInitialization = nil
         self.lastRootInspectionResult = nil
-        self.pendingPhase1OperationPlan = nil
         self.sourceUpdatePreview = nil
         self.sourceUpdateResult = nil
         self.sourceUpdateFailures = [:]
@@ -864,7 +862,7 @@ extension SkillsHubLibraryController {
                 ? AgentLinkService(relationPrimitiveHook: { point, _ in
                     if point == .afterMaterialIsolation { throw CocoaError(.fileWriteUnknown) }
                 }) : AgentLinkService(),
-            agentAuditService: AgentDirectoryAuditService { agent, _ in
+            agentAuditService: AgentDirectoryAuditService(installationPresence: { agent, _ in
                 guard agent == .codex || agent == .claudeCode else { return .absent }
                 if configuration.installationStatusFixture {
                     let value = try? String(contentsOf: configuration.runRoot.appendingPathComponent("installation-status"), encoding: .utf8)
@@ -888,7 +886,7 @@ extension SkillsHubLibraryController {
                         digest: "ui-fixture-installation-\(agent.rawValue)"
                     )
                 )
-            },
+            }),
             languagePreferences: languagePreferences,
             agentHomeDirectory: configuration.home,
             agentEnvironment: [:],

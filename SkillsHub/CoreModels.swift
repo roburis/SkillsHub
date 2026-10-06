@@ -461,14 +461,6 @@ nonisolated struct SkillValidationResult: Codable, Hashable {
     var messages: [ValidationMessage]
     var risks: [RiskMarker]
 
-    var canInstall: Bool {
-        status != .invalid
-    }
-
-    var canLink: Bool {
-        status != .invalid
-    }
-
     static let valid = SkillValidationResult(status: .valid, messages: [], risks: [])
 }
 

@@ -1,63 +1,17 @@
 import Foundation
 
-nonisolated enum AgentGlobalTargetRule: String, Codable, Hashable {
-    case codexSkillsDirectory
-    case claudeCodeSkillsDirectory
-}
-
-nonisolated enum AgentLinkNamingRule: String, Codable, Hashable {
-    case validatedManifestIdentity
-}
-
-nonisolated enum AgentDirectAction: String, Codable, CaseIterable, Hashable {
-    case enable
-    case disable
-}
-
-nonisolated enum AgentOwnershipRule: String, Codable, Hashable {
-    case managedEvidenceAndExactNodeIdentity
-}
-
-nonisolated enum AgentObservationRule: String, Codable, Hashable {
-    case currentTargetAndCanonicalFacts
-}
-
-nonisolated enum AgentVerificationRule: String, Codable, Hashable {
-    case completeCurrentObservation
-}
-
-nonisolated enum AgentProfileInvalidationCondition: String, Codable, CaseIterable, Hashable {
-    case profileIdentity
-    case profileVersion
-    case schemaVersion
-    case globalTarget
-    case authorization
-    case linkPath
-    case nodeFingerprint
-    case observationDigest
-}
-
 nonisolated struct AgentCapabilityProfileDefinition: Codable, Hashable {
     let profileID: String
     let profileVersion: Int
     let schemaVersion: Int
     let agent: AgentKind
     let scope: AgentLinkScope
-    let globalTargetRule: AgentGlobalTargetRule
-    let linkNamingRule: AgentLinkNamingRule
-    let allowedDirectActions: Set<AgentDirectAction>
-    let ownershipRule: AgentOwnershipRule
-    let observationRule: AgentObservationRule
-    let verificationRule: AgentVerificationRule
-    let invalidationConditions: Set<AgentProfileInvalidationCondition>
-    let evidenceLocation: String
 }
 
 nonisolated enum AgentProfileQualificationFailure: String, Codable, Hashable {
     case unsupportedAgent
     case profileMissing
     case profileStale
-    case profileInvalid
     case schemaInvalid
     case agentMismatch
     case scopeMismatch
@@ -76,30 +30,14 @@ nonisolated struct AgentCapabilityProfileRegistry {
             profileVersion: 1,
             schemaVersion: currentSchemaVersion,
             agent: .codex,
-            scope: .global,
-            globalTargetRule: .codexSkillsDirectory,
-            linkNamingRule: .validatedManifestIdentity,
-            allowedDirectActions: Set(AgentDirectAction.allCases),
-            ownershipRule: .managedEvidenceAndExactNodeIdentity,
-            observationRule: .currentTargetAndCanonicalFacts,
-            verificationRule: .completeCurrentObservation,
-            invalidationConditions: Set(AgentProfileInvalidationCondition.allCases),
-            evidenceLocation: "phase-007/T-008/codex-global@1"
+            scope: .global
         ),
         AgentCapabilityProfileDefinition(
             profileID: "skillshub.agent-profile.claude-code.global@1",
             profileVersion: 1,
             schemaVersion: currentSchemaVersion,
             agent: .claudeCode,
-            scope: .global,
-            globalTargetRule: .claudeCodeSkillsDirectory,
-            linkNamingRule: .validatedManifestIdentity,
-            allowedDirectActions: Set(AgentDirectAction.allCases),
-            ownershipRule: .managedEvidenceAndExactNodeIdentity,
-            observationRule: .currentTargetAndCanonicalFacts,
-            verificationRule: .completeCurrentObservation,
-            invalidationConditions: Set(AgentProfileInvalidationCondition.allCases),
-            evidenceLocation: "phase-007/T-008/claude-code-global@1"
+            scope: .global
         )
     ])
 
@@ -148,9 +86,6 @@ nonisolated struct AgentCapabilityProfileRegistry {
               profile.profileVersion > 0 else {
             return .unavailable(.profileStale)
         }
-        guard profile == current else {
-            return .unavailable(.profileInvalid)
-        }
         return .qualified(profile)
     }
 }
@@ -184,7 +119,6 @@ nonisolated struct AgentTargetQualification: Equatable {
     let failure: AgentTargetQualificationFailure?
 
     var allowsManagedWrite: Bool { failure == nil }
-    var allowsVerifiedConsistent: Bool { allowsManagedWrite }
 }
 
 nonisolated struct AgentTargetQualifier {
@@ -362,45 +296,5 @@ nonisolated struct AgentTargetQualifier {
             target: target,
             failure: failure
         )
-    }
-}
-
-nonisolated enum AgentLinkMatrixState: Equatable {
-    case unlinked
-    case linked
-    case partialChildren(count: Int)
-    case linkedWithChildren(count: Int)
-    case disabled
-    case conflict
-}
-
-nonisolated struct AgentLinkMatrixService {
-    func state(for entry: InstallableEntry, agent: AgentKind, links: [AgentLinkRecord], agentTargetExists: Bool) -> AgentLinkMatrixState {
-        guard agentTargetExists else {
-            return .disabled
-        }
-        let agentLinks = links.filter { $0.agent == agent && $0.scope == .global }
-        let parentLinked = agentLinks.contains { $0.skillID == entry.id }
-        let linkedChildCount = linkedChildren(in: entry, links: agentLinks).count
-
-        if parentLinked && linkedChildCount > 0 {
-            return .linkedWithChildren(count: linkedChildCount)
-        }
-        if parentLinked {
-            return .linked
-        }
-        if linkedChildCount > 0 {
-            return .partialChildren(count: linkedChildCount)
-        }
-        return .unlinked
-    }
-
-    private func linkedChildren(in entry: InstallableEntry, links: [AgentLinkRecord]) -> [InstallableEntry] {
-        let linkedIDs = Set(links.map(\.skillID))
-        return flattenedChildren(of: entry).filter { linkedIDs.contains($0.id) }
-    }
-
-    private func flattenedChildren(of entry: InstallableEntry) -> [InstallableEntry] {
-        entry.children.flatMap { [$0] + flattenedChildren(of: $0) }
     }
 }

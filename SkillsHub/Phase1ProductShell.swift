@@ -2633,13 +2633,3 @@ private struct Phase1RelationActionButton: View {
         return library.localized(LocalizedMessage(template, arguments: [relation.agentDisplayName]))
     }
 }
-
-private struct Phase1UnavailableWorkspace: View {
-    var title: String
-    var detail: String
-    var systemImage: String
-
-    var body: some View {
-        ContentUnavailableView(title, systemImage: systemImage, description: Text(detail))
-    }
-}

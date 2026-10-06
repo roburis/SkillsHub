@@ -3,17 +3,6 @@ import Testing
 @testable import SkillsHub
 
 struct FileAccessServiceTests {
-    @Test func authorizedDirectoryRejectsPathOutsideGrantedRoot() throws {
-        let root = try temporaryDirectory()
-        let outside = try temporaryDirectory()
-        let service = FileAccessService()
-
-        try service.assertInsideAuthorizedDirectory(root.appendingPathComponent("skills/a"), authorizedDirectories: [root])
-        #expect(throws: FileAccessFailure.outsideAuthorizedDirectory(path: outside.path)) {
-            try service.assertInsideAuthorizedDirectory(outside, authorizedDirectories: [root])
-        }
-    }
-
     @Test func linkConflictDetectsRegularFileDirectoryWrongLinkAndBrokenLink() throws {
         let root = try temporaryDirectory()
         let expected = root.appendingPathComponent("skills/a")
@@ -103,9 +92,7 @@ struct FileAccessServiceTests {
         try FileManager.default.createSymbolicLink(at: escapeLink, withDestinationURL: outside)
         let service = FileAccessService()
 
-        #expect(throws: FileAccessFailure.symlinkEscapesRoot(path: escapeLink.path)) {
-            try service.validateSymlinkDoesNotEscape(escapeLink, rootURL: root)
-        }
+        #expect(!service.isDescendant(try service.resolvedSymlinkTarget(escapeLink), of: root))
 
         let first = root.appendingPathComponent("cycle-a")
         let second = root.appendingPathComponent("cycle-b")
@@ -113,7 +100,7 @@ struct FileAccessServiceTests {
         try FileManager.default.createSymbolicLink(at: second, withDestinationURL: first)
 
         #expect(throws: FileAccessFailure.symlinkCycle(path: first.path)) {
-            try service.validateSymlinkDoesNotEscape(first, rootURL: root)
+            try service.resolvedSymlinkTarget(first)
         }
         #expect(service.linkConflict(at: first, expectedDestination: outside)?.kind == .symlinkCycle)
     }

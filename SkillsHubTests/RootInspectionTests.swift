@@ -72,20 +72,6 @@ struct RootInspectionTests {
         #expect(controller.phase1Tasks.isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func reloadPreservesUnsubmittedTaskEvidence(cancelled: Bool) async throws {
-        let root = try initializedRoot(generation: 0)
-        let source = try temporaryDirectory()
-        try "---\nname: Review\ndescription: Review changes.\n---\nBody.".write(to: source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
-        let controller = rootInspectionController(adapter: RecordingSecurityScopedResourceAccessAdapter())
-        try await controller.connectExistingRoot(root)
-        try controller.prepareLocalSourceRegistration(from: source)
-        if cancelled { await controller.cancelPendingPhase1Operation() }
-        let task = try #require(controller.phase1Tasks.first)
-        try await controller.reloadFromDisk()
-        #expect(controller.phase1Tasks.contains(task))
-    }
-
     #if DEBUG
     @Test func failedSourceFinalEvidenceStillPublishesCurrentMetadata() async throws {
         let root = try initializedRoot(generation: 0)
@@ -94,10 +80,9 @@ struct RootInspectionTests {
         let controller = rootInspectionController(adapter: RecordingSecurityScopedResourceAccessAdapter())
         try await controller.connectExistingRoot(root)
         controller.phase1OperationCoordinator = Phase1OperationCoordinator(
-            metadataStore: controller.metadataStore, faultInjection: .journal(.final, "source-registered")
+            metadataStore: controller.metadataStore, faultInjection: .journal(.final, "local-source-imported")
         )
-        try controller.prepareLocalSourceRegistration(from: source)
-        await controller.confirmPendingPhase1Operation()
+        await controller.importLocalSource(from: source)
         let current = try controller.metadataStore.loadCurrentSnapshot(from: root)
         #expect(controller.rootSnapshot == current)
         #expect(controller.sources.count == 1)
@@ -118,7 +103,6 @@ struct RootInspectionTests {
 
         #expect(result == .initializationRequired(.init(url: root.standardizedFileURL)))
         #expect(controller.pendingRootInitialization == nil)
-        #expect(controller.pendingPhase1OperationPlan == nil)
         #expect(controller.hasRoot == false)
         #expect(try rootTreeSnapshot(root) == before)
         #expect(adapter.startRecords.count == 1)
@@ -128,7 +112,6 @@ struct RootInspectionTests {
         _ = controller.cancelRootSelection()
 
         #expect(controller.pendingRootInitialization == nil)
-        #expect(controller.pendingPhase1OperationPlan == nil)
         #expect(controller.hasRoot == false)
         #expect(try rootTreeSnapshot(root) == before)
         #expect(adapter.stoppedURLs == [root.standardizedFileURL])
@@ -138,7 +121,6 @@ struct RootInspectionTests {
 
         #expect(controller.rootURL == root.standardizedFileURL)
         #expect(controller.rootSnapshot?.generation == 0)
-        #expect(controller.pendingPhase1OperationPlan == nil)
         #expect(controller.errorMessage == nil)
         #expect(try Data(contentsOf: marker) == Data("unchanged".utf8))
     }

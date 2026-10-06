@@ -41,24 +41,12 @@ nonisolated struct InstalledAgentDescriptor: Equatable, Identifiable {
     }
 }
 
-nonisolated struct InstalledAgentIdentityIssue: Equatable, Identifiable {
-    var agentID: String
-    var detail: String
-
-    var id: String { agentID }
-}
-
-nonisolated struct InstalledAgentDescriptorResult: Equatable {
-    var descriptors: [InstalledAgentDescriptor]
-    var issues: [InstalledAgentIdentityIssue]
-}
-
 nonisolated struct InstalledAgentDescriptorBuilder {
     func build(
         detections: [AgentDetectionSnapshot],
         configurations: [AgentConfigurationRecord],
         links: [AgentLinkRecord]
-    ) -> InstalledAgentDescriptorResult {
+    ) -> [InstalledAgentDescriptor] {
         var descriptors = configurations.map { configuration in
             let detection = detections.first { $0.agentID == configuration.id }
             let globalCapability = configuration.agent == nil
@@ -87,15 +75,7 @@ nonisolated struct InstalledAgentDescriptorBuilder {
         descriptors.append(contentsOf: orphanIDs.map { unresolvedDescriptor(agentID: $0, displayName: $0) })
         descriptors.sort(by: stableDescriptorOrder)
 
-        let issues = descriptors
-            .filter(\.isUnresolved)
-            .map { descriptor in
-                InstalledAgentIdentityIssue(
-                    agentID: descriptor.id,
-                    detail: "Agent configuration is missing for persisted link identity \(descriptor.id)."
-                )
-            }
-        return InstalledAgentDescriptorResult(descriptors: descriptors, issues: issues)
+        return descriptors
     }
 
     private func customGlobalCapability(

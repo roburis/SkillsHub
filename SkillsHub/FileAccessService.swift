@@ -306,29 +306,6 @@ nonisolated final class FileAccessService {
         return resolved.isEmpty ? root : root.appendingPathComponent(resolved.joined(separator: "/"))
     }
 
-    func assertInsideAuthorizedDirectory(_ url: URL, authorizedDirectories: [URL]) throws {
-        guard authorizedDirectories.contains(where: { isDescendant(url, of: $0) }) else {
-            throw FileAccessFailure.outsideAuthorizedDirectory(path: url.path)
-        }
-    }
-
-    func assertReadable(_ url: URL) throws {
-        guard fileManager.isReadableFile(atPath: url.path) else {
-            throw FileAccessFailure.unreadable(path: url.path)
-        }
-    }
-
-    func validateSymlinkDoesNotEscape(_ url: URL, rootURL: URL) throws {
-        guard isSymlink(url) else {
-            return
-        }
-
-        let target = try resolvedSymlinkTarget(url)
-        guard isDescendant(target, of: rootURL) else {
-            throw FileAccessFailure.symlinkEscapesRoot(path: url.path)
-        }
-    }
-
     func linkConflict(at linkURL: URL, expectedDestination: URL) -> LinkConflict? {
         if isSymlink(linkURL) {
             let symlinkDestination: URL

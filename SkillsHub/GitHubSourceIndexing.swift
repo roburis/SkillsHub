@@ -56,7 +56,6 @@ nonisolated struct GitHubTreeEntry: Equatable {
     var objectID: String
     var byteCount: Int64?
 
-    var isBlob: Bool { kind == .blob }
 
     init(path: String, kind: GitHubTreeEntryKind, mode: String, objectID: String, byteCount: Int64? = nil) {
         self.path = path

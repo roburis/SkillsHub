@@ -202,15 +202,6 @@ extension SkillsHubLibraryController {
 
     }
 
-    var settingsState: AppSettingsState {
-        settingsService.state(
-            rootPath: settingsRootPathDisplay,
-            defaultRootPath: defaultRootURL.path,
-            language: language,
-            cachePolicyName: cachePolicyName
-        )
-    }
-
     func handle(_ error: Error) {
         guard !(error is CancellationError) else { return }
         errorMessage = errorPresentation(for: error)

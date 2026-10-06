@@ -281,58 +281,9 @@ struct Phase1OperationTests {
         #expect(snapshot.metadata.sources.first?.baselineManifest?.digest == plan.sourceManifest?.digest)
     }
 
-    @Test(arguments: ["plan-identity", "commit-identity", "escape", "parent-alias", "unvalidated"])
-    func managedCopyRejectsInvalidSourceBeforeContentRead(boundary: String) async throws {
-        let fixture = try Phase1Fixture()
-        defer { fixture.remove() }
-        let registration = try fixture.planner.sourceRegistrationPlan(directory: fixture.source, snapshot: fixture.initialSnapshot(), sourceID: fixture.sourceID)
-        let registered = await fixture.coordinator.commit(plan: registration, confirmation: fixture.planner.confirmation(for: registration))
-        let snapshot = try #require(registered.snapshot)
-        var candidate = try #require(snapshot.metadata.availableSkills.first)
-        let source = try #require(snapshot.metadata.sources.first)
-        let plan = try fixture.planner.managedCopyPlan(candidate: candidate, source: source, rootURL: fixture.root, snapshot: snapshot)
-        let metadataBefore = try fixture.metadataBytes()
-        let journalBefore = try Data(contentsOf: fixture.journal)
-        if boundary.hasSuffix("identity") {
-            let old = fixture.source.appendingPathExtension("old")
-            try FileManager.default.moveItem(at: fixture.source, to: old)
-            try FileManager.default.copyItem(at: old, to: fixture.source)
-        } else if boundary == "escape" {
-            let outside = fixture.source.deletingLastPathComponent().appendingPathComponent("outside")
-            try FileManager.default.copyItem(at: fixture.source, to: outside)
-            candidate.skillPath = "../outside"
-        } else if boundary == "parent-alias" {
-            let outside = fixture.source.deletingLastPathComponent().appendingPathComponent("outside")
-            try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: fixture.source, to: outside.appendingPathComponent("review"))
-            try FileManager.default.createSymbolicLink(at: fixture.source.appendingPathComponent("alias"), withDestinationURL: outside)
-            candidate.skillPath = "alias/review"
-        } else {
-            candidate.manifestDigest = nil
-        }
-        var reads = 0
-        let builder = ContentManifestBuilder(readAccess: ManifestReadAccess(dataContents: { url in
-            reads += 1
-            return try Data(contentsOf: url)
-        }))
-        if boundary == "commit-identity" {
-            let coordinator = Phase1OperationCoordinator(metadataStore: fixture.store, manifestBuilder: builder)
-            let result = await coordinator.commit(plan: plan, confirmation: fixture.planner.confirmation(for: plan))
-            #expect(!result.succeeded)
-        } else {
-            #expect(throws: (any Error).self) {
-                try Phase1OperationPlanner(manifestBuilder: builder).managedCopyPlan(candidate: candidate, source: source, rootURL: fixture.root, snapshot: snapshot)
-            }
-        }
-        #expect(reads == 0)
-        #expect(try fixture.metadataBytes() == metadataBefore)
-        #expect(try Data(contentsOf: fixture.journal) == journalBefore)
-        #expect(!FileManager.default.fileExists(atPath: fixture.managedDirectory.path))
-    }
-
     @Test(arguments: ["success", "source-drift", "copy", "rename", "compensation", "target-race"])
-    func managedCopyFilesystemMatrixPreservesBoundaries(failure: String) async throws {
-        let files = ManagedCopyFileProbe(failure: failure)
+    func sourceImportFilesystemMatrixPreservesBoundaries(failure: String) async throws {
+        let files = SourceImportFileProbe(failure: failure)
         let fixture = try Phase1Fixture(fault: failure == "compensation" ? .metadataCommitBeforeCAS : nil, fileManager: files)
         defer { fixture.remove() }
         files.target = fixture.managedDirectory
@@ -343,7 +294,7 @@ struct Phase1OperationTests {
         let builder = ContentManifestBuilder()
         let original = try builder.build(for: fixture.source, authorizedRoot: fixture.source)
 
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         let current = try fixture.store.loadCurrentSnapshot(from: fixture.root)
         let after = try builder.build(for: fixture.source, authorizedRoot: fixture.source)
         #expect(files.copyCount == 1)
@@ -374,7 +325,7 @@ struct Phase1OperationTests {
             #expect(files.nativeErrorCode != nil)
         }
         if failure == "copy" {
-            #expect(try String(contentsOf: fixture.stagingDirectory(for: execution.plan).appendingPathComponent("asset/partial"), encoding: .utf8) == "partial")
+            #expect(try String(contentsOf: fixture.stagingDirectory(for: execution.plan).appendingPathComponent("source/partial"), encoding: .utf8) == "partial")
         }
         if failure == "source-drift" {
             #expect(files.renameCount == 0)
@@ -387,11 +338,11 @@ struct Phase1OperationTests {
         Attachment.record("case=\(failure), copy=\(files.copyCount), rename=\(files.renameCount), native-error=\(String(describing: files.nativeErrorCode)), inode-before=\(String(describing: files.publishedInodeBefore)), inode-after=\(String(describing: files.publishedInodeAfter))", named: "copy-rename-evidence.txt")
     }
 
-    @Test func sourceRegistrationRejectsReplacedDirectoryBeforeEnumeration() async throws {
+    @Test func sourceImportRejectsReplacedDirectoryBeforeEnumeration() async throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
-        let plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source, snapshot: fixture.initialSnapshot(), sourceID: fixture.sourceID
+        let plan = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root, snapshot: fixture.initialSnapshot(), sourceID: fixture.sourceID
         )
         let oldSource = fixture.source.appendingPathExtension("old")
         try FileManager.default.moveItem(at: fixture.source, to: oldSource)
@@ -408,60 +359,6 @@ struct Phase1OperationTests {
         #expect(try fixture.initialSnapshot().metadata.sources.isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func sourceRegistrationRejectsRebindingPersistedSourceIdentity(replaceInPlace: Bool) async throws {
-        let fixture = try Phase1Fixture()
-        defer { fixture.remove() }
-        let plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source, snapshot: fixture.initialSnapshot(), sourceID: fixture.sourceID
-        )
-        let registered = await fixture.coordinator.commit(plan: plan, confirmation: fixture.planner.confirmation(for: plan))
-        let snapshot = try #require(registered.snapshot)
-        let replacement = fixture.source.deletingLastPathComponent().appendingPathComponent("replacement")
-        try FileManager.default.copyItem(at: fixture.source, to: replacement)
-        let directory: URL
-        if replaceInPlace {
-            try FileManager.default.moveItem(at: fixture.source, to: fixture.source.appendingPathExtension("old"))
-            try FileManager.default.moveItem(at: replacement, to: fixture.source)
-            directory = fixture.source
-        } else {
-            directory = replacement
-        }
-        #expect(throws: Phase1OperationError.sourceChanged) {
-            try fixture.planner.sourceRegistrationPlan(directory: directory, snapshot: snapshot, sourceID: fixture.sourceID)
-        }
-    }
-
-    @Test func sourceRegistrationPreservesPersistedCandidateIdentityAcrossContentChanges() async throws {
-        let fixture = try Phase1Fixture()
-        defer { fixture.remove() }
-        let initial = try fixture.initialSnapshot()
-        let firstPlan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source, snapshot: initial, sourceID: fixture.sourceID
-        )
-        let firstCandidate = try #require(firstPlan.candidates.first)
-        #expect(UUID(uuidString: firstCandidate.candidateID) != nil)
-        let firstResult = await fixture.coordinator.commit(
-            plan: firstPlan, confirmation: fixture.planner.confirmation(for: firstPlan)
-        )
-        let registered = try #require(firstResult.snapshot)
-        #expect(registered.metadata.availableSkills.first?.candidateID == firstCandidate.candidateID)
-        try "---\nname: Renamed Review\ndescription: Updated source content.\n---\n# Review\n"
-            .write(to: fixture.sourceSkillFile, atomically: true, encoding: .utf8)
-
-        let refreshedPlan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source, snapshot: registered, sourceID: fixture.sourceID
-        )
-        let refreshedCandidate = try #require(refreshedPlan.candidates.first)
-        #expect(refreshedCandidate.candidateID == firstCandidate.candidateID)
-        #expect(refreshedCandidate.manifestDigest != firstCandidate.manifestDigest)
-        let refreshed = await fixture.coordinator.commit(
-            plan: refreshedPlan, confirmation: fixture.planner.confirmation(for: refreshedPlan)
-        )
-        #expect(refreshed.snapshot?.metadata.availableSkills.first?.candidateID == firstCandidate.candidateID)
-        #expect(refreshed.task.phase == .completed)
-    }
-
     @Test func unreadableJournalProducesVisibleRecoveryEvidence() throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
@@ -471,90 +368,45 @@ struct Phase1OperationTests {
         #expect(tasks.first?.phase == .needsAttention)
     }
 
-    @Test func confirmedSourceRegistrationAndManagedCopyPublishOneCanonicalAsset() async throws {
+    @Test(arguments: [Phase1OperationKind.registerLocalSource, .publishManagedCopy])
+    func retiredPlansRemainReadableButCannotExecute(kind: Phase1OperationKind) async throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
-        let initial = try fixture.initialSnapshot()
-        let sourceBytesBefore = try Data(contentsOf: fixture.sourceSkillFile)
-
-        let registrationPlan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
-            snapshot: initial,
-            sourceID: fixture.sourceID
+        var plan = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root, snapshot: fixture.initialSnapshot()
         )
-        let metadataBeforeConfirmation = try fixture.metadataBytes()
+        plan.kind = kind
+        plan.compensationPaths = nil
+        plan.planDigest = try plan.computedDigest()
+        let journal = Phase1OperationJournal(rootURL: fixture.root)
+        try journal.append(Phase1JournalRecord(
+            operationID: plan.id, kind: kind, operationPlan: plan, sequence: 1,
+            planDigest: plan.planDigest, event: .plan, phase: .waitingConfirmation,
+            objectID: fixture.source.path, result: "immutable-plan", occurredAt: plan.createdAt
+        ))
+        let journalBefore = try Data(contentsOf: fixture.journal)
+        let metadataBefore = try fixture.metadataBytes()
+        let recovered = try #require(journal.recoverTasks().first)
+        #expect(recovered.kind == kind.taskKind)
+        #expect(try recovered.operationPlan?.computedDigest() == plan.planDigest)
+        #expect(recovered.phase == .needsAttention)
 
-        #expect(!FileManager.default.fileExists(atPath: fixture.journal.path))
-        #expect(try fixture.metadataBytes() == metadataBeforeConfirmation)
-
-        let registration = await fixture.coordinator.commit(
-            plan: registrationPlan,
-            confirmation: fixture.planner.confirmation(for: registrationPlan)
+        let result = await fixture.coordinator.commit(
+            plan: plan, confirmation: fixture.planner.confirmation(for: plan)
         )
-        let registeredSnapshot = try #require(registration.snapshot)
-        let candidate = try #require(registeredSnapshot.metadata.availableSkills.first)
-        let source = try #require(registeredSnapshot.metadata.sources.first)
-
-        #expect(registration.succeeded)
-        #expect(registeredSnapshot.generation == 1)
-        #expect(registeredSnapshot.metadata.availableSkills.map(\.candidateID) == [candidate.candidateID])
-        #expect(registeredSnapshot.metadata.installedSkills.isEmpty)
-        #expect(try Data(contentsOf: fixture.sourceSkillFile) == sourceBytesBefore)
-
-        let copyPlan = try fixture.planner.managedCopyPlan(
-            candidate: candidate,
-            source: source,
-            rootURL: fixture.root,
-            snapshot: registeredSnapshot,
-            assetID: fixture.assetID
-        )
-        let metadataBeforeCopyConfirmation = try fixture.metadataBytes()
-        let confirmation = fixture.planner.confirmation(for: copyPlan)
-        let progress = AsyncStream<Phase1JournalRecord>.makeStream()
-        let copy = await fixture.coordinator.commit(plan: copyPlan, confirmation: confirmation, progress: progress.continuation)
-        var phases: [Phase1OperationPhase] = []
-        for await record in progress.stream where record.event == .phase { phases.append(record.phase) }
-        #expect(phases == [.observing, .verifying])
-        #expect(copy.task.operationPlan == copyPlan)
-        let publishedSnapshot = try #require(copy.snapshot)
-        let installed = try #require(copy.installedSkill)
-        let metadataAfterCopy = try fixture.metadataBytes()
-
-        #expect(metadataBeforeCopyConfirmation != metadataAfterCopy)
-        #expect(copy.succeeded)
-        #expect(publishedSnapshot.generation == 2)
-        #expect(publishedSnapshot.metadata.installedSkills.map(\.assetID) == [fixture.assetID])
-        #expect(publishedSnapshot.metadata.enablementIntents.isEmpty)
-        #expect(installed.candidateID == candidate.candidateID)
-        #expect(installed.currentRevision == candidate.manifestDigest)
-        #expect(FileManager.default.fileExists(atPath: fixture.managedSkillFile.path))
-        #expect(try Data(contentsOf: fixture.sourceSkillFile) == sourceBytesBefore)
-        #expect(try Data(contentsOf: fixture.managedSkillFile) == sourceBytesBefore)
-        #expect(try FileManager.default.contentsOfDirectory(at: fixture.root.appendingPathComponent("local"), includingPropertiesForKeys: nil).map(\.lastPathComponent) == ["review"])
-        for plan in [registrationPlan, copyPlan] {
-            let records = try fixture.journalRecords(operationID: plan.id)
-            let persisted = try #require(records.first?.operationPlan)
-            #expect(try persisted.computedDigest() == plan.planDigest)
-            #expect(records.filter { $0.event == .phase || $0.event == .final }.map(\.phase) == [.observing, .verifying, .completed])
-            let payload = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(plan)) as? [String: Any])
-            let expectedCompensation = plan.kind == .publishManagedCopy
-                ? [fixture.stagingDirectory(for: plan).path, fixture.managedDirectory.path] : []
-            #expect(payload["compensationPaths"] as? [String] == expectedCompensation)
-        }
-
-        let replay = await fixture.coordinator.commit(plan: copyPlan, confirmation: confirmation)
-        #expect(!replay.succeeded)
-        #expect(replay.task.phase == .needsAttention)
-        #expect(try fixture.store.loadCurrentSnapshot(from: fixture.root).generation == 2)
-        #expect(try Data(contentsOf: fixture.sourceSkillFile) == sourceBytesBefore)
+        #expect(result.succeeded == false)
+        #expect(result.task.phase == .needsAttention)
+        #expect(try Data(contentsOf: fixture.journal) == journalBefore)
+        #expect(try fixture.metadataBytes() == metadataBefore)
+        #expect(FileManager.default.fileExists(atPath: fixture.managedDirectory.path) == false)
     }
 
-    @Test func sourceRegistrationMetadataFailureStopsBeforeTheCommit() async throws {
+    @Test func sourceImportMetadataFailureStopsBeforeTheCommit() async throws {
         let fixture = try Phase1Fixture(fault: .metadataCommitBeforeCAS)
         defer { fixture.remove() }
         let initial = try fixture.initialSnapshot()
-        let plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
+        let plan = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root,
             snapshot: initial,
             sourceID: fixture.sourceID
         )
@@ -570,7 +422,7 @@ struct Phase1OperationTests {
         #expect(result.task.phase == .needsAttention)
         #expect(try fixture.metadataBytes() == metadataBefore)
         #expect(try fixture.store.loadCurrentSnapshot(from: fixture.root).metadata.sources.isEmpty)
-        #expect(records.map(\.result) == ["immutable-plan", "confirmed", "metadata-cas"])
+        #expect(records.map(\.result) == ["immutable-plan", "source-import-authorized", "staging-copy", "staging-verified", "target-publish", "target-published", "metadata-cas", "published-target-removed", "staging-removed"])
         #expect(records.contains { $0.event == .final } == false)
 
         let journalBeforeReplay = try Data(contentsOf: fixture.journal)
@@ -582,12 +434,12 @@ struct Phase1OperationTests {
         #expect(try fixture.metadataBytes() == metadataBefore)
     }
 
-    @Test func staleRegistrationPlanDoesNotCommitSourceMetadata() async throws {
+    @Test func staleImportPlanDoesNotCommitSourceMetadata() async throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
         let initial = try fixture.initialSnapshot()
-        let plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
+        let plan = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root,
             snapshot: initial,
             sourceID: fixture.sourceID
         )
@@ -614,8 +466,8 @@ struct Phase1OperationTests {
     @Test func mutatedPlanCannotConsumeConfirmationOrCreateJournal() async throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
-        let original = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
+        let original = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root,
             snapshot: fixture.initialSnapshot(),
             sourceID: fixture.sourceID
         )
@@ -635,24 +487,7 @@ struct Phase1OperationTests {
     func targetConflictPreservesExistingTargetSourceAndMetadata(node: String) async throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
-        let registrationPlan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
-            snapshot: fixture.initialSnapshot(),
-            sourceID: fixture.sourceID
-        )
-        let registration = await fixture.coordinator.commit(
-            plan: registrationPlan,
-            confirmation: fixture.planner.confirmation(for: registrationPlan)
-        )
-        let snapshot = try #require(registration.snapshot)
-        let candidate = try #require(snapshot.metadata.availableSkills.first)
-        let source = try #require(snapshot.metadata.sources.first)
-        let plan = try fixture.planner.managedCopyPlan(
-            candidate: candidate,
-            source: source,
-            rootURL: fixture.root,
-            snapshot: snapshot
-        )
+        let plan = try fixture.planner.localSourceImportPlan(directory: fixture.source, rootURL: fixture.root, snapshot: fixture.initialSnapshot(), sourceID: fixture.sourceID)
         let target = node == "case" ? fixture.managedDirectory.deletingLastPathComponent().appendingPathComponent("REVIEW") : fixture.managedDirectory
         let sentinel = fixture.root.deletingLastPathComponent().appendingPathComponent("unplanned.txt")
         try Data("keep".utf8).write(to: sentinel)
@@ -668,7 +503,7 @@ struct Phase1OperationTests {
         let targetBefore = try FileManager.default.attributesOfItem(atPath: target.path)
         let sourceBefore = try Data(contentsOf: fixture.sourceSkillFile)
         let metadataBefore = try fixture.metadataBytes()
-        let journalBefore = try Data(contentsOf: fixture.journal)
+        let journalBefore = try? Data(contentsOf: fixture.journal)
         let localBefore = try FileManager.default.contentsOfDirectory(atPath: target.deletingLastPathComponent().path).sorted()
 
         let result = await fixture.coordinator.commit(
@@ -680,7 +515,7 @@ struct Phase1OperationTests {
         #expect(try Data(contentsOf: sentinel) == Data("keep".utf8))
         #expect(try Data(contentsOf: fixture.sourceSkillFile) == sourceBefore)
         #expect(try fixture.metadataBytes() == metadataBefore)
-        #expect(try Data(contentsOf: fixture.journal) == journalBefore)
+        #expect((try? Data(contentsOf: fixture.journal)) == journalBefore)
         #expect(try FileManager.default.attributesOfItem(atPath: target.path)[.systemFileNumber] as? NSNumber == targetBefore[.systemFileNumber] as? NSNumber)
         #expect(try FileManager.default.contentsOfDirectory(atPath: target.deletingLastPathComponent().path).sorted() == localBefore)
         if node == "symlink" || node == "broken-symlink" {
@@ -696,8 +531,8 @@ struct Phase1OperationTests {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
         let initial = try fixture.initialSnapshot()
-        let plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
+        let plan = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root,
             snapshot: initial,
             sourceID: fixture.sourceID
         )
@@ -721,7 +556,7 @@ struct Phase1OperationTests {
     @Test func metadataFailureAfterPublishRunsBoundedCompensation() async throws {
         let fixture = try Phase1Fixture(fault: .metadataCommitBeforeCAS)
         defer { fixture.remove() }
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         let current = try fixture.store.loadCurrentSnapshot(from: fixture.root)
         let recovered = try Phase1OperationJournal(rootURL: fixture.root).recoverTasks()
 
@@ -729,13 +564,13 @@ struct Phase1OperationTests {
         #expect(FileManager.default.fileExists(atPath: fixture.managedDirectory.path) == false)
         #expect(current.metadata.installedSkills.isEmpty)
         #expect(try Data(contentsOf: fixture.sourceSkillFile) == execution.sourceBefore)
-        #expect(recovered.contains { $0.result.contains("No verified managed delta") })
+        #expect(recovered.contains { $0.result.contains("No verified local-source import delta") })
     }
 
     @Test func stagingCopyFailureStopsBeforePublishAndCleansOperationStaging() async throws {
         let fixture = try Phase1Fixture(fault: .afterStagingCopy)
         defer { fixture.remove() }
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         let records = try fixture.journalRecords(operationID: execution.plan.id)
 
         #expect(execution.result.succeeded == false)
@@ -751,7 +586,7 @@ struct Phase1OperationTests {
     @Test func targetPublishFailureStopsBeforeRenameAndPreservesSourceAndMetadata() async throws {
         let fixture = try Phase1Fixture(fault: .beforeTargetPublish)
         defer { fixture.remove() }
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         let records = try fixture.journalRecords(operationID: execution.plan.id)
 
         #expect(execution.result.succeeded == false)
@@ -767,7 +602,7 @@ struct Phase1OperationTests {
     @Test func interruptionAfterMetadataCommitRemainsNeedsAttentionWithoutReplay() async throws {
         let fixture = try Phase1Fixture(fault: .afterMetadataCommit)
         defer { fixture.remove() }
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         let current = try fixture.store.loadCurrentSnapshot(from: fixture.root)
         let recovered = try Phase1OperationJournal(rootURL: fixture.root).recoverTasks()
 
@@ -784,54 +619,11 @@ struct Phase1OperationTests {
         })
     }
 
-    @Test(arguments: [false, true])
-    func cancellationLeavesSourceMetadataAndJournalUntouched(managedCopy: Bool) async throws {
-        let fixture = try Phase1Fixture()
-        defer { fixture.remove() }
-        var plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
-            snapshot: fixture.initialSnapshot(),
-            sourceID: fixture.sourceID
-        )
-        if managedCopy {
-            let registration = await fixture.coordinator.commit(
-                plan: plan,
-                confirmation: fixture.planner.confirmation(for: plan)
-            )
-            let snapshot = try #require(registration.snapshot)
-            plan = try fixture.planner.managedCopyPlan(
-                candidate: #require(snapshot.metadata.availableSkills.first),
-                source: #require(snapshot.metadata.sources.first),
-                rootURL: fixture.root,
-                snapshot: snapshot
-            )
-        }
-        let metadataBefore = try fixture.metadataBytes()
-        let sourceBefore = try Data(contentsOf: fixture.sourceSkillFile)
-        let journalBefore = try? Data(contentsOf: fixture.journal)
-        let rootEntriesBefore = try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).sorted()
-
-        let cancelled = await fixture.coordinator.cancel(plan: plan)
-
-        #expect(cancelled.phase == .completed)
-        #expect(try fixture.metadataBytes() == metadataBefore)
-        #expect(try Data(contentsOf: fixture.sourceSkillFile) == sourceBefore)
-        #expect((try? Data(contentsOf: fixture.journal)) == journalBefore)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).sorted() == rootEntriesBefore)
-        #expect(FileManager.default.fileExists(atPath: fixture.managedDirectory.path) == false)
-        #expect(FileManager.default.fileExists(atPath: fixture.stagingDirectory(for: plan).path) == false)
-
-        let replay = await fixture.coordinator.commit(plan: plan, confirmation: fixture.planner.confirmation(for: plan))
-        #expect(replay.succeeded == false)
-        #expect(try fixture.metadataBytes() == metadataBefore)
-        #expect((try? Data(contentsOf: fixture.journal)) == journalBefore)
-    }
-
     @Test func journalCorruptionNeedsAttention() async throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
-        let plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
+        let plan = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root,
             snapshot: fixture.initialSnapshot(),
             sourceID: fixture.sourceID
         )
@@ -856,7 +648,7 @@ struct Phase1OperationTests {
     func invalidJournalCannotReportCompletionOrAdmitNewWrites(corruption: String) async throws {
         let fixture = try Phase1Fixture()
         defer { fixture.remove() }
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         var records = try fixture.journalRecords(operationID: execution.plan.id)
         switch corruption {
         case "sequence-gap": records.remove(at: 2)
@@ -881,7 +673,9 @@ struct Phase1OperationTests {
 
         let recovered = try Phase1OperationJournal(rootURL: fixture.root).recoverTasks()
         #expect(recovered.allSatisfy { $0.phase == .needsAttention })
-        let plan = try fixture.planner.sourceRegistrationPlan(directory: fixture.source, snapshot: fixture.initialSnapshot(), sourceID: fixture.sourceID)
+        let anotherSource = fixture.source.deletingLastPathComponent().appendingPathComponent("another")
+        try FileManager.default.copyItem(at: fixture.source, to: anotherSource)
+        let plan = try fixture.planner.localSourceImportPlan(directory: anotherSource, rootURL: fixture.root, snapshot: fixture.initialSnapshot())
         let before = try fixture.metadataBytes()
         let result = await fixture.coordinator.commit(plan: plan, confirmation: fixture.planner.confirmation(for: plan))
         #expect(result.succeeded == false)
@@ -904,7 +698,7 @@ struct Phase1OperationTests {
             }
         })
         defer { fixture.remove() }
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         #expect(execution.result.succeeded == false)
         #expect(execution.result.task.phase == .needsAttention)
         #expect(try Data(contentsOf: fixture.managedSkillFile) == execution.sourceBefore)
@@ -918,11 +712,11 @@ struct Phase1OperationTests {
         defer { fixture.remove() }
         let external = fixture.root.deletingLastPathComponent().appendingPathComponent("foreign")
         try FileManager.default.createDirectory(at: external, withIntermediateDirectories: false)
-        try FileManager.default.createSymbolicLink(at: fixture.store.rootLayout(for: fixture.root).operationStagingDirectory, withDestinationURL: external)
-        let execution = try await fixture.executeManagedCopy()
+        try FileManager.default.createSymbolicLink(at: fixture.store.rootLayout(for: fixture.root).operationRecoveryDirectory, withDestinationURL: external)
+        let execution = try await fixture.executeSourceImport()
         #expect(execution.result.succeeded == false)
         #expect(try FileManager.default.contentsOfDirectory(atPath: external.path).isEmpty)
-        #expect(try fixture.journalRecords(operationID: execution.plan.id).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fixture.journal.path) == false)
         #expect(try fixture.initialSnapshot().metadata.installedSkills.isEmpty)
     }
 
@@ -931,7 +725,7 @@ struct Phase1OperationTests {
         let results = ["staging-copy": "staging-verified", "target-publish": "target-published", "metadata-cas": "metadata-committed"]
         let fixture = try Phase1Fixture(fault: .journal(event, event == .stepResult ? #require(results[step]) : step))
         defer { fixture.remove() }
-        let execution = try await fixture.executeManagedCopy()
+        let execution = try await fixture.executeSourceImport()
         #expect(execution.result.succeeded == false)
         #expect(execution.result.task.phase == .needsAttention)
         #expect(try Data(contentsOf: fixture.sourceSkillFile) == execution.sourceBefore)
@@ -944,7 +738,7 @@ struct Phase1OperationTests {
 }
 
 struct RootInitializationOperationTests {
-    @Test func planIsImmutableAndCancellationLeavesTheSelectedDirectoryUntouched() async throws {
+    @Test func planIsImmutableAndLeavesTheSelectedDirectoryUntouched() throws {
         let fixture = try RootInitializationFixture()
         defer { fixture.remove() }
         let before = try fixture.treeSnapshot()
@@ -980,10 +774,6 @@ struct RootInitializationOperationTests {
         #expect(try plan.computedDigest() == plan.planDigest)
         #expect(try fixture.treeSnapshot() == before)
 
-        let cancelled = await fixture.coordinator.cancel(plan: plan)
-
-        #expect(cancelled.phase == .completed)
-        #expect(try fixture.treeSnapshot() == before)
         #expect(FileManager.default.fileExists(atPath: fixture.journal.path) == false)
     }
 
@@ -1299,7 +1089,7 @@ private final class SourceEnumerationProbe: FileManager, @unchecked Sendable {
     }
 }
 
-private final class ManagedCopyFileProbe: FileManager, @unchecked Sendable {
+private final class SourceImportFileProbe: FileManager, @unchecked Sendable {
     let failure: String
     var target = URL(fileURLWithPath: "/dev/null")
     var copyCount = 0
@@ -1386,7 +1176,7 @@ private struct Phase1Fixture {
     var journal: URL { store.rootLayout(for: root).operationJournalFile }
 
     func stagingDirectory(for plan: Phase1OperationPlan) -> URL {
-        store.rootLayout(for: root).operationStagingDirectory
+        store.rootLayout(for: root).operationRecoveryDirectory
             .appendingPathComponent(plan.id.uuidString, isDirectory: true)
     }
 
@@ -1398,34 +1188,13 @@ private struct Phase1Fixture {
         try Data(contentsOf: store.rootLayout(for: root).skillshubMetadataFile)
     }
 
-    func executeManagedCopy() async throws -> (
+    func executeSourceImport() async throws -> (
         plan: Phase1OperationPlan,
         result: Phase1OperationResult,
         sourceBefore: Data,
         metadataBefore: Data
     ) {
-        let registrationPlan = try planner.sourceRegistrationPlan(
-            directory: source,
-            snapshot: initialSnapshot(),
-            sourceID: sourceID
-        )
-        let registrationCoordinator = Phase1OperationCoordinator(metadataStore: store)
-        let registration = await registrationCoordinator.commit(
-            plan: registrationPlan,
-            confirmation: planner.confirmation(for: registrationPlan)
-        )
-        guard registration.succeeded, let snapshot = registration.snapshot else {
-            throw Phase1OperationError.metadataCommitFailed(registration.task.result.template)
-        }
-        let candidate = try #require(snapshot.metadata.availableSkills.first)
-        let registeredSource = try #require(snapshot.metadata.sources.first)
-        let plan = try planner.managedCopyPlan(
-            candidate: candidate,
-            source: registeredSource,
-            rootURL: root,
-            snapshot: snapshot,
-            assetID: assetID
-        )
+        let plan = try planner.localSourceImportPlan(directory: source, rootURL: root, snapshot: initialSnapshot(), sourceID: sourceID)
         let sourceBefore = try Data(contentsOf: sourceSkillFile)
         let metadataBefore = try metadataBytes()
         let treeBefore = FileManager.default.subpaths(atPath: root.path)?.sorted() ?? []
@@ -1435,7 +1204,9 @@ private struct Phase1Fixture {
         )
         Attachment.record(metadataBefore, named: "metadata-before.json")
         Attachment.record(try metadataBytes(), named: "metadata-after.json")
-        Attachment.record(try Data(contentsOf: journal), named: "operation-journal.jsonl")
+        if FileManager.default.fileExists(atPath: journal.path) {
+            Attachment.record(try Data(contentsOf: journal), named: "operation-journal.jsonl")
+        }
         Attachment.record(sourceBefore, named: "source-before.md")
         Attachment.record(try Data(contentsOf: sourceSkillFile), named: "source-after.md")
         Attachment.record(treeBefore.joined(separator: "\n"), named: "root-before.txt")

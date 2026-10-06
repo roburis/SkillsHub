@@ -70,9 +70,7 @@ extension AgentKind {
         }
     }
 
-    nonisolated var assetImageName: String? {
-        AgentIconCatalog.specification(for: self).assetName
-    }
+
 }
 
 nonisolated struct AgentPathSettingRecord: Identifiable, Equatable {

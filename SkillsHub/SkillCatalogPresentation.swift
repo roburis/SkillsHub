@@ -43,7 +43,6 @@ nonisolated struct Phase1SkillPresentation: Identifiable, Hashable {
         (managed?.validation.messages ?? candidate?.validation.messages ?? []).map(\.presentationMessage)
             + (identityConflict ? ["Skill identity conflicts with its source location. Re-check before changing relationships."] : [])
     }
-    var isManaged: Bool { managed != nil }
     var needsAttention: Bool {
         identityConflict || managed?.validation.status == .invalid
             || candidate?.checkStatus == .blocked
@@ -208,22 +207,6 @@ nonisolated final class SkillCatalogPresentationService {
                 || $0.sourceNameText.localizedStandardContains(trimmedQuery)
                 || $0.relativeLocation.localizedStandardContains(trimmedQuery)
         }
-    }
-
-    func normalizedTag(_ rawValue: String, existingTags: [TagRecord] = []) -> TagRecord {
-        let collapsed = rawValue
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "-", with: " ")
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
-        let id = collapsed.lowercased().replacingOccurrences(of: " ", with: "-")
-        if let existing = existingTags.first(where: { $0.id == id }) {
-            return existing
-        }
-        let displayName = collapsed.split(separator: " ").map { word in
-            word.prefix(1).uppercased() + word.dropFirst().lowercased()
-        }.joined(separator: " ")
-        return TagRecord(id: id, displayName: displayName)
     }
 
     func sourceName(for source: SkillSource, relativeTo rootURL: URL? = nil) -> LocalizedMessage {

@@ -1552,8 +1552,6 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             materialReview = (try? reviewCreationMaterials(record: record, rootURL: rootURL))
                 ?? CreationMaterialReview(path: stagingURL.deletingLastPathComponent().path,
                     canSettle: false, detail: "Creation materials could not be verified.")
-            let materialAbsent = materialReview?.detail == "Creation directory settled"
-                || materialReview?.detail == "Creation directory absent; deletion history unverified."
             if directoryState == .completed,
                inspection?.observation.nodeIdentity == creation.nodeIdentity,
                inspection?.observation.linkText == creation.linkText {
