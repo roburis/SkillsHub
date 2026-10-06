@@ -4,7 +4,7 @@ import Testing
 @testable import SkillsHub
 
 struct RelationVerificationTests {
-    @Test func inspectorDistinguishesNodeMatrixAndRequiresExactEvidenceForOwnership() throws {
+    @Test func inspectorDistinguishesNodesByTheirCurrentTargets() throws {
         let root = try temporaryDirectory()
         let canonical = root.appendingPathComponent("canonical", isDirectory: true)
         let external = root.appendingPathComponent("external", isDirectory: true)
@@ -16,9 +16,7 @@ struct RelationVerificationTests {
         let vacant = try inspector.inspect(
             linkURL: root.appendingPathComponent("vacant"),
             relation: relation,
-            canonicalTargetPath: canonical.path,
-            evidence: nil
-        )
+            canonicalTargetPath: canonical.path)
         #expect(vacant.classification == .vacant)
 
         let regularFile = root.appendingPathComponent("regular-file")
@@ -26,9 +24,7 @@ struct RelationVerificationTests {
         let regular = try inspector.inspect(
             linkURL: regularFile,
             relation: relation,
-            canonicalTargetPath: canonical.path,
-            evidence: nil
-        )
+            canonicalTargetPath: canonical.path)
         #expect(regular.classification == .unmanagedNode)
         #expect(regular.observation.nodeKind == .regularFile)
 
@@ -37,9 +33,7 @@ struct RelationVerificationTests {
         let localDirectory = try inspector.inspect(
             linkURL: directory,
             relation: relation,
-            canonicalTargetPath: canonical.path,
-            evidence: nil
-        )
+            canonicalTargetPath: canonical.path)
         #expect(localDirectory.classification == .unmanagedNode)
         #expect(localDirectory.observation.nodeKind == .directory)
 
@@ -48,9 +42,7 @@ struct RelationVerificationTests {
         let externalInspection = try inspector.inspect(
             linkURL: externalLink,
             relation: relation,
-            canonicalTargetPath: canonical.path,
-            evidence: nil
-        )
+            canonicalTargetPath: canonical.path)
         #expect(externalInspection.classification == .externalLink)
 
         let brokenLink = root.appendingPathComponent("broken-link")
@@ -61,63 +53,21 @@ struct RelationVerificationTests {
         let broken = try inspector.inspect(
             linkURL: brokenLink,
             relation: relation,
-            canonicalTargetPath: canonical.path,
-            evidence: nil
-        )
+            canonicalTargetPath: canonical.path)
         #expect(broken.classification == .brokenLink)
         #expect(broken.observation.nodeKind == .brokenSymbolicLink)
 
         let managedLink = root.appendingPathComponent("managed-link")
-        let created = try AgentLinkService().createManagedLink(
-            at: managedLink, linkText: canonical.path, operationID: UUID(),
-            expectedParentIdentity: LinkNodeIdentity.read(at: root),
-            recordPreparation: { _ in }, recordCreation: { _ in }, onCreated: { _ in }
-        )
-        let nameAndTargetOnly = try inspector.inspect(
-            linkURL: managedLink,
-            relation: relation,
-            canonicalTargetPath: canonical.path,
-            evidence: nil
-        )
-        #expect(nameAndTargetOnly.classification == .externalLink)
-        let identity = try #require(nameAndTargetOnly.observation.fileIdentity)
-        let evidence = ManagedRelationEvidence(
-            relation: relation,
-            linkPath: managedLink.path,
-            canonicalTargetPath: canonical.path,
-            profileID: "skillshub.agent-profile.codex.global",
-            profileVersion: 1,
-            createdAtGeneration: 4,
-            fileIdentity: identity,
-            createdAt: Date(timeIntervalSince1970: 90),
-            creation: created.creation
-        )
-        let managed = try inspector.inspect(
-            linkURL: managedLink,
-            relation: relation,
-            canonicalTargetPath: canonical.path,
-            evidence: evidence
-        )
+        try FileManager.default.createSymbolicLink(atPath: managedLink.path, withDestinationPath: "canonical")
+        let managed = try inspector.inspect(linkURL: managedLink, relation: relation, canonicalTargetPath: canonical.path)
         #expect(managed.classification == .exactManagedLink)
-
-        var incompleteEvidence = evidence
-        incompleteEvidence.creation = nil
+        // Recreating the same relation does not require its previous creation history.
+        try FileManager.default.removeItem(at: managedLink)
+        try FileManager.default.createSymbolicLink(at: managedLink, withDestinationURL: canonical)
+        #expect(try inspector.inspect(linkURL: managedLink, relation: relation, canonicalTargetPath: canonical.path).classification == .exactManagedLink)
         #expect(RelationOwnershipInspector.classify(observation: managed.observation,
-            canonicalTargetPath: canonical.path, evidence: incompleteEvidence) == .externalLink)
-        var changedParent = managed.observation
-        changedParent.parentIdentity = nil
-        #expect(RelationOwnershipInspector.classify(observation: changedParent,
-            canonicalTargetPath: canonical.path, evidence: evidence) == .externalLink)
-
-        var wrongPathEvidence = evidence
-        wrongPathEvidence.linkPath = canonical.path
-        #expect(
-            RelationOwnershipInspector.classify(
-                observation: managed.observation,
-                canonicalTargetPath: canonical.path,
-                evidence: wrongPathEvidence
-            ) == .externalLink
-        )
+            expectedLinkPath: root.appendingPathComponent("another-name").path,
+            canonicalTargetPath: canonical.path) == .externalLink)
 
         var unreadable = managed.observation
         unreadable.nodeKind = .unreadable
@@ -126,9 +76,8 @@ struct RelationVerificationTests {
         #expect(
             RelationOwnershipInspector.classify(
                 observation: unreadable,
-                canonicalTargetPath: canonical.path,
-                evidence: evidence
-            ) == .unreadable
+                expectedLinkPath: managedLink.path,
+                canonicalTargetPath: canonical.path) == .unreadable
         )
     }
 
@@ -137,7 +86,7 @@ struct RelationVerificationTests {
         #expect(RelationVerifier.verify(verifiedInput).conclusion == .verifiedConsistent)
 
         var driftedInput = verifiedInput
-        driftedInput.evidence = nil
+        driftedInput.bindings.canonicalPath = "/root/local/other"
         #expect(RelationVerifier.verify(driftedInput).conclusion == .drifted)
 
         var brokenInput = verifiedInput
@@ -173,7 +122,6 @@ struct RelationVerificationTests {
             limitation: nil
         )
         disabledVacant.observation = vacant
-        disabledVacant.evidence = nil
         disabledVacant.bindings.nodeKind = vacant.nodeKind
         disabledVacant.bindings.nodeFingerprint = nil
         disabledVacant.bindings.linkText = nil
@@ -208,11 +156,6 @@ struct RelationVerificationTests {
         let record = RelationVerifier.verify(input)
         #expect(record.conclusion == .verifiedConsistent)
 
-
-        var missingEvidence = input
-        missingEvidence.evidence = nil
-        #expect(RelationVerifier.consume(record, against: missingEvidence) == .drifted)
-
         var staleEvidence = input
         staleEvidence.bindings.enablementIntent.isEnabled = false
         let vacant = TargetObservation(
@@ -233,7 +176,7 @@ struct RelationVerificationTests {
         staleEvidence.bindings.linkText = nil
         staleEvidence.bindings.resolvedTargetPath = nil
         staleEvidence.bindings.observationDigest = vacant.digest
-        #expect(RelationVerifier.verify(staleEvidence).conclusion == .drifted)
+        #expect(RelationVerifier.verify(staleEvidence).conclusion == .verifiedConsistent)
 
         let mutations: [(inout RelationVerificationInput) -> Void] = [
             { $0.bindings.rootGeneration += 1 },
@@ -259,8 +202,7 @@ struct RelationVerificationTests {
             { $0.bindings.observationDigest = "observation-v2" },
             { $0.bindings.enablementIntent.isEnabled.toggle() },
             { $0.bindings.enablementIntent.generation += 1 },
-            { $0.limitations.append("permission-changed") },
-            { $0.evidence?.fileIdentity = TargetFileIdentity(volumeNumber: 12, fileNumber: 30) }
+            { $0.limitations.append("permission-changed") }
         ]
 
         for mutate in mutations {
@@ -303,29 +245,14 @@ private func canonicalInput() -> RelationVerificationInput {
         isEnabled: true,
         generation: 4
     )
-    let evidence = ManagedRelationEvidence(
-        relation: relation,
-        linkPath: observation.linkPath,
-        canonicalTargetPath: "/root/local/review",
-        profileID: "skillshub.agent-profile.codex.global",
-        profileVersion: 1,
-        createdAtGeneration: 4,
-        fileIdentity: identity,
-        createdAt: Date(timeIntervalSince1970: 90),
-        creation: LinkCreationEvidence(
-            operationID: UUID(), stagingPath: "/agent/.skillshub-create-fixture/link",
-            parentIdentity: LinkNodeIdentity(nodeStatus), stagingDirectoryIdentity: LinkNodeIdentity(nodeStatus),
-            nodeIdentity: nodeIdentity, linkText: "/root/local/review"
-        )
-    )
     let bindings = RelationVerificationBindings(
         rootGeneration: 4,
         assetRevision: "revision-v1",
         manifestDigest: "manifest-v1",
         canonicalPath: "/root/local/review",
         canonicalPathFingerprint: "canonical-v1",
-        profileID: evidence.profileID,
-        profileVersion: evidence.profileVersion,
+        profileID: "skillshub.agent-profile.codex.global",
+        profileVersion: 1,
         profileSchemaVersion: 1,
         profileIsValid: true,
         agentExists: true,
@@ -346,7 +273,6 @@ private func canonicalInput() -> RelationVerificationInput {
         relation: relation,
         bindings: bindings,
         observation: observation,
-        evidence: evidence,
         limitations: []
     )
 }

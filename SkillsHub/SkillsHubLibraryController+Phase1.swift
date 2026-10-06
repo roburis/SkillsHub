@@ -723,7 +723,7 @@ nonisolated private struct RecoveryTaskRead {
             }
             let currentRelations = Set((snapshot?.metadata.enablementIntents.map {
                 AgentRelationIdentity(assetID: $0.assetID, agentID: $0.agentID, scope: $0.scope).id
-            } ?? []) + (snapshot?.metadata.managedRelationEvidence.map(\.relation.id) ?? []))
+            } ?? []))
             let relationState: Phase1RecoveryState = snapshot == nil
                 ? .unknown
                 : (record.relationIDs.contains(where: currentRelations.contains) ? .notCompleted : .completed)
@@ -805,7 +805,7 @@ nonisolated private struct RecoveryTaskRead {
             if let relationIDs = record.relationIDs, let snapshot {
                 let currentRelations = Set(snapshot.metadata.enablementIntents.map {
                     AgentRelationIdentity(assetID: $0.assetID, agentID: $0.agentID, scope: $0.scope).id
-                } + snapshot.metadata.managedRelationEvidence.map(\.relation.id))
+                })
                 relationState = relationIDs.contains(where: currentRelations.contains) ? .notCompleted : .completed
             } else {
                 relationState = .unknown

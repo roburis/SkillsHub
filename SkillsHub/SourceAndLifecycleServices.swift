@@ -1159,8 +1159,7 @@ nonisolated final class SourceRemovalService: @unchecked Sendable {
             let current = try metadataStore.loadCurrentSnapshot(from: rootURL)
             let assetIDs = Set(plan.skills.map(\.assetID))
             guard self.currentScopeMatches(plan: plan, snapshot: current),
-                  current.metadata.enablementIntents.contains(where: { assetIDs.contains($0.assetID) }) == false,
-                  current.metadata.managedRelationEvidence.contains(where: { assetIDs.contains($0.relation.assetID) }) == false else {
+                  current.metadata.enablementIntents.contains(where: { assetIDs.contains($0.assetID) }) == false else {
                 throw SourceRemovalError.planChanged
             }
 
@@ -1196,8 +1195,7 @@ nonisolated final class SourceRemovalService: @unchecked Sendable {
             let snapshot: RootSnapshot
             do {
                 snapshot = try metadataStore.commit(at: rootURL, expected: current) { metadata in
-                    guard metadata.enablementIntents.contains(where: { assetIDs.contains($0.assetID) }) == false,
-                          metadata.managedRelationEvidence.contains(where: { assetIDs.contains($0.relation.assetID) }) == false else {
+                    guard metadata.enablementIntents.contains(where: { assetIDs.contains($0.assetID) }) == false else {
                         throw SourceRemovalError.relationshipsRemain
                     }
                     let skillIDs = Set(plan.skills.map(\.skillID))

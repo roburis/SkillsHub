@@ -19,7 +19,6 @@ nonisolated struct RelationVerificationInput: Hashable, Sendable {
     var relation: AgentRelationIdentity
     var bindings: RelationVerificationBindings
     var observation: TargetObservation?
-    var evidence: ManagedRelationEvidence?
     var limitations: [String]
 }
 
@@ -33,8 +32,7 @@ nonisolated struct RelationOwnershipInspector: Sendable {
     func inspect(
         linkURL: URL,
         relation: AgentRelationIdentity,
-        canonicalTargetPath: String,
-        evidence: ManagedRelationEvidence?
+        canonicalTargetPath: String
     ) throws -> RelationOwnershipInspection {
         let linkPath = linkURL.standardizedFileURL.path
         var status = stat()
@@ -147,16 +145,16 @@ nonisolated struct RelationOwnershipInspector: Sendable {
             observation: observation,
             classification: Self.classify(
                 observation: observation,
-                canonicalTargetPath: canonicalTargetPath,
-                evidence: evidence
+                expectedLinkPath: linkPath,
+                canonicalTargetPath: canonicalTargetPath
             )
         )
     }
 
     static func classify(
         observation: TargetObservation,
-        canonicalTargetPath: String,
-        evidence: ManagedRelationEvidence?
+        expectedLinkPath: String,
+        canonicalTargetPath: String
     ) -> RelationOwnershipClassification {
         switch observation.nodeKind {
         case .vacant:
@@ -169,19 +167,8 @@ nonisolated struct RelationOwnershipInspector: Sendable {
             guard
                 observation.limitation == nil,
                 observation.isReadable,
-                let observationIdentity = observation.fileIdentity,
-                let evidence,
-                let creation = evidence.creation,
-                creation.nodeIdentity == observation.nodeIdentity,
-                creation.parentIdentity == observation.parentIdentity,
-                creation.parentIdentity.kind == S_IFDIR,
-                creation.nodeIdentity.kind == S_IFLNK,
-                creation.nodeIdentity.file == evidence.fileIdentity,
-                creation.linkText == observation.linkText,
-                evidence.relation == observation.relation,
-                Self.standardizedPath(evidence.linkPath) == Self.standardizedPath(observation.linkPath),
-                Self.canonicalizedPath(evidence.canonicalTargetPath) == Self.canonicalizedPath(canonicalTargetPath),
-                observationIdentity == evidence.fileIdentity,
+                URL(fileURLWithPath: observation.linkPath).standardizedFileURL.path
+                    == URL(fileURLWithPath: expectedLinkPath).standardizedFileURL.path,
                 observation.resolvedTargetPath.map(Self.canonicalizedPath) == Self.canonicalizedPath(canonicalTargetPath)
             else {
                 return observation.nodeKind == .brokenSymbolicLink ? .brokenLink : .externalLink
@@ -214,10 +201,6 @@ nonisolated struct RelationOwnershipInspector: Sendable {
         return .unreadable(errorNumber)
     }
 
-    private static func standardizedPath(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
-    }
-
     private static func canonicalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
     }
@@ -229,7 +212,6 @@ nonisolated enum RelationVerifier {
         rootGeneration: UInt64,
         intent: EnablementIntent,
         observation: TargetObservation,
-        evidence: ManagedRelationEvidence?,
         limitations: [String]
     ) -> VerificationRecord {
         let bindings = RelationVerificationBindings(
@@ -261,7 +243,6 @@ nonisolated enum RelationVerifier {
                 relation: facts.relation,
                 bindings: bindings,
                 observation: observation,
-                evidence: evidence,
                 limitations: limitations
             )
         )
@@ -347,25 +328,20 @@ nonisolated enum RelationVerifier {
         guard let observation = input.observation else { return .notVerified }
         let classification = RelationOwnershipInspector.classify(
             observation: observation,
-            canonicalTargetPath: input.bindings.canonicalPath,
-            evidence: input.evidence
+            expectedLinkPath: input.bindings.linkPath,
+            canonicalTargetPath: input.bindings.canonicalPath
         )
 
         if input.bindings.enablementIntent.isEnabled {
             guard
                 classification == .exactManagedLink,
-                observation.nodeKind == .symbolicLink,
-                let evidence = input.evidence,
-                evidence.profileID == input.bindings.profileID,
-                evidence.profileVersion == input.bindings.profileVersion,
-                evidence.createdAtGeneration == input.bindings.enablementIntent.generation
+                observation.nodeKind == .symbolicLink
             else {
                 return .drifted
             }
             return .verifiedConsistent
         }
 
-        guard input.evidence == nil else { return .drifted }
         return classification == .exactManagedLink ? .drifted : .verifiedConsistent
     }
 
@@ -395,14 +371,11 @@ nonisolated extension SkillsHubLocalState {
     func replacingRelationState(
         _ relation: AgentRelationIdentity,
         observation: TargetObservation,
-        evidence _: ManagedRelationEvidence?,
         verification: VerificationRecord
     ) -> SkillsHubLocalState {
         var next = self
         next.targetObservations.removeAll { $0.relation == relation }
         next.targetObservations.append(observation)
-        // schema 4 keeps ownership evidence in `.skillshub.json`; local state is rebuildable observation only.
-        next.managedRelationEvidence.removeAll { $0.relation == relation }
         next.verificationRecords.removeAll { $0.relation == relation }
         next.verificationRecords.append(verification)
         next.targetObservations.sort { $0.id < $1.id }

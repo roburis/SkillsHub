@@ -209,7 +209,6 @@ nonisolated struct AvailableSkill: Codable, Hashable, Identifiable {
         case candidateID, manifestDigest, checkStatus, generatedAtGeneration
     }
 
-
     private static func checkStatus(for status: SkillValidationStatus) -> CandidateCheckStatus {
         switch status {
         case .valid: .valid
@@ -362,20 +361,6 @@ nonisolated struct TargetObservation: Codable, Hashable, Identifiable, Sendable 
         encoder.dateEncodingStrategy = .iso8601
         return SHA256Digest.hex((try? encoder.encode(self)) ?? Data())
     }
-}
-
-nonisolated struct ManagedRelationEvidence: Codable, Hashable, Identifiable, Sendable {
-    var relation: AgentRelationIdentity
-    var linkPath: String
-    var canonicalTargetPath: String
-    var profileID: String
-    var profileVersion: Int
-    var createdAtGeneration: UInt64
-    var fileIdentity: TargetFileIdentity
-    var createdAt: Date
-    var creation: LinkCreationEvidence? = nil
-
-    var id: String { relation.id }
 }
 
 nonisolated enum VerificationConclusion: String, Codable, CaseIterable, Hashable, Sendable {

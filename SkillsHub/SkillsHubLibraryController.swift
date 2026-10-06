@@ -138,7 +138,6 @@ final class SkillsHubLibraryController {
     var presentationIntents: [String: EnablementIntent] = [:]
     var presentationObservations: [String: TargetObservation] = [:]
     var presentationVerifications: [String: VerificationRecord] = [:]
-    var presentationEvidence: [String: ManagedRelationEvidence] = [:]
     var pendingRootInitialization: RootInspectionFacts?
     var lastRootInspectionResult: RootInspectionResult?
     var pendingPhase1OperationPlan: Phase1OperationPlan?
@@ -586,36 +585,6 @@ extension SkillsHubLibraryController {
                 candidateID: "github-removal-candidate"
             ))
         }
-        var fixtureManagedEvidence: ManagedRelationEvidence?
-        if let rolesSkill = controller.installedSkills.first(where: { $0.id == "roles-skills" }) {
-            let relation = AgentRelationIdentity(
-                assetID: rolesSkill.assetID,
-                agentID: AgentKind.codex.rawValue,
-                scope: .global
-            )
-            let linkURL = home.appending(path: ".codex/skills/roles-skills")
-            let observation = try RelationOwnershipInspector().inspect(
-                linkURL: linkURL,
-                relation: relation,
-                canonicalTargetPath: rolesSkill.installedPath,
-                evidence: nil
-            ).observation
-            guard let fileIdentity = observation.fileIdentity else {
-                throw SkillsHubLibraryFailure.invalidSource(
-                    "UI fixture link identity is unavailable: \(linkURL.path)"
-                )
-            }
-            fixtureManagedEvidence = ManagedRelationEvidence(
-                relation: relation,
-                linkPath: linkURL.path,
-                canonicalTargetPath: rolesSkill.installedPath,
-                profileID: "skillshub.agent-profile.codex.global@1",
-                profileVersion: 1,
-                createdAtGeneration: 0,
-                fileIdentity: fileIdentity,
-                createdAt: Date(timeIntervalSince1970: 0)
-            )
-        }
         controller.agentFindings = [
             AgentDirectoryFinding(
                 id: "fixture-agent-broken-link",
@@ -858,8 +827,7 @@ extension SkillsHubLibraryController {
                     : configuration.sourceUpdateFixture ? updateAgents : Array(updateAgents.prefix(2)),
                 tags: controller.tags,
                 uiState: controller.persistedUIState(),
-                enablementIntents: updateIntents,
-                managedRelationEvidence: [fixtureManagedEvidence].compactMap { $0 }
+                enablementIntents: updateIntents
             ),
             to: root
         )

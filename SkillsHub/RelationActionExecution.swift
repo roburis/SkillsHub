@@ -12,7 +12,6 @@ nonisolated enum RelationActionExecutionStatus: String, Equatable, Sendable {
 nonisolated enum RelationActionExecutionBlockReason: String, Equatable, Sendable {
     case currentFactsChanged = "current-facts-changed"
     case nodeConflict = "node-conflict"
-    case ownershipEvidenceInvalid = "ownership-evidence-invalid"
     case identityBoundRemovalUnavailable = "identity-bound-removal-unavailable"
 }
 
@@ -333,8 +332,7 @@ nonisolated final class RelationActionOperationRecordStore: @unchecked Sendable 
         record.targetNodeIdentity = try LinkNodeIdentity.read(at: URL(fileURLWithPath: authorization.facts.targetPath))
         let inspection = try RelationOwnershipInspector().inspect(
             linkURL: URL(fileURLWithPath: authorization.facts.linkPath), relation: authorization.relation,
-            canonicalTargetPath: authorization.facts.canonicalPath, evidence: nil
-        )
+            canonicalTargetPath: authorization.facts.canonicalPath)
         guard RelationActionTokenBuilder().observationDigest(of: inspection.observation) == authorization.facts.observationDigest,
               inspection.observation.parentIdentity == record.targetNodeIdentity else {
             throw RelationActionOperationRecordError.invalidRecord
@@ -490,7 +488,7 @@ nonisolated final class RelationActionOperationRecordStore: @unchecked Sendable 
                   record.isolationPaths == [removal.isolationPath],
                   removal.creation.parentIdentity == record.targetNodeIdentity,
                   removal.creation.nodeIdentity.kind == S_IFLNK,
-                  removal.creation.linkText == record.canonicalTargetPath,
+                  removal.creation.linkText == record.facts.linkText,
                   removal.operationDirectoryIdentity.file == record.operationDirectoryIdentity,
                   removal.isolationDirectoryIdentity.kind == S_IFDIR else {
                 throw RelationActionOperationRecordError.invalidRecord
@@ -781,20 +779,24 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         let snapshot = try metadataStore.loadCurrentSnapshot(from: rootURL)
         guard !authorization.desiredEnabled, record.operationID == authorization.actionID,
               record.removal == nil, snapshotMatchesAuthorization(snapshot, authorization: authorization),
-              let evidence = snapshot.metadata.managedRelationEvidence.first(where: { $0.relation == authorization.relation }),
-              evidenceMatchesAuthorization(evidence, authorization: authorization),
-              let creation = evidence.creation else {
+              let linkText = authorization.facts.linkText else {
             throw RelationLinkPrimitiveError.identityChanged
         }
         let inspection = try inspector.inspect(linkURL: URL(fileURLWithPath: authorization.facts.linkPath),
-            relation: authorization.relation, canonicalTargetPath: authorization.facts.canonicalPath, evidence: evidence)
-        guard inspectionMatchesAuthorization(inspection, evidence: evidence, authorization: authorization) else {
+            relation: authorization.relation, canonicalTargetPath: authorization.facts.canonicalPath)
+        guard inspectionMatchesAuthorization(inspection, authorization: authorization),
+              let nodeIdentity = inspection.observation.nodeIdentity,
+              let parentIdentity = inspection.observation.parentIdentity else {
             throw RelationLinkPrimitiveError.identityChanged
         }
         let directory = metadataStore.rootLayout(for: rootURL).operationRecoveryDirectory
             .appendingPathComponent(authorization.actionID.uuidString, isDirectory: true)
+        // This receipt binds this removal to the currently authorized node, without creation history.
+        let currentNode = LinkCreationEvidence(operationID: authorization.actionID,
+            stagingPath: authorization.facts.linkPath, parentIdentity: parentIdentity,
+            stagingDirectoryIdentity: parentIdentity, nodeIdentity: nodeIdentity, linkText: linkText)
         try linkService.removeManagedLink(at: URL(fileURLWithPath: authorization.facts.linkPath),
-            creation: creation, operationDirectory: directory,
+            creation: currentNode, operationDirectory: directory,
             expectedOperationIdentity: record.operationDirectoryIdentity,
             recordIsolation: { removal in
                 try faultHook?(.beforeIsolationRecord)
@@ -910,18 +912,12 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             }
 
             let linkURL = URL(fileURLWithPath: authorization.facts.linkPath)
-            let currentEvidence = snapshot.metadata.managedRelationEvidence.first {
-                $0.relation == relation
-            }
             let inspection = try inspector.inspect(
                 linkURL: linkURL,
                 relation: relation,
-                canonicalTargetPath: authorization.facts.canonicalPath,
-                evidence: currentEvidence
-            )
+                canonicalTargetPath: authorization.facts.canonicalPath)
             guard inspectionMatchesAuthorization(
                 inspection,
-                evidence: currentEvidence,
                 authorization: authorization
             ) else {
                 return blocked(
@@ -942,16 +938,6 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                     observation: inspection.observation
                 )
             }
-            if inspection.classification == .exactManagedLink,
-               evidenceMatchesAuthorization(currentEvidence, authorization: authorization) == false {
-                return blocked(
-                    relation: relation,
-                    reason: .ownershipEvidenceInvalid,
-                    events: fileEvents,
-                    observation: inspection.observation
-                )
-            }
-
             try faultHook?(.beforeOperationRecord)
             operationRecord = try operationRecordStore.prepare(
                 authorization: authorization,
@@ -1013,9 +999,15 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             let stagedObservation = try inspector.inspect(
                 linkURL: linkURL,
                 relation: relation,
-                canonicalTargetPath: authorization.facts.canonicalPath,
-                evidence: nil
-            ).observation
+                canonicalTargetPath: authorization.facts.canonicalPath).observation
+            if let createdNode {
+                guard stagedObservation.nodeIdentity == createdNode.creation.nodeIdentity,
+                      stagedObservation.parentIdentity == createdNode.creation.parentIdentity,
+                      stagedObservation.linkText == createdNode.linkText,
+                      stagedObservation.limitation == nil else {
+                    throw RelationLinkPrimitiveError.createdNodeChanged
+                }
+            }
             if !authorization.desiredEnabled, stagedObservation.nodeKind != .vacant {
                 throw RelationLinkPrimitiveError.identityChanged
             }
@@ -1026,7 +1018,6 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             let metadataNeedsCommit = existingIntent?.isEnabled != authorization.desiredEnabled
                 || existingIntent == nil
                 || createdNode != nil
-                || (authorization.desiredEnabled == false && currentEvidence != nil)
                 || needsStableLinkName
             let targetGeneration = metadataNeedsCommit ? snapshot.generation + 1 : snapshot.generation
             let targetIntent = EnablementIntent(
@@ -1036,25 +1027,16 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                 isEnabled: authorization.desiredEnabled,
                 generation: metadataNeedsCommit ? targetGeneration : (existingIntent?.generation ?? targetGeneration)
             )
-            let stagedEvidence = try evidenceForDesiredState(
-                authorization: authorization,
-                observation: stagedObservation,
-                existingEvidence: currentEvidence,
-                targetGeneration: targetIntent.generation,
-                createdNode: createdNode
-            )
             let stagedVerification = RelationVerifier.verify(
                 actionFacts: revalidatedFacts(authorization.facts, currentInstallation: currentInstallation),
                 rootGeneration: targetGeneration,
                 intent: targetIntent,
                 observation: stagedObservation,
-                evidence: stagedEvidence,
                 limitations: []
             )
             let stagedLocal = originalLocal.replacingRelationState(
                 relation,
                 observation: stagedObservation,
-                evidence: stagedEvidence,
                 verification: stagedVerification
             )
 
@@ -1066,12 +1048,16 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             var committedSnapshot = snapshot
             if metadataNeedsCommit {
                 try faultHook?(.beforeMetadataCAS)
-                if let stagedEvidence {
+                if authorization.desiredEnabled {
                     let current = try inspector.inspect(
                         linkURL: linkURL, relation: relation,
-                        canonicalTargetPath: authorization.facts.canonicalPath, evidence: stagedEvidence
-                    )
+                        canonicalTargetPath: authorization.facts.canonicalPath)
                     guard current.classification == .exactManagedLink else {
+                        throw RelationLinkPrimitiveError.createdNodeChanged
+                    }
+                    guard current.observation.nodeIdentity == stagedObservation.nodeIdentity,
+                          current.observation.parentIdentity == stagedObservation.parentIdentity,
+                          current.observation.linkText == stagedObservation.linkText else {
                         throw RelationLinkPrimitiveError.createdNodeChanged
                     }
                 }
@@ -1088,11 +1074,6 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                     }
                     metadata.enablementIntents.append(targetIntent)
                     metadata.enablementIntents.sort { $0.id < $1.id }
-                    metadata.managedRelationEvidence.removeAll { $0.relation == relation }
-                    if let stagedEvidence {
-                        metadata.managedRelationEvidence.append(stagedEvidence)
-                        metadata.managedRelationEvidence.sort { $0.id < $1.id }
-                    }
                 }
                 metadataWasCommitted = true
                 metadataDelta = .committed
@@ -1113,9 +1094,14 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                 rootURL: rootURL,
                 snapshot: committedSnapshot,
                 fallbackIntent: targetIntent,
-                existingEvidence: stagedEvidence,
                 currentInstallation: currentInstallation
             )
+            guard !authorization.desiredEnabled
+                || (final.observation.nodeIdentity == stagedObservation.nodeIdentity
+                    && final.observation.parentIdentity == stagedObservation.parentIdentity
+                    && final.observation.linkText == stagedObservation.linkText) else {
+                throw RelationLinkPrimitiveError.createdNodeChanged
+            }
             try appendOperationObservation(
                 to: &operationRecord,
                 checkpoint: .finalObservation,
@@ -1360,13 +1346,12 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         guard let creation = record.creation else { throw RelationActionOperationRecordError.invalidRecord }
         let staging = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
         let snapshot = try metadataStore.loadCurrentSnapshot(from: rootURL)
-        let evidence = snapshot.metadata.managedRelationEvidence.first { $0.relation == record.relation }
         let inspection = try inspector.inspect(linkURL: URL(fileURLWithPath: record.linkPath),
-            relation: record.relation, canonicalTargetPath: record.canonicalTargetPath, evidence: evidence)
+            relation: record.relation, canonicalTargetPath: record.canonicalTargetPath)
         let intent = currentIntent(in: snapshot, relation: record.relation)
-        let relationResolved = (intent?.isEnabled == true && evidence?.creation == creation
+        let relationResolved = (intent?.isEnabled == true
             && inspection.classification == .exactManagedLink)
-            || (intent?.isEnabled == false && evidence == nil && inspection.classification == .vacant)
+            || (intent?.isEnabled == false && inspection.classification == .vacant)
         let ready = record.completedAt != nil && record.desiredEnabled && relationResolved
             && inspection.observation.parentIdentity == creation.parentIdentity
         let path = record.creationMaterials?.isolationPath ?? staging.path
@@ -1421,13 +1406,10 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         do {
             let snapshot = try metadataStore.loadCurrentSnapshot(from: rootURL)
             let relation = authorization.relation
-            let evidence = snapshot.metadata.managedRelationEvidence.first { $0.relation == relation }
             let inspection = try inspector.inspect(
                 linkURL: URL(fileURLWithPath: authorization.facts.linkPath),
                 relation: relation,
-                canonicalTargetPath: authorization.facts.canonicalPath,
-                evidence: evidence
-            )
+                canonicalTargetPath: authorization.facts.canonicalPath)
             guard let intent = currentIntent(in: snapshot, relation: relation) else {
                 return RelationActionRecoveryResult(
                     relation: relation,
@@ -1442,7 +1424,6 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                 rootGeneration: snapshot.generation,
                 intent: intent,
                 observation: inspection.observation,
-                evidence: evidence,
                 limitations: []
             )
             return RelationActionRecoveryResult(
@@ -1471,34 +1452,20 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
     ) -> RelationActionRecoveryResult {
         let snapshotResult = Result { try metadataStore.loadCurrentSnapshot(from: rootURL) }
         let snapshot = try? snapshotResult.get()
-        let evidence = snapshot?.metadata.managedRelationEvidence.first { $0.relation == record.relation }
         let inspectionResult = Result {
             try inspector.inspect(
                 linkURL: URL(fileURLWithPath: record.linkPath),
                 relation: record.relation,
-                canonicalTargetPath: record.canonicalTargetPath,
-                evidence: evidence
-            )
+                canonicalTargetPath: record.canonicalTargetPath)
         }
         let inspection = try? inspectionResult.get()
         let intent = snapshot?.metadata.enablementIntents.first { relationForIntent($0) == record.relation }
-        let metadataOwnershipMatches = if record.desiredEnabled {
-            evidence.map {
-                URL(fileURLWithPath: $0.linkPath).standardizedFileURL.path == record.linkPath
-                    && URL(fileURLWithPath: $0.canonicalTargetPath).standardizedFileURL.path == record.canonicalTargetPath
-                    && $0.profileID == record.facts.profileID
-                    && $0.profileVersion == record.facts.profileVersion
-            } ?? false
-        } else {
-            evidence == nil
-        }
         let verification: VerificationRecord? = if let snapshot, let inspection, let intent {
             RelationVerifier.verify(
                 actionFacts: revalidatedFacts(record.facts, currentInstallation: currentInstallation),
                 rootGeneration: snapshot.generation,
                 intent: intent,
                 observation: inspection.observation,
-                evidence: evidence,
                 limitations: []
             )
         } else {
@@ -1506,8 +1473,7 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         }
         let metadataState: RelationActionRecoveryState
         if snapshot != nil,
-           intent?.isEnabled == record.desiredEnabled,
-           metadataOwnershipMatches {
+           intent?.isEnabled == record.desiredEnabled {
             metadataState = .completed
         } else if snapshot?.metadataDigest == record.originalMetadataDigest {
             metadataState = .notCompleted
@@ -1581,7 +1547,7 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         if let creation = record.creation {
             let stagingURL = URL(fileURLWithPath: creation.stagingPath)
             let staged = try? inspector.inspect(linkURL: stagingURL, relation: record.relation,
-                canonicalTargetPath: record.canonicalTargetPath, evidence: nil).observation
+                canonicalTargetPath: record.canonicalTargetPath).observation
             let state: RelationActionRecoveryState
             materialReview = (try? reviewCreationMaterials(record: record, rootURL: rootURL))
                 ?? CreationMaterialReview(path: stagingURL.deletingLastPathComponent().path,
@@ -1614,7 +1580,7 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         }
         if let removal = record.removal {
             let isolated = try? inspector.inspect(linkURL: URL(fileURLWithPath: removal.isolationPath),
-                relation: record.relation, canonicalTargetPath: record.canonicalTargetPath, evidence: nil).observation
+                relation: record.relation, canonicalTargetPath: record.canonicalTargetPath).observation
             let state: RelationActionRecoveryState
             if directoryState != .completed || isolated?.parentIdentity != removal.isolationDirectoryIdentity
                 || (try? LinkNodeIdentity.read(at: operationDirectory)) != removal.operationDirectoryIdentity {
@@ -1664,13 +1630,10 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
     ) throws {
         guard var current = record else { return }
         let snapshot = try? metadataStore.loadCurrentSnapshot(from: rootURL)
-        let evidence = snapshot?.metadata.managedRelationEvidence.first { $0.relation == current.relation }
         let inspection = try? inspector.inspect(
             linkURL: URL(fileURLWithPath: current.linkPath),
             relation: current.relation,
-            canonicalTargetPath: current.canonicalTargetPath,
-            evidence: evidence
-        )
+            canonicalTargetPath: current.canonicalTargetPath)
         let targetIdentity = try? directoryIdentity(
             of: URL(fileURLWithPath: current.facts.targetPath, isDirectory: true)
         )
@@ -1743,7 +1706,6 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         rootURL: URL,
         snapshot: RootSnapshot,
         fallbackIntent: EnablementIntent,
-        existingEvidence: ManagedRelationEvidence?,
         currentInstallation: @Sendable () -> AgentInstallationEvidence?
     ) throws -> (observation: TargetObservation, verification: VerificationRecord, limitations: [String]) {
         let relation = authorization.relation
@@ -1752,61 +1714,22 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
         let inspection = try inspector.inspect(
             linkURL: URL(fileURLWithPath: authorization.facts.linkPath),
             relation: relation,
-            canonicalTargetPath: authorization.facts.canonicalPath,
-            evidence: existingEvidence
-        )
+            canonicalTargetPath: authorization.facts.canonicalPath)
         let record = RelationVerifier.verify(
             actionFacts: revalidatedFacts(authorization.facts, currentInstallation: currentInstallation),
             rootGeneration: snapshot.generation,
             intent: intent,
             observation: inspection.observation,
-            evidence: existingEvidence,
             limitations: !authorization.desiredEnabled && inspection.observation.nodeKind != .vacant
                 ? ["original-position-reoccupied"] : []
         )
         let next = local.replacingRelationState(
             relation,
             observation: inspection.observation,
-            evidence: existingEvidence,
             verification: record
         )
         try localStateStore.save(next, to: rootURL)
         return (inspection.observation, record, record.limitations)
-    }
-
-    private func evidenceForDesiredState(
-        authorization: RelationActionAuthorization,
-        observation: TargetObservation,
-        existingEvidence: ManagedRelationEvidence?,
-        targetGeneration: UInt64,
-        createdNode: ManagedLinkNode?
-    ) throws -> ManagedRelationEvidence? {
-        guard authorization.desiredEnabled else { return nil }
-        if let existingEvidence,
-           createdNode == nil,
-           existingEvidence.createdAtGeneration == targetGeneration,
-           RelationOwnershipInspector.classify(observation: observation,
-               canonicalTargetPath: authorization.facts.canonicalPath, evidence: existingEvidence) == .exactManagedLink {
-            return existingEvidence
-        }
-        guard let createdNode,
-              observation.nodeIdentity == createdNode.creation.nodeIdentity,
-              observation.parentIdentity == createdNode.creation.parentIdentity,
-              observation.linkText == createdNode.linkText,
-              observation.limitation == nil else {
-            throw RelationLinkPrimitiveError.createdNodeChanged
-        }
-        return ManagedRelationEvidence(
-            relation: authorization.relation,
-            linkPath: authorization.facts.linkPath,
-            canonicalTargetPath: authorization.facts.canonicalPath,
-            profileID: authorization.facts.profileID,
-            profileVersion: authorization.facts.profileVersion,
-            createdAtGeneration: targetGeneration,
-            fileIdentity: createdNode.fileIdentity,
-            createdAt: now(),
-            creation: createdNode.creation
-        )
     }
 
     private func snapshotMatchesAuthorization(
@@ -1833,7 +1756,6 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
 
     private func inspectionMatchesAuthorization(
         _ inspection: RelationOwnershipInspection,
-        evidence: ManagedRelationEvidence?,
         authorization: RelationActionAuthorization
     ) -> Bool {
         let observation = inspection.observation
@@ -1849,23 +1771,7 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
             && observation.limitation == facts.observationLimitation
             && RelationActionTokenBuilder().observationDigest(of: observation) == facts.observationDigest
             && inspection.classification == facts.ownership
-            && (inspection.classification != .exactManagedLink
-                || evidenceMatchesAuthorization(evidence, authorization: authorization))
-    }
 
-    private func evidenceMatchesAuthorization(
-        _ evidence: ManagedRelationEvidence?,
-        authorization: RelationActionAuthorization
-    ) -> Bool {
-        guard let evidence else { return false }
-        let facts = authorization.facts
-        return evidence.relation == authorization.relation
-            && URL(fileURLWithPath: evidence.linkPath).standardizedFileURL.path == facts.linkPath
-            && URL(fileURLWithPath: evidence.canonicalTargetPath).standardizedFileURL.path == facts.canonicalPath
-            && evidence.profileID == facts.profileID
-            && evidence.profileVersion == facts.profileVersion
-            && evidence.fileIdentity.fingerprint == facts.nodeFingerprint
-            && evidence.createdAtGeneration == facts.currentIntent?.generation
     }
 
     private func ownershipAllowsAction(

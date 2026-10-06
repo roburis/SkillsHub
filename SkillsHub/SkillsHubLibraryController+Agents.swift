@@ -187,7 +187,7 @@ extension SkillsHubLibraryController {
         let authorizations = try await startupAccessStore.resolvePresentationAccess(to: Array(targets.values))
         let result = try await Self.observePresentation(root: nil, items: [], descriptors: [descriptor],
             targets: targets, detections: Set(agentDetections.filter(\.detected).map(\.agentID)),
-            authorizations: authorizations, fileManager: fileManager, iconPaths: [], observations: [], evidence: [:], assets: [:])
+            authorizations: authorizations, fileManager: fileManager, iconPaths: [], observations: [], assets: [:])
         guard let qualification = result.qualifications[descriptor.id] else { throw CancellationError() }
         return capabilityPresentation(for: descriptor, qualification: qualification)
     }
@@ -481,14 +481,10 @@ extension SkillsHubLibraryController {
             snapshot.metadata.enablementIntents.filter {
                 $0.agentID == agentID && $0.scope == .global && $0.isEnabled
             }.map(\.id)
-                + snapshot.metadata.managedRelationEvidence.filter {
-                    $0.relation.agentID == agentID && $0.relation.scope == .global
-                }.map(\.id)
         )
         for relationID in relationIDs.sorted() {
             let intent = snapshot.metadata.enablementIntents.first { $0.id == relationID }
-            let evidence = snapshot.metadata.managedRelationEvidence.first { $0.id == relationID }
-            let relation = evidence?.relation ?? intent.map {
+            let relation = intent.map {
                 AgentRelationIdentity(assetID: $0.assetID, agentID: $0.agentID, scope: $0.scope)
             }
             guard let relation else { continue }
@@ -499,14 +495,6 @@ extension SkillsHubLibraryController {
                     id: "enabled-\(relation.id)",
                     title: .verbatim(skill?.name ?? relation.assetID.uuidString),
                     detail: "This Skill is still selected for this Agent. Disable it explicitly before changing directories.",
-                    skillID: skill?.id
-                ))
-            } else if evidence != nil {
-                blockers.append(AgentDirectoryChangeBlocker(
-                    kind: .managedRelation,
-                    id: "managed-\(relation.id)",
-                    title: .verbatim(skill?.name ?? relation.assetID.uuidString),
-                    detail: "A managed relationship still exists in the current directory.",
                     skillID: skill?.id
                 ))
             }
@@ -685,7 +673,7 @@ extension SkillsHubLibraryController {
             targetIsAuthorized: capability.authorizationStatus == .current,
             isReadable: observation.isReadable,
             isWritable: observation.isWritable,
-            linkPath: observation.linkPath,
+            linkPath: URL(fileURLWithPath: normalizedTargetPath).appendingPathComponent(relationLinkName(asset: skill)).path,
             nodeKind: observation.nodeKind,
             nodeFingerprint: observation.fileIdentity?.fingerprint,
             linkText: observation.linkText,
@@ -697,7 +685,6 @@ extension SkillsHubLibraryController {
             relation: relation,
             bindings: bindings,
             observation: observation,
-            evidence: presentationEvidence[relation.id],
             limitations: []
         )
     }
@@ -849,9 +836,6 @@ extension SkillsHubLibraryController {
             snapshot.metadata.enablementIntents.compactMap { intent in
                 intent.assetID == asset.assetID && intent.scope == .global && intent.isEnabled
                     ? intent.agentID : nil
-            } + snapshot.metadata.managedRelationEvidence.compactMap { evidence in
-                evidence.relation.assetID == asset.assetID && evidence.relation.scope == .global
-                    ? evidence.relation.agentID : nil
             }
         )
         let descriptors = Dictionary(uniqueKeysWithValues: visibleInstalledAgentDescriptors.map { ($0.id, $0) })
@@ -1419,8 +1403,18 @@ extension SkillsHubLibraryController {
             )
         }
         state.customAgents = authoritative
-        state.managedRelationEvidence = rootSnapshot?.metadata.managedRelationEvidence ?? []
-        state.activeAgentLinks = []
+        state.activeAgentLinks = (rootSnapshot?.metadata.enablementIntents ?? []).compactMap { intent in
+            guard intent.isEnabled,
+                  let skill = installedSkills.first(where: { $0.assetID == intent.assetID }),
+                  let configuration = configurations.first(where: { $0.id == intent.agentID }) else { return nil }
+            let target = configuredSkillsDirectory(for: configuration)
+            return AgentManagedLinkRecord(agentID: intent.agentID, agent: configuration.agent,
+                alias: relationLinkName(asset: skill),
+                linkPath: target.appendingPathComponent(relationLinkName(asset: skill)).path,
+                targetPath: skill.installedPath, hubSkillID: skill.id,
+                hubRelativePath: "", rootAtCreation: rootURL?.path ?? "",
+                createdAt: .distantPast)
+        }
         return state
     }
 

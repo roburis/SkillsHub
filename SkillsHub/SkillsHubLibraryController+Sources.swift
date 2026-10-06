@@ -598,8 +598,7 @@ extension SkillsHubLibraryController {
                 throw SourceUpdateError.confirmationChanged
             }
             let removedAssetIDs = Set(preview.removedRelationPlans.map(\.assetID))
-            guard current.metadata.enablementIntents.allSatisfy({ !removedAssetIDs.contains($0.assetID) }),
-                  current.metadata.managedRelationEvidence.allSatisfy({ !removedAssetIDs.contains($0.relation.assetID) }) else {
+            guard current.metadata.enablementIntents.allSatisfy({ !removedAssetIDs.contains($0.assetID) }) else {
                 throw SourceUpdateError.relationshipCleanupIncomplete
             }
             return try self.metadataStore.commit(at: rootURL, expected: current) { metadata in

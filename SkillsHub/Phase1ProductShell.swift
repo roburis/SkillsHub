@@ -550,7 +550,6 @@ struct Phase1ProductShell: View {
         )
     }
 
-
 }
 
 private struct Phase1ProductSidebar: View {
@@ -1684,7 +1683,7 @@ private struct Phase1AgentWorkspace: View {
         return relations.filter { relation in
             relation.verification == .verifiedConsistent
                 && relation.observation == .symbolicLink
-                && library.rootSnapshot?.metadata.managedRelationEvidence.contains { $0.relation == relation.relation } == true
+                && relation.intendedEnabled == true
         }
     }
 
@@ -1695,8 +1694,7 @@ private struct Phase1AgentWorkspace: View {
 
     private var unverifiedRelations: [AgentRelationPresentation] {
         relations.filter { relation in
-            (relation.intendedEnabled == true
-                || library.rootSnapshot?.metadata.managedRelationEvidence.contains { $0.relation == relation.relation } == true)
+            (relation.intendedEnabled == true || relation.ownership == .exactManagedLink)
                 && !exactManagedRelations.contains(where: { $0.id == relation.id })
         }
         .filter(matches)
@@ -1708,7 +1706,7 @@ private struct Phase1AgentWorkspace: View {
         return library.agentFindings.filter {
             $0.agentID == agentID
                 && ($0.type == .localDirectoryNotManaged || $0.type == .externalSymlinkNotManaged)
-                && !hasManagedEvidence(for: $0)
+                && !hasRecordedRelation(for: $0)
         }
         .filter(matches)
     }
@@ -1718,7 +1716,7 @@ private struct Phase1AgentWorkspace: View {
         return library.agentFindings.filter {
             $0.agentID == agentID
                 && (auditFailed || !($0.type == .localDirectoryNotManaged || $0.type == .externalSymlinkNotManaged)
-                    || hasManagedEvidence(for: $0))
+                    || hasRecordedRelation(for: $0))
         }
         .filter(matches)
     }
@@ -1861,13 +1859,9 @@ private struct Phase1AgentWorkspace: View {
         }
     }
 
-    private func hasManagedEvidence(for finding: AgentDirectoryFinding) -> Bool {
+    private func hasRecordedRelation(for finding: AgentDirectoryFinding) -> Bool {
         guard let path = finding.linkPath ?? finding.sourcePath else { return false }
-        return library.rootSnapshot?.metadata.managedRelationEvidence.contains {
-            $0.relation.agentID == finding.agentID
-                && URL(fileURLWithPath: $0.linkPath).standardizedFileURL.path
-                    == URL(fileURLWithPath: path).standardizedFileURL.path
-        } == true
+        return relations.contains { $0.linkPath == path && ($0.intendedEnabled == true || $0.ownership == .exactManagedLink) }
     }
 
     private func matches(_ finding: AgentDirectoryFinding) -> Bool {

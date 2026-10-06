@@ -92,7 +92,6 @@ struct ReloadConsistencyTests {
         #expect(missing.validation.status == .invalid)
         #expect(!controller.catalogItems.contains { $0.managed?.assetID == fixture.assetID })
         #expect(controller.relationPresentations(for: missing).first { $0.relation.agentID == "codex" }?.observation == .brokenSymbolicLink)
-        #expect(controller.rootSnapshot?.metadata.managedRelationEvidence == before.metadata.managedRelationEvidence)
         let linkName = try #require(before.metadata.installedSkills.first { $0.assetID == fixture.assetID }?.stableLinkName)
         #expect(FileAccessService().isSymlink(try #require(fixture.targets[.codex]).appendingPathComponent(linkName)))
         #expect(try controller.prepareManagedRelationClearPlan(assetID: fixture.assetID).items.count == 1)

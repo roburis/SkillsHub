@@ -323,7 +323,6 @@ extension SkillsHubLibraryController {
             else { continue }
 
             let target = URL(fileURLWithPath: targetPath, isDirectory: true).standardizedFileURL
-            let evidence = rootSnapshot?.metadata.managedRelationEvidence.first { $0.relation == relation }
             let observation: TargetObservation
             do {
                 guard let authorization = authorizations[target.path],
@@ -335,7 +334,7 @@ extension SkillsHubLibraryController {
                 )
                 let lease = try securityScopedAccessProvider.acquire(url: authorization.url, owner: .inspection(UUID()))
                 let inspection = await Self.inspectRelationNode(linkURL: linkURL, relation: relation,
-                    canonicalTargetPath: skill.installedPath, evidence: evidence)
+                    canonicalTargetPath: skill.installedPath)
                 try endSecurityScopedAccessLease(lease)
                 guard !Task.isCancelled, rootURL == root, rootSessionLease?.id == sessionID,
                       rootSnapshot == expected, generation == agentObservationGeneration else { return }
@@ -362,21 +361,18 @@ extension SkillsHubLibraryController {
                 capability: capability
             ) {
                 localState = localState.replacingRelationState(
-                    relation, observation: observation, evidence: evidence,
-                    verification: RelationVerifier.verify(input)
+                    relation, observation: observation,                     verification: RelationVerifier.verify(input)
                 )
             }
         }
     }
 
     @concurrent nonisolated private static func inspectRelationNode(
-        linkURL: URL, relation: AgentRelationIdentity, canonicalTargetPath: String,
-        evidence: ManagedRelationEvidence?
-    ) async -> Result<TargetObservation, Error> {
+        linkURL: URL, relation: AgentRelationIdentity, canonicalTargetPath: String) async -> Result<TargetObservation, Error> {
         Result {
             try Task.checkCancellation()
             return try RelationOwnershipInspector().inspect(linkURL: linkURL, relation: relation,
-                canonicalTargetPath: canonicalTargetPath, evidence: evidence).observation
+                canonicalTargetPath: canonicalTargetPath).observation
         }
     }
 

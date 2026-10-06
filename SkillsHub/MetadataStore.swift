@@ -39,8 +39,6 @@ nonisolated struct SkillsHubMetadata: Codable, Hashable {
     var validationCache: [String: SkillValidationResult]
     var uiState: [String: String]
     var enablementIntents: [EnablementIntent]
-    // authoritative managed-relation ownership evidence.
-    var managedRelationEvidence: [ManagedRelationEvidence]
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -55,9 +53,7 @@ nonisolated struct SkillsHubMetadata: Codable, Hashable {
         purposeMetadata: [String: PurposeMetadata] = [:],
         validationCache: [String: SkillValidationResult] = [:],
         uiState: [String: String] = [:],
-        enablementIntents: [EnablementIntent] = [],
-        managedRelationEvidence: [ManagedRelationEvidence] = []
-    ) {
+        enablementIntents: [EnablementIntent] = []) {
         self.schemaVersion = schemaVersion
         self.logicalRevision = logicalRevision
         self.generation = generation
@@ -71,7 +67,6 @@ nonisolated struct SkillsHubMetadata: Codable, Hashable {
         self.validationCache = validationCache
         self.uiState = uiState
         self.enablementIntents = enablementIntents
-        self.managedRelationEvidence = managedRelationEvidence
     }
 
 }
@@ -429,26 +424,6 @@ nonisolated final class SkillsHubMetadataStore {
               Set(metadata.enablementIntents.map(\.id)).count == metadata.enablementIntents.count,
               Set(canonicalPaths).count == canonicalPaths.count,
               Set(localSourcePaths).count == localSourcePaths.count
-        else {
-            throw MetadataCommitError.writeVerificationFailed
-        }
-        // authoritative ownership evidence must reference an existing asset and stay unique.
-        guard metadata.managedRelationEvidence.allSatisfy({ assetIDs.contains($0.relation.assetID) }),
-              metadata.managedRelationEvidence.allSatisfy({ evidence in
-                  guard let creation = evidence.creation else { return true }
-                  let parent = URL(fileURLWithPath: evidence.linkPath).deletingLastPathComponent()
-                  return creation.nodeIdentity.file == evidence.fileIdentity
-                      && creation.nodeIdentity.kind == S_IFLNK
-                      && creation.nodeIdentity.birthSeconds > 0
-                      && creation.parentIdentity.kind == S_IFDIR
-                      && creation.stagingDirectoryIdentity.kind == S_IFDIR
-                      && creation.parentIdentity.file.volumeNumber == creation.nodeIdentity.file.volumeNumber
-                      && creation.stagingPath == parent.appendingPathComponent(
-                          ".skillshub-create-\(creation.operationID.uuidString)/link"
-                      ).path
-                      && creation.linkText == evidence.canonicalTargetPath
-              }),
-              Set(metadata.managedRelationEvidence.map(\.id)).count == metadata.managedRelationEvidence.count
         else {
             throw MetadataCommitError.writeVerificationFailed
         }
