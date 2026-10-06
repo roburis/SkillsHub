@@ -1311,6 +1311,20 @@ nonisolated struct SkillsHubLocalization {
             "Copy into Skills Hub…": "复制到 Skills Hub…",
             "Current conclusion": "当前结论",
             "Delete broken link…": "删除失效链接…",
+            "The target is available again. The link was not deleted.": "目标已恢复，本次未删除链接。",
+            "This node is no longer a symbolic link. Nothing was deleted.": "当前节点已不是软链接，本次未删除任何对象。",
+            "The link target cannot be verified. Restore access and recheck.": "无法核实链接目标。请恢复访问权限后重新检查。",
+            "The Agent directory authorization is unavailable. Restore access and recheck.": "Agent 目录授权不可用。请恢复访问权限后重新检查。",
+            "The link path is outside the authorized Agent directory. Nothing was deleted.": "链接路径不在已授权的 Agent 目录内，本次未删除任何对象。",
+            "Link deletion needs recovery at %@.": "链接删除需要恢复，请检查保留位置：%@。",
+            "Previous operation": "上次操作",
+            "Cancel enablement record…": "取消启用记录…",
+            "Cancel enablement record?": "取消启用记录？",
+            "Cancel enablement record": "取消启用记录",
+            "Cancel the enablement record for %@ in %@? No filesystem node will be removed.": "取消 %@ 在 %@ 中的启用记录？不会删除任何文件系统节点。",
+            "Ownership could not be verified. Delete this broken link only after confirming its exact path.": "无法核实链接归属。请确认具体路径后，仅删除这条失效软链接。",
+            "The link is absent; its enablement record is still enabled. Cancel the record explicitly.": "链接已不存在，启用记录仍为已启用。请明确取消该记录。",
+            "The link is no longer absent. Recheck before cancelling the enablement record.": "链接位置已有节点。请重新检查后再取消启用记录。",
             "Delete link node": "删除链接节点",
             "Delete this link node?": "删除此链接节点？",
             "Dependency boundaries are conservative. Every enabled Skill in this source is included.": "依赖边界按保守方式计算，此来源中所有已启用 Skill 均包含在内。",
@@ -1857,6 +1871,20 @@ nonisolated struct SkillsHubLocalization {
             "Copy into Skills Hub…": "Skills Hubへコピー…",
             "Current conclusion": "現在の結論",
             "Delete broken link…": "壊れたリンクを削除…",
+            "The target is available again. The link was not deleted.": "対象が復元されました。リンクは削除していません。",
+            "This node is no longer a symbolic link. Nothing was deleted.": "このノードはシンボリックリンクではありません。何も削除していません。",
+            "The link target cannot be verified. Restore access and recheck.": "リンク対象を確認できません。アクセス権を復元して再確認してください。",
+            "The Agent directory authorization is unavailable. Restore access and recheck.": "Agentディレクトリのアクセス許可を利用できません。権限を復元して再確認してください。",
+            "The link path is outside the authorized Agent directory. Nothing was deleted.": "リンクのパスは許可されたAgentディレクトリの外です。何も削除していません。",
+            "Link deletion needs recovery at %@.": "リンク削除の復旧が必要です。保持場所を確認してください：%@。",
+            "Previous operation": "前回の操作",
+            "Cancel enablement record…": "有効化記録を取り消す…",
+            "Cancel enablement record?": "有効化記録を取り消しますか？",
+            "Cancel enablement record": "有効化記録を取り消す",
+            "Cancel the enablement record for %@ in %@? No filesystem node will be removed.": "%@の%@における有効化記録を取り消しますか？ファイルシステムのノードは削除しません。",
+            "Ownership could not be verified. Delete this broken link only after confirming its exact path.": "リンクの所有関係を確認できません。正確なパスを確認してから、この壊れたリンクだけを削除してください。",
+            "The link is absent; its enablement record is still enabled. Cancel the record explicitly.": "リンクは存在しませんが、有効化記録は有効のままです。記録を明示的に取り消してください。",
+            "The link is no longer absent. Recheck before cancelling the enablement record.": "リンクの場所にノードが存在します。有効化記録を取り消す前に再確認してください。",
             "Delete link node": "リンクノードを削除",
             "Delete this link node?": "このリンクノードを削除しますか？",
             "Dependency boundaries are conservative. Every enabled Skill in this source is included.": "依存範囲は保守的に判定され、このソース内の有効なSkillはすべて含まれます。",
@@ -2301,6 +2329,16 @@ nonisolated struct SkillsHubLocalization {
             case .missingSkill(let id): return "Skill not found: \(id)."
             case .invalidSource(let detail): return detail
             case .missingAgentPath(let agent): return "Choose a directory for \(agent.displayName) before creating links."
+            }
+        case let failure as BrokenLinkDeletionError:
+            switch failure {
+            case .targetExists: return "The target is available again. The link was not deleted."
+            case .notSymbolicLink: return "This node is no longer a symbolic link. Nothing was deleted."
+            case .targetStatusUnknown: return "The link target cannot be verified. Restore access and recheck."
+            case .confirmedFactsChanged: return "The link changed after confirmation. Nothing was deleted."
+            case .invalidAgentTarget: return "The Agent directory authorization is unavailable. Restore access and recheck."
+            case .invalidRootSession: return "Choose a root before continuing."
+            case .invalidLinkPath: return "The link path is outside the authorized Agent directory. Nothing was deleted."
             }
         case let failure as Phase1OperationError:
             switch failure {

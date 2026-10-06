@@ -408,6 +408,11 @@ struct Phase1ProductShell: View {
                 if let assetID { return $0.assetID == assetID }
                 return $0.id == objectID || $0.candidateID == objectID
             }
+            if let agentID = task.relationEvidence?.relation.agentID,
+               let assetID, library.missingCatalogItemIDs.contains(assetID.uuidString) {
+                requestNavigation(.agent(agentID))
+                return
+            }
             if matches.count == 1, let managed = matches.first {
                 selectedSkillID = managed.assetID.uuidString
             } else if let candidate = library.availableSkills.first(where: { $0.id == objectID || $0.candidateID == objectID }) {
@@ -728,7 +733,7 @@ private struct Phase1SkillsWorkspace: View {
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
 
     private var sources: [SkillSource] {
-        library.localSourcesForInspection + library.githubSourcesForPresentation
+        library.localSourcesForPresentation + library.githubSourcesForPresentation
     }
     private var allItems: [Phase1SkillPresentation] {
         library.catalogItems
@@ -838,6 +843,11 @@ private struct Phase1SkillsWorkspace: View {
                                           identifier: "skill-search")
                         .frame(width: geometry.size.width < 900 ? 220 : 276, height: 36)
                 }
+            }
+        }
+        .onChange(of: sources.map(\.id), initial: true) { _, ids in
+            if returnSourceID == nil, let selectedSourceID, !ids.contains(selectedSourceID) {
+                self.selectedSourceID = nil
             }
         }
         .onChange(of: visibleItems.map(\.id), initial: true) { _, ids in
@@ -2442,6 +2452,8 @@ private struct Phase1AgentIcon: View {
 private struct Phase1RelationDetail: View {
     @Bindable var library: SkillsHubLibraryController
     var relation: AgentRelationPresentation
+    @State private var pendingBrokenLinkDeletion: BrokenLinkDeletionPlan?
+    @State private var confirmsRecordCancellation = false
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
 
     var body: some View {
@@ -2478,11 +2490,19 @@ private struct Phase1RelationDetail: View {
                 .accessibilityValue(localized(relation.verification.presentationLabel))
                 .accessibilityIdentifier("relation-verification-\(relation.relation.agentID)-\(relation.skillID)")
             if let outcome = relation.lastOutcome {
-                Text("\(localized("Last result")): \(localized(outcome.rawValue))")
+                Text("\(localized("Previous operation")): \(localized(outcome.rawValue))")
             }
             if let reason = relation.unavailableReason {
                 Label(localized(reason), systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
+            }
+            if relation.ownership != .exactManagedLink, relation.observation == .brokenSymbolicLink {
+                Text(localized("Ownership could not be verified. Delete this broken link only after confirming its exact path."))
+                    .foregroundStyle(.secondary)
+            }
+            if relation.intendedEnabled == true, relation.observation == .vacant {
+                Text(localized("The link is absent; its enablement record is still enabled. Cancel the record explicitly."))
+                    .foregroundStyle(.secondary)
             }
             Text("\(localized("Safe next")): \(localized(relation.safeNextStep))")
                 .font(.caption)
@@ -2492,6 +2512,33 @@ private struct Phase1RelationDetail: View {
         .accessibilityLabel(library.localized(LocalizedMessage("%@ relationship for %@", arguments: [relation.agentDisplayName, relation.skillName])))
         .accessibilityValue("\(localized("Intent")) \(localized(relation.intendedEnabled.map { $0 ? "Enabled" : "Disabled" } ?? "Not set")). \(localized("Observed")) \(localized(relation.observation?.presentationLabel ?? "Type unverified")). \(localized("Verification")) \(localized(relation.verification.presentationLabel)).")
         .accessibilityIdentifier("relation-detail-\(relation.relation.agentID)-\(relation.skillID)")
+        .alert(localized("Delete this link node?"), item: $pendingBrokenLinkDeletion) { plan in
+            Button(localized("Delete link node"), role: .destructive) {
+                Task { do { _ = try await library.deleteBrokenLink(using: plan) } catch { library.handle(error) } }
+            }
+            Button(localized("Cancel"), role: .cancel) {}
+        } message: { plan in
+            Text("\(localized("Agent")): \(plan.facts.agentDisplayName)\n\(localized("Link")): \(plan.facts.linkPath)\n\(localized("Original target")): \(plan.facts.rawTarget)\n\(localized("Resolved target")): \(plan.facts.resolvedTargetPath)\n\n\(localized("Only the symbolic-link node will be deleted. Target content and enablement selections will not change."))")
+        }
+        .alert(localized("Cancel enablement record?"), isPresented: $confirmsRecordCancellation) {
+            Button(localized("Cancel enablement record"), role: .destructive) {
+                Task {
+                    do {
+                        _ = try await library.setGlobalAgentEnablement(agentID: relation.relation.agentID,
+                            assetID: relation.relation.assetID, enabled: false, recordOnly: true)
+                    } catch { library.handle(error) }
+                }
+            }
+            Button(localized("Cancel"), role: .cancel) {}
+        } message: {
+            Text(library.localized(LocalizedMessage("Cancel the enablement record for %@ in %@? No filesystem node will be removed.",
+                arguments: [relation.skillName, relation.agentDisplayName])))
+        }
+        .onChange(of: relation.id) { _, _ in
+            pendingBrokenLinkDeletion = nil
+            confirmsRecordCancellation = false
+        }
+
     }
 
     private var agentIdentity: some View {
@@ -2506,10 +2553,31 @@ private struct Phase1RelationDetail: View {
 
     private var actions: some View {
         HStack {
-            if relation.canReestablish {
-                Phase1RelationActionButton(library: library, relation: relation, reestablish: true)
+            if relation.observation == .brokenSymbolicLink, relation.ownership != .exactManagedLink {
+                Button(localized("Delete broken link…"), role: .destructive) {
+                    do { pendingBrokenLinkDeletion = try library.prepareBrokenLinkDeletion(relation: relation.relation) }
+                    catch { library.handle(error) }
+                }
+                .disabled(!relation.canPerformAction || relation.isInFlight || !library.inFlightRelationActionIDs.isEmpty)
+                .accessibilityIdentifier("relation-delete-broken-\(relation.id)")
+            } else if relation.observation == .vacant, relation.intendedEnabled == true {
+                Button(localized("Cancel enablement record…"), role: .destructive) { confirmsRecordCancellation = true }
+                    .disabled(!relation.canPerformAction || relation.isInFlight)
+                    .accessibilityIdentifier("relation-cancel-record-\(relation.id)")
+                if relation.canReestablish {
+                    Phase1RelationActionButton(library: library, relation: relation, reestablish: true)
+                }
+            } else {
+                Phase1RelationActionButton(library: library, relation: relation)
+                    .disabled(relation.observation != nil && relation.observation != .vacant && relation.ownership != .exactManagedLink)
             }
-            Phase1RelationActionButton(library: library, relation: relation)
+            if relation.verification != .verifiedConsistent || relation.unavailableReason != nil {
+                Button(localized("Re-check")) {
+                    Task { do { try await library.auditAgentDirectory(agentID: relation.relation.agentID) } catch { library.handle(error) } }
+                }
+                .disabled(relation.isInFlight)
+                .accessibilityIdentifier("relation-recheck-\(relation.id)")
+            }
         }
     }
 }

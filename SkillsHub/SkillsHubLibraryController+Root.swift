@@ -677,6 +677,17 @@ let resolvedRootPath: String?
             }
         }
         installedSkills = updatedSkills
+        await refreshRelationObservations(for: agentDetections)
+        await waitForPresentationObservation()
+        guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
+              expectedGeneration.map({ $0 == recheckGeneration }) ?? true else { return 0 }
+        // Commit list visibility only after a complete scan; failed enumeration retains it.
+        missingCatalogItemIDs.formIntersection(Set(catalogItemsByID.keys))
+        for (id, observation) in contentObservationSnapshot {
+            if observation.nodeKind == .vacant { missingCatalogItemIDs.insert(id) }
+            else if observation.nodeKind != .unreadable { missingCatalogItemIDs.remove(id) }
+        }
+        rebuildCatalogPresentation()
         return newSkills.count
     }
 
@@ -816,6 +827,7 @@ let resolvedRootPath: String?
         var rootSnapshot: RootSnapshot?
         var pendingPhase1OperationPlan: Phase1OperationPlan?
         var phase1Tasks: [Phase1TaskRecord]
+        var missingCatalogItemIDs: Set<String>
         var observedLocalSourceNames: Set<String>?
 
         init(controller: SkillsHubLibraryController) {
@@ -836,6 +848,7 @@ let resolvedRootPath: String?
             rootSnapshot = controller.rootSnapshot
             pendingPhase1OperationPlan = controller.pendingPhase1OperationPlan
             phase1Tasks = controller.phase1Tasks
+            missingCatalogItemIDs = controller.missingCatalogItemIDs
             observedLocalSourceNames = controller.observedLocalSourceNames
         }
 
@@ -857,7 +870,9 @@ let resolvedRootPath: String?
             controller.rootSnapshot = rootSnapshot
             controller.pendingPhase1OperationPlan = pendingPhase1OperationPlan
             controller.phase1Tasks = phase1Tasks
+            controller.missingCatalogItemIDs = missingCatalogItemIDs
             controller.observedLocalSourceNames = observedLocalSourceNames
+            controller.rebuildCatalogPresentation()
         }
     }
 

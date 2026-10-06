@@ -184,20 +184,42 @@ extension SkillsHubLibraryController {
               finding.entryKind == .brokenSymlink,
               let linkPath = finding.linkPath,
               let rawTarget = finding.symlinkTarget,
-              let resolvedTarget = finding.targetPath,
-              let rootURL,
-              let rootSessionOwner = rootSessionLease?.owner else {
+              let resolvedTarget = finding.targetPath else {
             throw BrokenLinkDeletionError.confirmedFactsChanged
         }
+        return try prepareBrokenLinkDeletion(agentID: finding.agentID, linkPath: linkPath,
+            rawTarget: rawTarget, resolvedTarget: resolvedTarget)
+    }
+
+    func prepareBrokenLinkDeletion(relation: AgentRelationIdentity) throws -> BrokenLinkDeletionPlan {
+        guard let observation = localState.targetObservations.first(where: { $0.relation == relation }),
+              observation.nodeKind == .brokenSymbolicLink,
+              let rawTarget = observation.linkText, let resolvedTarget = observation.resolvedTargetPath else {
+            throw BrokenLinkDeletionError.confirmedFactsChanged
+        }
+        let plan = try prepareBrokenLinkDeletion(agentID: relation.agentID, linkPath: observation.linkPath,
+            rawTarget: rawTarget, resolvedTarget: resolvedTarget)
+        guard plan.facts.nodeIdentity == observation.nodeIdentity,
+              plan.facts.parentIdentity == observation.parentIdentity else {
+            throw BrokenLinkDeletionError.confirmedFactsChanged
+        }
+        return plan
+    }
+
+    private func prepareBrokenLinkDeletion(agentID: String, linkPath: String, rawTarget: String,
+                                          resolvedTarget: String) throws -> BrokenLinkDeletionPlan {
+        guard let rootURL, let rootSessionOwner = rootSessionLease?.owner else {
+            throw BrokenLinkDeletionError.invalidRootSession
+        }
         let actionID = UUID()
-        let targetAccess = try acquireAgentTargetAccess(agentID: finding.agentID, actionID: actionID)
+        let targetAccess = try acquireAgentTargetAccess(agentID: agentID, actionID: actionID)
         defer { _ = targetAccess.endByOwningAction() }
         let plan = try relationActionRuntime.prepareBrokenLinkDeletionPlan(
             actionID: actionID,
             rootURL: rootURL,
             rootSessionOwner: rootSessionOwner,
-            agentID: finding.agentID,
-            agentDisplayName: finding.agentDisplayName,
+            agentID: agentID,
+            agentDisplayName: agentDisplayName(for: agentID),
             targetAccess: targetAccess,
             linkURL: URL(fileURLWithPath: linkPath)
         )
@@ -259,12 +281,15 @@ extension SkillsHubLibraryController {
         case .completed(let result) where result.status == .succeeded:
             setStatus("Deleted broken link node for %@.", confirmedPlan.facts.agentDisplayName)
             errorMessage = nil
-        case .completed:
-            errorMessage = "The broken link deletion did not complete. Recheck the Agent directory."
+        case .completed(let result):
+            errorMessage = result.failureMessage ?? "The broken link deletion did not complete. Recheck the Agent directory."
+            if let retainedPath = result.retainedPath {
+                errorMessage = LocalizedMessage("Link deletion needs recovery at %@.", arguments: [retainedPath])
+            }
         case .stale:
             errorMessage = "The link changed after confirmation. Nothing was deleted."
         default:
-            errorMessage = "The broken link deletion did not complete. Recheck the Agent directory."
+            errorMessage = coordination.failureMessage ?? "The broken link deletion did not complete. Recheck the Agent directory."
         }
         return coordination
     }

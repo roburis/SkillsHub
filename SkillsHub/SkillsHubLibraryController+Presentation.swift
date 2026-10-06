@@ -18,10 +18,11 @@ extension SkillsHubLibraryController {
             enablementIntents: rootSnapshot?.metadata.enablementIntents ?? [], rootURL: rootURL
         )
         catalogItemsByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        catalogItemsBySource = items.reduce(into: [:]) { result, item in
+        let visibleItems = items.filter { !missingCatalogItemIDs.contains($0.id) }
+        catalogItemsBySource = visibleItems.reduce(into: [:]) { result, item in
             if let sourceID = item.source?.id { result[sourceID, default: []].append(item) }
         }
-        catalogItems = items
+        catalogItems = visibleItems
     }
 
     func contentNodeObservation(for item: Phase1SkillPresentation) -> TargetObservation? {
@@ -71,6 +72,7 @@ extension SkillsHubLibraryController {
         let generation = presentationObservationGeneration
         presentationObservationTask?.cancel()
         contentObservationSnapshot = [:]
+        relationOwnershipSnapshot = [:]
         isRefreshingPresentation = true
         presentationObservationTask = Task { [weak self] in
             await Task.yield()
@@ -85,7 +87,7 @@ extension SkillsHubLibraryController {
                 if let target { result[descriptor.id] = target.standardizedFileURL }
             }
             let detections = Set(self.agentDetections.filter(\.detected).map(\.agentID))
-            let items = self.catalogItems
+            let items = Array(self.catalogItemsByID.values)
             let iconPaths = Set(descriptors.compactMap(\.desktopAppPath)).subtracting(self.observedDesktopIconPaths)
             var leases: [SecurityScopedAccessLease] = []
             defer { leases.forEach { _ = $0.end(by: $0.owner) } }
@@ -113,7 +115,9 @@ extension SkillsHubLibraryController {
                 let result = try await Self.observePresentation(
                     root: authorizedRoot, items: items, descriptors: descriptors,
                     targets: targets, detections: detections, authorizations: authorizations,
-                    fileManager: self.fileManager, iconPaths: iconPaths
+                    fileManager: self.fileManager, iconPaths: iconPaths, resolvedRootPath: self.resolvedRootPath,
+                    observations: self.localState.targetObservations, evidence: self.presentationEvidence,
+                    assets: Dictionary(self.installedSkills.map { ($0.assetID, $0) }, uniquingKeysWith: { first, _ in first })
                 )
                 guard contextIsCurrent() else { return }
                 self.agentCapabilitySnapshot = descriptors.reduce(into: [:]) { capabilities, descriptor in
@@ -122,6 +126,7 @@ extension SkillsHubLibraryController {
                     }
                 }
                 self.contentObservationSnapshot = result.content
+                self.relationOwnershipSnapshot = result.ownership
                 for (path, data) in result.icons {
                     if let image = NSImage(data: data), image.isValid, image.size != .zero {
                         self.desktopIconSnapshot[path] = image
@@ -146,8 +151,9 @@ extension SkillsHubLibraryController {
         root: URL?, items: [Phase1SkillPresentation], descriptors: [InstalledAgentDescriptor],
         targets: [String: URL], detections: Set<String>,
         authorizations: [String: StartupAccessBookmarkResolution], fileManager: FileManager,
-        iconPaths: Set<String>
-    ) async throws -> (qualifications: [String: AgentTargetQualification], content: [String: TargetObservation], icons: [String: Data]) {
+        iconPaths: Set<String>, resolvedRootPath: String? = nil,
+        observations: [TargetObservation], evidence: [String: ManagedRelationEvidence], assets: [UUID: InstalledSkill]
+    ) async throws -> (qualifications: [String: AgentTargetQualification], content: [String: TargetObservation], icons: [String: Data], ownership: [String: RelationOwnershipClassification]) {
         var qualifications: [String: AgentTargetQualification] = [:]
         for descriptor in descriptors {
             try Task.checkCancellation()
@@ -164,13 +170,13 @@ extension SkillsHubLibraryController {
         }
         var content: [String: TargetObservation] = [:]
         if let root {
-            let access = FileAccessService(fileManager: fileManager)
+            let rootPaths = [root.path] + (resolvedRootPath.map { [$0] } ?? [])
             for item in items {
                 try Task.checkCancellation()
                 let path = item.contentDirectoryPath
                 guard let path, let identity = item.managed?.assetID ?? item.source?.id else { continue }
                 let url = URL(fileURLWithPath: path).standardizedFileURL
-                guard access.isDescendant(url, of: root, resolvingSymlinks: false) else { continue }
+                guard rootPaths.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") }) else { continue }
                 // This identity locates a transient content observation, never a managed relation.
                 content[item.id] = try RelationOwnershipInspector().inspect(
                     linkURL: url,
@@ -184,7 +190,16 @@ extension SkillsHubLibraryController {
             try Task.checkCancellation()
             if let data = await AgentIconCatalog.desktopIconData(at: path) { icons[path] = data }
         }
-        return (qualifications, content, icons)
+        var ownership: [String: RelationOwnershipClassification] = [:]
+        for observation in observations {
+            try Task.checkCancellation()
+            guard let asset = assets[observation.relation.assetID] else { continue }
+            ownership[observation.relation.id] = RelationOwnershipInspector.classify(
+                observation: observation, canonicalTargetPath: asset.installedPath,
+                evidence: evidence[observation.relation.id])
+        }
+        return (qualifications, content, icons, ownership)
+
     }
 
     var settingsState: AppSettingsState {

@@ -1038,6 +1038,104 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnverifiedBrokenRelationRepairInThreeLanguages() throws {
+        for language in ["en", "zh-Hans", "ja"] {
+            let fixture = try makeFixture()
+            var app = try launch(fixture: fixture, language: language)
+            selectNavigation("all-skills", in: app)
+            let asset = try XCTUnwrap((try metadataObject(at: fixture.metadata)["installedSkills"] as? [[String: Any]])?.first {
+                ($0["assetID"] as? String)?.uppercased() == "33333333-3333-4333-A333-333333333333"
+            })
+            let assetID = try XCTUnwrap(asset["assetID"] as? String)
+            let skillID = try XCTUnwrap(asset["id"] as? String)
+            let directory = URL(fileURLWithPath: try XCTUnwrap(asset["installedPath"] as? String))
+            app.descendants(matching: .any)["skill-row-\(assetID)"].click()
+            let enable = app.buttons["relation-action-codex-\(skillID)-detail"]
+            let detail = app.descendants(matching: .any)["skill-detail"]
+            for _ in 0..<25 where !enable.isHittable { detail.swipeUp(velocity: .slow) }
+            XCTAssertTrue(enable.isHittable)
+            enable.click()
+            let enabled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let metadata = try? self.metadataObject(at: fixture.metadata) else { return false }
+                return (metadata["enablementIntents"] as? [[String: Any]])?.contains {
+                    ($0["assetID"] as? String) == assetID && ($0["agentID"] as? String) == "codex" && ($0["isEnabled"] as? Bool) == true
+                } == true
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 8), .completed)
+            app.terminate()
+            activeApp = nil
+            var metadata = try metadataObject(at: fixture.metadata)
+            var evidence = try XCTUnwrap(metadata["managedRelationEvidence"] as? [[String: Any]])
+            let index = try XCTUnwrap(evidence.firstIndex {
+                let relation = $0["relation"] as? [String: Any]
+                return (relation?["assetID"] as? String) == assetID && (relation?["agentID"] as? String) == "codex"
+            })
+            let link = URL(fileURLWithPath: try XCTUnwrap(evidence[index]["linkPath"] as? String))
+            evidence[index].removeValue(forKey: "creation")
+            metadata["managedRelationEvidence"] = evidence
+            try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]).write(to: fixture.metadata, options: .atomic)
+            try FileManager.default.removeItem(at: directory)
+            // Restore the persisted fixture through the existing isolated restart path.
+            app = try launch(fixture: fixture, language: language,
+                additionalArguments: ["--skillshub-ui-creation-material-fixture"])
+            selectNavigation("agent-codex", in: app)
+            let rowID = "agent-row-\(assetID)|codex|global"
+            let row = app.descendants(matching: .any)[rowID]
+            XCTAssertTrue(row.waitForExistence(timeout: 8))
+            row.click()
+            let relationID = "\(assetID)|codex|global"
+            let recheckLabel = ["en": "Re-check", "zh-Hans": "重新检查", "ja": "再確認"][language]!
+            XCTAssertEqual(app.buttons["relation-recheck-\(relationID)"].label, recheckLabel)
+            let delete = app.buttons["relation-delete-broken-\(relationID)"]
+            let repairDetail = app.descendants(matching: .any)["skill-detail"]
+            for _ in 0..<25 where !delete.isHittable { repairDetail.swipeUp(velocity: .slow) }
+            XCTAssertTrue(delete.isHittable)
+            delete.click()
+            let cancelLabel = ["en": "Cancel", "zh-Hans": "取消", "ja": "キャンセル"][language]!
+            let deleteLabel = ["en": "Delete link node", "zh-Hans": "删除链接节点", "ja": "リンクノードを削除"][language]!
+            XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 3))
+            XCTAssertTrue(app.sheets.firstMatch.staticTexts.containing(NSPredicate(format: "value CONTAINS %@", link.path)).firstMatch.exists)
+            app.sheets.firstMatch.buttons[cancelLabel].click()
+            XCTAssertTrue((try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil)
+            delete.click()
+            app.sheets.firstMatch.buttons[deleteLabel].click()
+            XCTAssertTrue(waitForMissingSymbolicLink(at: link, timeout: 8))
+            let cancelRecord = app.buttons["relation-cancel-record-\(relationID)"]
+            XCTAssertTrue(cancelRecord.waitForExistence(timeout: 8))
+            let afterDeletion = try metadataObject(at: fixture.metadata)
+            XCTAssertTrue((afterDeletion["enablementIntents"] as? [[String: Any]])?.contains {
+                ($0["assetID"] as? String) == assetID && ($0["agentID"] as? String) == "codex" && ($0["isEnabled"] as? Bool) == true
+            } == true)
+            let screenshot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            screenshot.name = "Broken link removed; record still enabled \(language)"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+            cancelRecord.click()
+            app.sheets.firstMatch.buttons[cancelLabel].click()
+            XCTAssertTrue(cancelRecord.exists)
+            cancelRecord.click()
+            let confirmRecord = ["en": "Cancel enablement record", "zh-Hans": "取消启用记录", "ja": "有効化記録を取り消す"][language]!
+            app.sheets.firstMatch.buttons[confirmRecord].click()
+            XCTAssertTrue(row.waitForNonExistence(timeout: 8))
+            let settled = try metadataObject(at: fixture.metadata)
+            XCTAssertTrue((settled["enablementIntents"] as? [[String: Any]])?.contains {
+                ($0["assetID"] as? String) == assetID && ($0["agentID"] as? String) == "codex" && ($0["isEnabled"] as? Bool) == false
+            } == true)
+            app.terminate()
+            activeApp = nil
+            app = try launch(fixture: fixture, language: language,
+                additionalArguments: ["--skillshub-ui-creation-material-fixture"])
+            selectNavigation("agent-codex", in: app)
+            XCTAssertTrue(app.descendants(matching: .any)[rowID].waitForNonExistence(timeout: 5))
+            XCTAssertNil(try? FileManager.default.destinationOfSymbolicLink(atPath: link.path))
+            app.terminate()
+            activeApp = nil
+            try fixture.cleanup()
+            activeFixture = nil
+        }
+    }
+
+    @MainActor
     func testLocalRefreshPreservesIdentityMissingRelationsAndFailedObservationsInThreeLanguages() throws {
         for (language, refreshLabel) in [("en", "Refresh"), ("zh-Hans", "刷新"), ("ja", "更新")] {
             let fixture = try makeFixture()
@@ -1116,14 +1214,26 @@ final class SkillsHubUITests: XCTestCase {
                 return relation["assetID"] as? String == firstID
             })
             let operationID = URL(fileURLWithPath: relationRecord.path).deletingLastPathComponent().lastPathComponent
+            let sourcePrefix = ["en": "Local", "zh-Hans": "本地", "ja": "ローカル"][language]!
+            let allSourcesLabel = ["en": "All Sources", "zh-Hans": "全部来源", "ja": "すべてのソース"][language]!
+            app.descendants(matching: .any)["skill-source-filter"].click()
+            app.menuItems[sourcePrefix + "/duplicate-a"].click()
             try FileManager.default.removeItem(at: first)
             selectNavigation("local-sources", in: app)
             refresh.click()
             selectNavigation("all-skills", in: app)
             let missing = app.descendants(matching: .any)["skill-row-\(firstID)"]
-            XCTAssertTrue(missing.waitForExistence(timeout: 5))
-            missing.click()
-            XCTAssertTrue(app.buttons["clear-managed-relations"].exists)
+            XCTAssertTrue(missing.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(secondID)"].waitForExistence(timeout: 5))
+            app.descendants(matching: .any)["skill-source-filter"].click()
+            XCTAssertFalse(app.menuItems[sourcePrefix + "/duplicate-a"].exists)
+            XCTAssertTrue(app.menuItems[sourcePrefix + "/duplicate-b"].exists)
+            app.menuItems[allSourcesLabel].click()
+            selectNavigation("agent-codex", in: app)
+            let broken = app.descendants(matching: .any)["agent-row-\(firstID)|codex|global"]
+            XCTAssertTrue(broken.waitForExistence(timeout: 5))
+            let brokenLabel = ["en": "Broken symbolic link", "zh-Hans": "失效软链接", "ja": "無効なシンボリックリンク"][language]!
+            XCTAssertTrue(broken.staticTexts[brokenLabel].exists)
             XCTAssertEqual(try treeSnapshot(of: operations), operationsBefore)
             XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), linkText)
             let local = fixture.root.appending(path: "local")
@@ -1153,7 +1263,8 @@ final class SkillsHubUITests: XCTestCase {
             app = launchPlatformRootApp(fixture: fixture, scenario: "local-refresh", appSupportName: support, language: language)
             openConnectRootPanel(in: app)
             chooseDirectory(fixture.root, in: app)
-            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(firstID)"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(secondID)"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(firstID)"].waitForNonExistence(timeout: 8))
             selectNavigation("tasks", in: app)
             XCTAssertTrue(app.descendants(matching: .any)["phase1-task-list"].waitForExistence(timeout: 3))
             let recoveredTask = app.buttons["phase1-task-\(operationID)"]
@@ -1161,7 +1272,7 @@ final class SkillsHubUITests: XCTestCase {
             recoveredTask.click()
             XCTAssertTrue(app.buttons["task-open-skill-\(operationID)"].exists)
             app.buttons["task-open-skill-\(operationID)"].click()
-            XCTAssertTrue(app.buttons["clear-managed-relations"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.descendants(matching: .any)["agent-row-\(firstID)|codex|global"].waitForExistence(timeout: 3))
             XCTAssertEqual(try treeSnapshot(of: operations), operationsBefore)
             app.terminate()
             activeApp = nil
@@ -1170,7 +1281,8 @@ final class SkillsHubUITests: XCTestCase {
             openConnectRootPanel(in: app)
             chooseDirectory(fixture.root, in: app)
             selectNavigation("all-skills", in: app)
-            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(firstID)"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(secondID)"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(firstID)"].waitForNonExistence(timeout: 8))
             XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), linkText)
             XCTAssertEqual(try treeSnapshot(of: operations), operationsBefore)
             app.terminate()

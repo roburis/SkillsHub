@@ -131,6 +131,7 @@ nonisolated struct AgentRelationPresentation: Identifiable, Equatable {
     var linkPath: String? = nil
     var linkText: String? = nil
     var resolvedTargetPath: String? = nil
+    var ownership: RelationOwnershipClassification = .unreadable
 
     var id: String { relation.id }
     var desiredEnabled: Bool { !(intendedEnabled ?? false) }

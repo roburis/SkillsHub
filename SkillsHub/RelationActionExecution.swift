@@ -57,6 +57,7 @@ nonisolated struct BrokenLinkDeletionExecutionResult: Equatable, Sendable {
     let fileEvents: [RelationActionFileEvent]
     let retainedPath: String?
     let safeNextStep: String
+    var failureMessage: LocalizedMessage? = nil
 }
 
 nonisolated struct RelationActionRecoveryResult: Sendable {
@@ -872,7 +873,8 @@ nonisolated final class RelationActionExecutor: @unchecked Sendable {
                 status: blocked ? .blocked : .unknown,
                 fileEvents: events + (retainedPath.map { [.retainedForRecovery($0)] } ?? []),
                 retainedPath: retainedPath,
-                safeNextStep: retainedPath == nil ? "recheck-agent-directory" : "review-retained-link-node"
+                safeNextStep: retainedPath == nil ? "recheck-agent-directory" : "review-retained-link-node",
+                failureMessage: SkillsHubLocalization.errorPresentation(for: error)
             )
         }
     }

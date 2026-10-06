@@ -90,6 +90,8 @@ struct ReloadConsistencyTests {
         #expect(controller.localSourcesForInspection.contains { $0.id == sourceID })
         let missing = try #require(controller.installedSkills.first { $0.assetID == fixture.assetID })
         #expect(missing.validation.status == .invalid)
+        #expect(!controller.catalogItems.contains { $0.managed?.assetID == fixture.assetID })
+        #expect(controller.relationPresentations(for: missing).first { $0.relation.agentID == "codex" }?.observation == .brokenSymbolicLink)
         #expect(controller.rootSnapshot?.metadata.managedRelationEvidence == before.metadata.managedRelationEvidence)
         let linkName = try #require(before.metadata.installedSkills.first { $0.assetID == fixture.assetID }?.stableLinkName)
         #expect(FileAccessService().isSymlink(try #require(fixture.targets[.codex]).appendingPathComponent(linkName)))
@@ -99,6 +101,21 @@ struct ReloadConsistencyTests {
         await restarted.waitForPendingRechecks()
         #expect(!restarted.localSourcesForPresentation.contains { $0.id == sourceID })
         #expect(restarted.installedSkills.contains { $0.assetID == fixture.assetID })
+        await restarted.waitForPresentationObservation()
+        #expect(!restarted.catalogItems.contains { $0.managed?.assetID == fixture.assetID })
+        try writeReloadSkill(directory, name: "Restored Writer")
+        try await controller.refreshLocalSources()
+        #expect(controller.catalogItems.contains { $0.managed?.assetID == fixture.assetID })
+        // Delete one nested Skill while its source and sibling remain present.
+        let nested = directory.appendingPathComponent("nested")
+        try writeReloadSkill(nested, name: "Nested Writer")
+        try await controller.refreshLocalSources()
+        let nestedID = try #require(controller.catalogItems.first { $0.name == "Nested Writer" }?.id)
+        try FileManager.default.removeItem(at: nested)
+        try await controller.refreshLocalSources()
+        #expect(!controller.catalogItems.contains { $0.id == nestedID })
+        #expect(controller.catalogItems.contains { $0.managed?.assetID == fixture.assetID })
+        #expect(controller.localSourcesForPresentation.contains { $0.id == sourceID })
     }
 
     @Test func incompleteLocalRefreshPreservesLastCollectionAndReplacementIsNotDeletion() async throws {
@@ -111,6 +128,7 @@ struct ReloadConsistencyTests {
         try await connectInitializedTestRoot(controller, at: root)
         await controller.waitForPendingRechecks()
         let before = controller.availableSkills
+        let catalogBefore = controller.catalogItems
         let visible = controller.localSourcesForPresentation.map(\.id)
         let paths = controller.observedLocalSourceNames
         try FileManager.default.removeItem(at: directory)
@@ -118,6 +136,7 @@ struct ReloadConsistencyTests {
         try await controller.refreshLocalSources()
         #expect(controller.observationStatus == .unavailable(reason: .scanFailed))
         #expect(controller.availableSkills == before)
+        #expect(controller.catalogItems == catalogBefore)
         #expect(controller.localSourcesForPresentation.map(\.id) == visible)
         #expect(controller.observedLocalSourceNames == paths)
         try FileManager.default.removeItem(at: directory)
