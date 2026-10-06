@@ -114,7 +114,7 @@ struct AgentDirectoryAuditTests {
         let descriptors = InstalledAgentDescriptorBuilder().build(
             detections: [detection], configurations: AgentConfigurationRecord.phase1BuiltIns,
             links: []
-        ).descriptors
+        )
         let codex = descriptors.first { $0.id == AgentKind.codex.rawValue }
         #expect(descriptors.count == 2)
         #expect(codex?.isVisibleOnCards == true)
@@ -563,24 +563,24 @@ struct AgentDirectoryAuditTests {
             links: [orphanLink]
         )
 
-        #expect(Set(result.descriptors.map(\.id)) == Set(["codex", "claudeCode", "custom-valid", "custom-invalid", "custom-missing", "custom-readonly", "custom-orphan"]))
-        #expect(result.descriptors.map(\.displayName) == ["Claude Code", "Codex", "Custom Invalid", "Custom Missing", "Custom Readonly", "Custom Valid", "custom-orphan"])
-        #expect(result.descriptors.first { $0.id == "claudeCode" }?.isVisibleOnCards == true)
-        let builtIn = try #require(result.descriptors.first { $0.id == "codex" })
+        #expect(Set(result.map(\.id)) == Set(["codex", "claudeCode", "custom-valid", "custom-invalid", "custom-missing", "custom-readonly", "custom-orphan"]))
+        #expect(result.map(\.displayName) == ["Claude Code", "Codex", "Custom Invalid", "Custom Missing", "Custom Readonly", "Custom Valid", "custom-orphan"])
+        #expect(result.first { $0.id == "claudeCode" }?.isVisibleOnCards == true)
+        let builtIn = try #require(result.first { $0.id == "codex" })
         #expect(builtIn.globalCapability.isAvailable)
-        let custom = try #require(result.descriptors.first { $0.id == "custom-valid" })
+        let custom = try #require(result.first { $0.id == "custom-valid" })
         #expect(custom.globalCapability.isAvailable)
         #expect(custom.isVisibleInSidebar)
-        let invalid = try #require(result.descriptors.first { $0.id == "custom-invalid" })
+        let invalid = try #require(result.first { $0.id == "custom-invalid" })
         #expect(invalid.globalCapability == .unavailable(.invalidSkillsDirectory))
-        let missing = try #require(result.descriptors.first { $0.id == "custom-missing" })
+        let missing = try #require(result.first { $0.id == "custom-missing" })
         #expect(missing.globalCapability == .unavailable(.missingSkillsDirectory))
-        let readOnly = try #require(result.descriptors.first { $0.id == "custom-readonly" })
+        let readOnly = try #require(result.first { $0.id == "custom-readonly" })
         #expect(readOnly.globalCapability == .unavailable(.notWritable))
-        let orphan = try #require(result.descriptors.first { $0.id == "custom-orphan" })
+        let orphan = try #require(result.first { $0.id == "custom-orphan" })
         #expect(orphan.isUnresolved)
         #expect(!orphan.isVisibleOnCards)
-        #expect(result.issues.map(\.agentID) == ["custom-orphan"])
+        #expect(result.filter(\.isUnresolved).map(\.id) == ["custom-orphan"])
     }
 
     @Test func builtInAgentsRemainConfigurableWithoutInstallationEvidence() async throws {

@@ -204,7 +204,7 @@ struct Phase1UITestFixture {
     }
 
     var launchArguments: [String] {
-        var arguments = [
+        [
             "--skillshub-ui-fixture",
             "--skillshub-ui-fixture-run-id", runID.uuidString,
             "--skillshub-ui-fixture-run-root", runRoot.path,
@@ -213,7 +213,6 @@ struct Phase1UITestFixture {
             "--skillshub-ui-fixture-home", home.path,
             "--skillshub-ui-fixture-pasteboard", pasteboardName
         ]
-        return arguments
     }
 
     var emptyLaunchArguments: [String] {

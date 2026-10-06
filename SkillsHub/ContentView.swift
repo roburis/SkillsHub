@@ -116,23 +116,6 @@ struct ContentView: View {
         .task {
             await bootstrapDefaultRoot()
         }
-        .sheet(item: $library.pendingPhase1OperationPlan) { plan in
-            Phase1OperationConfirmationSheet(
-                plan: plan,
-                language: library.language,
-                confirm: {
-                    Task {
-                        await library.confirmPendingPhase1Operation()
-                    }
-                },
-                cancel: {
-                    Task {
-                        await library.cancelPendingPhase1Operation()
-                    }
-                }
-            )
-            .interactiveDismissDisabled()
-        }
         .sheet(
             isPresented: Binding(
                 get: { pendingLocalSourceURL != nil },

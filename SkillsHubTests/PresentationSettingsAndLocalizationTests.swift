@@ -183,13 +183,6 @@ struct PresentationSettingsAndLocalizationTests {
         }
     }
 
-    @Test func settingsCustomRootDoesNotPromiseSystemRewrite() {
-        let service = AppSettingsService()
-        let state = service.state(rootPath: "/custom/root", language: .chinese, cachePolicyName: "manual")
-
-        #expect(state.customRootWarning == "Custom root is only applied inside Skills Hub.")
-    }
-
     @Test func localizationCoversEnglishChineseAndJapaneseKeys() {
         let localization = SkillsHubLocalization()
 

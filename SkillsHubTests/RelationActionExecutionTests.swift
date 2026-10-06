@@ -1393,7 +1393,7 @@ struct RelationActionExecutionTests {
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.linkURL.path) == linkBeforeRecovery)
     }
 
-    @Test func enablingVacantRelationRepairsAuthoritativeEvidenceEvenWhenIntentIsAlreadyEnabled() throws {
+    @Test func enablingVacantRelationRecreatesLinkEvenWhenIntentIsAlreadyEnabled() throws {
         let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: true)
         let result = fixture.executor().execute(
             authorization: fixture.authorization(desiredEnabled: true),
@@ -1404,6 +1404,8 @@ struct RelationActionExecutionTests {
         #expect(result.status == .succeeded)
         #expect(result.metadataDelta == .committed)
         let metadata = try fixture.metadataStore.load(from: fixture.rootURL)
+        #expect(metadata.enablementIntents.first { $0.id == fixture.relation.id }?.isEnabled == true)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: fixture.linkURL.path) == fixture.canonicalURL.path)
     }
 }
 
@@ -1636,7 +1638,6 @@ private final class RelationExecutionFixture: @unchecked Sendable {
     }
 
     func currentInspection() throws -> RelationOwnershipInspection {
-        let metadata = try metadataStore.load(from: rootURL)
         return try RelationOwnershipInspector().inspect(
             linkURL: linkURL,
             relation: relation,

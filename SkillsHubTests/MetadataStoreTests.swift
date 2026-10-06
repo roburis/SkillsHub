@@ -89,7 +89,6 @@ struct MetadataStoreTests {
         let store = SkillsHubMetadataStore()
         let metadata = SkillsHubMetadata(rootConfig: RootConfig(rootPath: root.path, appSupportPath: appSupport.path))
 
-        try store.ensureAppContainerLayout(at: appSupport)
         try store.save(metadata, to: root)
 
         let rootEntries = try FileManager.default.contentsOfDirectory(atPath: root.path)
@@ -101,9 +100,7 @@ struct MetadataStoreTests {
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("github").path))
 
         let containerEntries = try FileManager.default.contentsOfDirectory(atPath: appSupport.path)
-        #expect(containerEntries.contains("Cache"))
-        #expect(containerEntries.contains("Indexes"))
-        #expect(containerEntries.contains("Logs"))
+        #expect(containerEntries.isEmpty)
 
         let loaded = try store.load(from: root)
         #expect(loaded.rootConfig.rootPath == root.path)
@@ -115,8 +112,6 @@ struct MetadataStoreTests {
 
         #expect(layout.localDirectory.path == "/Users/example/ai-projects/skills-hub/local")
         #expect(layout.githubDirectory.path == "/Users/example/ai-projects/skills-hub/github")
-        #expect(layout.skillsDirectory.path == "/Users/example/ai-projects/skills-hub/local")
-        #expect(layout.installedEntryURL(for: "review").path == "/Users/example/ai-projects/skills-hub/local/review")
         #expect(layout.skillshubMetadataFile.path == "/Users/example/ai-projects/skills-hub/.skillshub.json")
         #expect(layout.writeLockFile.path == "/Users/example/ai-projects/skills-hub/.skillshub.lock")
         #expect(layout.operationRecoveryDirectory.path == "/Users/example/ai-projects/skills-hub/.skillshub-operations")

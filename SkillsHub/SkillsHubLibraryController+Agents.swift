@@ -130,10 +130,6 @@ extension SkillsHubLibraryController {
         rootSnapshot?.metadata.agents ?? AgentConfigurationRecord.phase1BuiltIns
     }
 
-    var installedAgentDescriptorResult: InstalledAgentDescriptorResult {
-        agentDescriptorSnapshot
-    }
-
     func rebuildAgentPresentation() {
         agentDescriptorSnapshot = InstalledAgentDescriptorBuilder().build(
             detections: agentDetections, configurations: agentConfigurations, links: agentLinks
@@ -142,7 +138,7 @@ extension SkillsHubLibraryController {
     }
 
     var installedAgentDescriptors: [InstalledAgentDescriptor] {
-        installedAgentDescriptorResult.descriptors
+        agentDescriptorSnapshot
     }
 
     var visibleInstalledAgentDescriptors: [InstalledAgentDescriptor] {
@@ -151,10 +147,6 @@ extension SkillsHubLibraryController {
 
     var sidebarAgentDescriptors: [InstalledAgentDescriptor] {
         visibleInstalledAgentDescriptors.filter(\.isVisibleInSidebar)
-    }
-
-    var installedAgentIdentityIssues: [InstalledAgentIdentityIssue] {
-        installedAgentDescriptorResult.issues
     }
 
     var configuredAgentCapabilities: [AgentCapabilityPresentation] {
@@ -747,13 +739,6 @@ extension SkillsHubLibraryController {
             at: URL(fileURLWithPath: path, isDirectory: true),
             displayName: descriptor.displayName
         )
-    }
-
-    func showAgentPermissionGuidance(agentID: String) {
-        let name = agentConfigurations.first(where: { $0.id == agentID })?.displayName
-            ?? agentID
-        setStatus("Check Finder permissions for %@, then choose a writable skills directory or retry the audit.", name)
-        errorMessage = nil
     }
 
     @discardableResult
@@ -1453,28 +1438,6 @@ extension SkillsHubLibraryController {
         }
         return (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
             || (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil
-    }
-
-    private func upsertAgentLink(_ record: AgentLinkRecord) {
-        if let index = agentLinks.firstIndex(where: {
-            $0.scope == record.scope
-                && $0.agentID == record.agentID
-                && $0.skillID == record.skillID
-                && $0.projectID == record.projectID
-        }) {
-            agentLinks[index] = record
-        } else {
-            agentLinks.append(record)
-        }
-        agentLinks.sort {
-            let lhsName = $0.agent?.displayName ?? $0.agentID
-            let rhsName = $1.agent?.displayName ?? $1.agentID
-            let comparison = lhsName.localizedCaseInsensitiveCompare(rhsName)
-            if comparison != .orderedSame {
-                return comparison == .orderedAscending
-            }
-            return $0.id.uuidString < $1.id.uuidString
-        }
     }
 
     var defaultRootURL: URL {

@@ -21,10 +21,7 @@ struct RootMutationOwnerTests {
         controller.rootURL = fixture.root
         controller.rootSnapshot = try fixture.store.loadCurrentSnapshot(from: fixture.root)
         controller.phase1OperationCoordinator = Phase1OperationCoordinator(metadataStore: fixture.store, rootMutationOwner: owner)
-        controller.pendingPhase1OperationPlan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source, snapshot: #require(controller.rootSnapshot), sourceID: fixture.sourceID
-        )
-        let execution = Task { await controller.confirmPendingPhase1Operation() }
+        let execution = Task { await controller.importLocalSource(from: fixture.source) }
         await owner.waitUntilContendedForTesting(at: fixture.root)
         let otherSnapshot = try other.store.loadCurrentSnapshot(from: other.root)
         controller.rootURL = other.root
@@ -132,8 +129,8 @@ struct RootMutationOwnerTests {
         let other = try RootMutationFixture()
         defer { other.remove() }
         let initial = try fixture.store.loadCurrentSnapshot(from: fixture.root)
-        let plan = try fixture.planner.sourceRegistrationPlan(
-            directory: fixture.source,
+        let plan = try fixture.planner.localSourceImportPlan(
+            directory: fixture.source, rootURL: fixture.root,
             snapshot: initial,
             sourceID: fixture.sourceID
         )
@@ -173,8 +170,8 @@ struct RootMutationOwnerTests {
         #expect(try fixture.store.loadCurrentSnapshot(from: fixture.root).generation == 0)
         #expect(FileManager.default.fileExists(atPath: fixture.journal.path) == false)
 
-        let otherPlan = try other.planner.sourceRegistrationPlan(
-            directory: other.source,
+        let otherPlan = try other.planner.localSourceImportPlan(
+            directory: other.source, rootURL: other.root,
             snapshot: other.store.loadCurrentSnapshot(from: other.root),
             sourceID: other.sourceID
         )

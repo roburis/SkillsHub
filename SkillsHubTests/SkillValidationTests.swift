@@ -12,7 +12,6 @@ struct SkillValidationTests {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: denied.path) }
         let result = SkillValidator().validate(skillDirectory: skill)
         #expect(result.status == .invalid)
-        #expect(!result.canInstall)
     }
 
     @Test func staticValidationRejectsSpecialNodes() throws {
@@ -98,8 +97,6 @@ struct SkillValidationTests {
         let result = SkillValidator().validate(skillDirectory: skill)
 
         #expect(result.status == .valid)
-        #expect(result.canInstall)
-        #expect(result.canLink)
     }
 
     @Test func invalidSkillRequiresSkillFileAndFrontmatterFields() throws {
@@ -279,7 +276,6 @@ struct SkillValidationTests {
         let result = SkillValidator(readAccess: access).validate(skillDirectory: linked, rootDirectory: root)
 
         #expect(result.status == .invalid)
-        #expect(!result.canInstall)
         #expect(contentReads.isEmpty)
         #expect(result.risks.contains(where: { $0.kind == .symlink && $0.id.hasPrefix("symlink-escape") }))
     }

@@ -17,7 +17,7 @@ extension SkillsHubLibraryController {
                 } else {
                     let plan = try phase1OperationPlanner.rootInitializationPlan(facts: facts)
                     pendingRootInitialization = facts
-                    await executePhase1Operation(plan, directlyAuthorized: true)
+                    await executePhase1Operation(plan)
                 }
             case .invalid(let failure):
                 throw SkillsHubLibraryFailure.invalidSource(rootInspectionMessage(for: failure))
@@ -27,34 +27,6 @@ extension SkillsHubLibraryController {
         } catch {
             handle(error)
         }
-    }
-
-    func prepareLocalSourceRegistration(from directory: URL) throws {
-        let normalized = directory.standardizedFileURL
-        let sourceID = UUID()
-        let lease = try acquireSecurityScopedAccess(to: normalized, owner: .source(sourceID))
-        let planResult: Result<Phase1OperationPlan, Error>
-        do {
-            let snapshot = try currentPhase1Snapshot()
-            guard sources.contains(where: { $0.kind == .localDirectory && $0.localPath == normalized.path }) == false else {
-                throw SkillsHubLibraryFailure.invalidSource("Local source already registered.")
-            }
-            planResult = .success(
-                try phase1OperationPlanner.sourceRegistrationPlan(
-                    directory: normalized,
-                    snapshot: snapshot,
-                    sourceID: sourceID
-                )
-            )
-        } catch {
-            planResult = .failure(error)
-        }
-        try endSecurityScopedAccessLease(lease)
-        let plan = try planResult.get()
-        pendingPhase1OperationPlan = plan
-        upsertTask(waitingTask(for: plan))
-        setStatus("Local source plan is waiting for confirmation.")
-        errorMessage = nil
     }
 
     func importLocalSource(from directory: URL) async {
@@ -90,7 +62,7 @@ extension SkillsHubLibraryController {
                 planResult = .failure(error)
             }
             try endSecurityScopedAccessLease(lease)
-            await executePhase1Operation(try planResult.get(), directlyAuthorized: true)
+            await executePhase1Operation(try planResult.get())
         } catch {
             handle(error)
         }
@@ -124,7 +96,7 @@ extension SkillsHubLibraryController {
                 try? stager.discard(staged)
                 throw error
             }
-            if await executePhase1Operation(plan, directlyAuthorized: true) {
+            if await executePhase1Operation(plan) {
                 do {
                     try stager.discard(staged)
                 } catch {
@@ -161,67 +133,9 @@ extension SkillsHubLibraryController {
         )
     }
 
-    func prepareManagedCopy(candidateID: String) throws {
-        let snapshot = try currentPhase1Snapshot()
-        guard let candidate = availableSkills.first(where: { $0.candidateID == candidateID || $0.id == candidateID }),
-              let source = sources.first(where: { $0.id == candidate.sourceID }),
-              let rootURL
-        else {
-            throw SkillsHubLibraryFailure.missingSkill(candidateID)
-        }
-        guard candidate.checkStatus == .valid || candidate.checkStatus == .warning else {
-            throw SkillsHubLibraryFailure.invalidSource("Candidate is blocked or unreadable.")
-        }
-        guard candidate.generatedAtGeneration == snapshot.generation else {
-            throw Phase1OperationError.staleFacts
-        }
-        guard let sourcePath = source.localPath else {
-            throw SkillsHubLibraryFailure.invalidSource("Local source path is unavailable.")
-        }
-        let lease = try acquireSecurityScopedAccess(
-            to: URL(fileURLWithPath: sourcePath, isDirectory: true),
-            owner: .source(source.id),
-            endingSelectedInspection: false,
-            resolvingPersistedBookmark: true
-        )
-        let planResult: Result<Phase1OperationPlan, Error>
-        do {
-            planResult = .success(
-                try phase1OperationPlanner.managedCopyPlan(
-                    candidate: candidate,
-                    source: source,
-                    rootURL: rootURL,
-                    snapshot: snapshot
-                )
-            )
-        } catch {
-            planResult = .failure(error)
-        }
-        try endSecurityScopedAccessLease(lease)
-        let plan = try planResult.get()
-        pendingPhase1OperationPlan = plan
-        upsertTask(waitingTask(for: plan))
-        setStatus("Managed copy plan is waiting for confirmation.")
-        errorMessage = nil
-    }
-
-    func confirmPendingPhase1Operation() async {
-        guard let plan = pendingPhase1OperationPlan else {
-            handle(SkillsHubLibraryFailure.invalidSource("No Phase 1 operation is waiting for confirmation."))
-            return
-        }
-        guard plan.kind != .initializeRoot else {
-            pendingPhase1OperationPlan = nil
-            handle(SkillsHubLibraryFailure.invalidSource("Root establishment must start from the Establish Management Directory button."))
-            return
-        }
-        await executePhase1Operation(plan, directlyAuthorized: false)
-    }
-
     @discardableResult
     private func executePhase1Operation(
-        _ plan: Phase1OperationPlan,
-        directlyAuthorized: Bool
+        _ plan: Phase1OperationPlan
     ) async -> Bool {
         let operationLeases: [SecurityScopedAccessLease]
         do {
@@ -230,22 +144,15 @@ extension SkillsHubLibraryController {
             handle(error)
             return false
         }
-        if plan.kind != .initializeRoot {
-            pendingPhase1OperationPlan = nil
-        }
         let token = phase1OperationPlanner.confirmation(for: plan)
         var running = waitingTask(for: plan)
         running.phase = .executing
-        running.result = directlyAuthorized
-            ? "Explicit action authorized; executing the immutable plan."
-            : "Confirmed; executing the immutable plan."
+        running.result = "Explicit action authorized; executing the immutable plan."
         running.events.append(
             Phase1TaskEvent(
                 id: UUID(),
                 phase: .executing,
-                message: directlyAuthorized
-                    ? "Explicit action submitted."
-                    : "One-time confirmation submitted.",
+                message: "Explicit action submitted.",
                 occurredAt: Date()
             )
         )
@@ -306,14 +213,6 @@ extension SkillsHubLibraryController {
         statusMessage = result.task.result
         errorMessage = nil
         return true
-    }
-
-    func cancelPendingPhase1Operation() async {
-        guard let plan = pendingPhase1OperationPlan else { return }
-        pendingPhase1OperationPlan = nil
-        let task = await phase1OperationCoordinator.cancel(plan: plan)
-        upsertTask(task)
-        statusMessage = task.result
     }
 
     func discardPendingRootInitializationAccess() {

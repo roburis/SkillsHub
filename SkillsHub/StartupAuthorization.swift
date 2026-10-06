@@ -25,27 +25,3 @@ nonisolated enum SecurityScopedAccessOwner: Hashable, Sendable {
         }
     }
 }
-
-nonisolated enum StartupAuthorizationTargetKind: Equatable {
-    case defaultRoot
-    case builtInAgent(AgentKind)
-}
-
-nonisolated struct StartupAuthorizationTarget: Identifiable, Equatable {
-    var kind: StartupAuthorizationTargetKind
-    var displayName: String
-    var authorizationURL: URL
-
-    var id: String {
-        switch kind {
-        case .defaultRoot:
-            return "default-root"
-        case .builtInAgent(let agent):
-            return "agent-\(agent.rawValue)"
-        }
-    }
-}
-
-nonisolated struct StartupAuthorizationRequest: Equatable {
-    var targets: [StartupAuthorizationTarget]
-}

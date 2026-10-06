@@ -92,20 +92,6 @@ struct CoreModelsTests {
         #expect(encoded?["agent"] == nil)
     }
 
-    @Test func validationResultControlsInstallAndLinkEligibility() {
-        let valid = SkillValidationResult.valid
-        let invalid = SkillValidationResult(
-            status: .invalid,
-            messages: [ValidationMessage(id: "missing-name", severity: .error, message: "Missing name.")],
-            risks: []
-        )
-
-        #expect(valid.canInstall)
-        #expect(valid.canLink)
-        #expect(!invalid.canInstall)
-        #expect(!invalid.canLink)
-    }
-
     @Test func phase1IdentityAndCandidateStatesAreStable() {
         let sourceID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let candidateA = StableIdentity.candidateID(sourceID: sourceID, relativePath: "review")

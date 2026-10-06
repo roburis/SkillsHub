@@ -140,7 +140,6 @@ struct SecurityScopedAccessTests {
         #expect(controller?.rootURL == root.standardizedFileURL)
         #expect(controller?.rootSnapshot?.generation == 0)
         #expect(controller?.pendingRootInitialization == nil)
-        #expect(controller?.pendingPhase1OperationPlan == nil)
         #expect(controller?.errorMessage == nil)
         await controller?.waitForPendingRechecks()
         await controller?.waitForPresentationObservation()
@@ -399,65 +398,32 @@ struct SecurityScopedAccessTests {
         #expect(adapter.stoppedURLs.isEmpty)
     }
 
-    @Test func sourceObservationAndCancellationLeaveOnlyRootSessionActive() async throws {
-        let fixture = try await ControllerAccessFixture()
-        defer { fixture.remove() }
-
-        try fixture.controller.rememberUserSelectedAccess(to: fixture.source)
-        try fixture.controller.prepareLocalSourceRegistration(from: fixture.source)
-        let plan = try #require(fixture.controller.pendingPhase1OperationPlan)
-
-        #expect(fixture.adapter.startRecords.map(\.owner).contains(.source(try #require(plan.source?.id))))
-        #expect(fixture.adapter.stoppedURLs.suffix(2) == [fixture.source, fixture.source])
-
-        await fixture.controller.waitForPresentationObservation()
-        let startCountBeforeCancel = fixture.adapter.startRecords.count
-        let stopCountBeforeCancel = fixture.adapter.stoppedURLs.count
-        await fixture.controller.cancelPendingPhase1Operation()
-
-        #expect(fixture.adapter.startRecords.count == startCountBeforeCancel)
-        #expect(fixture.adapter.stoppedURLs.count == stopCountBeforeCancel)
-    }
-
-    @Test(arguments: [false, true])
-    func operationUsesOperationIdentityAndReleasesAllOperationLeases(replaceSource: Bool) async throws {
+    @Test func sourceImportReleasesPartialLeasesAndCanRetryWithFreshAuthorization() async throws {
         let fixture = try await ControllerAccessFixture()
         defer { fixture.remove() }
         try fixture.controller.rememberUserSelectedAccess(to: fixture.source)
-        try fixture.controller.prepareLocalSourceRegistration(from: fixture.source)
-        let operationID = try #require(fixture.controller.pendingPhase1OperationPlan?.id)
-        if replaceSource {
-            let old = fixture.source.appendingPathExtension("old")
-            try FileManager.default.moveItem(at: fixture.source, to: old)
-            try FileManager.default.copyItem(at: old, to: fixture.source)
-        }
-
-        await fixture.controller.confirmPendingPhase1Operation()
-
-        let operationStarts = fixture.adapter.startRecords.filter { $0.owner == .operation(operationID) }
-        #expect(operationStarts.map(\.url) == [fixture.root, fixture.source])
-        #expect(fixture.adapter.stoppedURLs.suffix(2) == [fixture.source, fixture.root])
-        #expect(fixture.controller.pendingPhase1OperationPlan == nil)
-        #expect((fixture.controller.errorMessage != nil) == replaceSource)
-    }
-
-    @Test func partialOperationStartFailureReleasesAcquiredLeaseAndKeepsPlanRetryable() async throws {
-        let fixture = try await ControllerAccessFixture()
-        defer { fixture.remove() }
-        try fixture.controller.rememberUserSelectedAccess(to: fixture.source)
-        try fixture.controller.prepareLocalSourceRegistration(from: fixture.source)
-        let plan = try #require(fixture.controller.pendingPhase1OperationPlan)
-
         fixture.adapter.denyStart = { url, owner in
-            owner == .operation(plan.id) && url == fixture.source
+            if case .operation = owner { return url == fixture.source }; return false
         }
-        await fixture.controller.confirmPendingPhase1Operation()
+        await fixture.controller.importLocalSource(from: fixture.source)
 
-        let operationStarts = fixture.adapter.startRecords.filter { $0.owner == .operation(plan.id) }
+        let operationStarts = fixture.adapter.startRecords.filter { if case .operation = $0.owner { return true }; return false }
         #expect(operationStarts.count == 2)
         #expect(fixture.adapter.stoppedURLs.last == fixture.root)
-        #expect(fixture.controller.pendingPhase1OperationPlan?.id == plan.id)
         #expect(fixture.controller.errorMessage != nil)
+        #expect(fixture.controller.sources.isEmpty)
+
+        fixture.adapter.denyStart = nil
+        try fixture.controller.rememberUserSelectedAccess(to: fixture.source)
+        await fixture.controller.importLocalSource(from: fixture.source)
+        await fixture.controller.waitForPendingRechecks()
+        await fixture.controller.waitForPresentationObservation()
+        let operationID = try #require(fixture.controller.phase1Tasks.first?.id)
+        let successfulStarts = fixture.adapter.startRecords.filter { $0.owner == .operation(operationID) }
+        #expect(successfulStarts.map(\.url) == [fixture.root, fixture.source])
+        #expect(fixture.controller.phase1Tasks.first?.phase == .completed)
+        #expect(fixture.controller.sources.count == 1)
+        #expect(fixture.adapter.activeAccessCount == 1)
     }
 }
 
