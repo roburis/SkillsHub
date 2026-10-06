@@ -16,7 +16,7 @@ struct SourceAndLifecycleServicesTests {
         })
         var record = try service.startRecord(for: fixture.plan, rootURL: fixture.root)
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
 
         let pending = try #require(controller.phase1Tasks.first { $0.id == fixture.plan.id })
         #expect(pending.kind == .removeLocalSource)
@@ -38,7 +38,7 @@ struct SourceAndLifecycleServicesTests {
         let metadataBefore = try Data(contentsOf: metadataFile)
         let recordBefore = try Data(contentsOf: recordFile)
 
-        controller.recheckRecoveryTasks()
+        await controller.recheckRecoveryTasks()
 
         let completed = try #require(controller.phase1Tasks.first { $0.id == fixture.plan.id })
         #expect(completed.phase == .completed)
@@ -79,11 +79,11 @@ struct SourceAndLifecycleServicesTests {
     }
 
     @MainActor
-    @Test func githubSourceRemovalPlanUsesTheCompleteRepository() throws {
+    @Test func githubSourceRemovalPlanUsesTheCompleteRepository() async throws {
         let fixture = try sourceRemovalFixture(kind: .githubRepository)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
 
         let plan = try controller.prepareLocalSourceRemoval(sourceID: fixture.plan.source.id)
 
@@ -1428,7 +1428,7 @@ struct SourceAndLifecycleServicesTests {
                 adapter: RecordingSecurityScopedResourceAccessAdapter()
             )
         )
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
         let metadataURL = store.rootLayout(for: root).skillshubMetadataFile
         let metadataBefore = try Data(contentsOf: metadataURL)
 
@@ -1457,7 +1457,7 @@ struct SourceAndLifecycleServicesTests {
         defer { fixture.remove() }
         let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
             securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
         controller.language = .english
         let metadata = fixture.store.rootLayout(for: fixture.root).skillshubMetadataFile
         let before = try Data(contentsOf: metadata)
@@ -1488,7 +1488,7 @@ struct SourceAndLifecycleServicesTests {
         defer { fixture.remove() }
         let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
             securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
         var unrelated = try #require(controller.installedSkills.first)
         unrelated.id = "unrelated"
         unrelated.assetID = UUID()
@@ -1525,7 +1525,7 @@ struct SourceAndLifecycleServicesTests {
                 adapter: RecordingSecurityScopedResourceAccessAdapter()
             )
         )
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
 
         try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
         let preview = try #require(controller.sourceUpdatePreview)
@@ -1575,7 +1575,7 @@ struct SourceAndLifecycleServicesTests {
                 adapter: RecordingSecurityScopedResourceAccessAdapter()
             )
         )
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
         try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
         let preview = try #require(controller.sourceUpdatePreview)
         try writeSkill(fixture.managed, name: "Stable", description: "Changed after confirmation")
@@ -1600,7 +1600,7 @@ struct SourceAndLifecycleServicesTests {
                 adapter: RecordingSecurityScopedResourceAccessAdapter()
             )
         )
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
         try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
         let preview = try #require(controller.sourceUpdatePreview)
 
@@ -1631,7 +1631,7 @@ struct SourceAndLifecycleServicesTests {
                 adapter: RecordingSecurityScopedResourceAccessAdapter()
             )
         )
-        try connectInitializedTestRoot(controller, at: fixture.root)
+        try await connectInitializedTestRoot(controller, at: fixture.root)
         try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
         let preview = try #require(controller.sourceUpdatePreview)
 
@@ -1651,8 +1651,8 @@ struct SourceAndLifecycleServicesTests {
         let metadataBeforeRecheck = try Data(contentsOf: metadataFile)
         let recordBeforeRecheck = try Data(contentsOf: recordFile)
         let restarted = SkillsHubLibraryController(appSupportURL: fixture.appSupport)
-        try connectInitializedTestRoot(restarted, at: fixture.root)
-        restarted.recheckRecoveryTasks()
+        try await connectInitializedTestRoot(restarted, at: fixture.root)
+        await restarted.recheckRecoveryTasks()
 
         let recovered = try #require(restarted.phase1Tasks.first { $0.id == preview.id })
         #expect(recovered.kind == .updateSource)

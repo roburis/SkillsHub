@@ -412,7 +412,7 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Desktop App installed"].exists)
         XCTAssertTrue(app.buttons["configure-agent-claudeCode"].exists)
         selectNavigation("all-skills", in: app)
-        app.descendants(matching: .any)["skill-row-fixture-review-candidate"].click()
+        app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
         XCTAssertTrue(app.descendants(matching: .any)["relation-detail-claudeCode-review-fixture"].waitForExistence(timeout: 2))
 
         selectNavigation("agent-codex", in: app)
@@ -426,7 +426,7 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Installation not found"].exists)
         XCTAssertTrue(app.buttons["configure-agent-codex"].exists)
         selectNavigation("all-skills", in: app)
-        app.descendants(matching: .any)["skill-row-fixture-review-candidate"].click()
+        app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
         XCTAssertTrue(app.descendants(matching: .any)["relation-detail-codex-review-fixture"].waitForExistence(timeout: 2))
         try "unknown".write(to: status, atomically: true, encoding: .utf8)
         selectNavigation("settings", in: app)
@@ -438,21 +438,69 @@ final class SkillsHubUITests: XCTestCase {
     @MainActor
     func testProductionStartupLanguageDefaultsAndPersistsAcrossProcesses() throws {
         let fixture = try makeFixture()
-        var app = launchPlatformRootApp(fixture: fixture, scenario: "language", language: nil, systemLanguages: "(zh-Hans-CN)")
+        let supportName = "SkillsHubUITests-platform-language-\(UUID().uuidString)"
+        var app = launchPlatformRootApp(fixture: fixture, scenario: "language", appSupportName: supportName, language: nil, systemLanguages: "(zh-Hans-CN)")
         selectNavigation("settings", in: app)
         XCTAssertEqual(app.popUpButtons.firstMatch.value as? String, "跟随系统")
 
+        let root = fixture.home.appending(path: "skills-hub", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        selectNavigation("all-skills", in: app)
+        openEstablishRootPanel(in: app)
+        chooseDirectory(root, in: app)
+        XCTAssertTrue(waitForText("root-initialized", at: root.appending(path: ".skillshub.operations.jsonl")))
+
+        let feedback = [
+            "English": "Re-check complete. Source changes require a new confirmed plan.",
+            "简体中文": "补检完成。来源变化需要重新确认计划。",
+            "日本語": "再確認が完了しました。ソースの変更には新しい確認済みプランが必要です。",
+            "システムに従う": "补检完成。来源变化需要重新确认计划。"
+        ]
+        let authorizationFeedback = [
+            "English": "Authorize the exact Agent skills target in Settings.",
+            "简体中文": "请在设置中授权准确的 Agent skills 目标目录。",
+            "日本語": "設定で正確な Agent の skills 対象ディレクトリを許可してください。",
+            "システムに従う": "请在设置中授权准确的 Agent skills 目标目录。"
+        ]
+        var currentFeedback = try XCTUnwrap(feedback["简体中文"])
         for (choice, expected) in [("English", "English"), ("简体中文", "简体中文"), ("日本語", "日本語"), ("システムに従う", "跟随系统")] {
+            selectNavigation("all-skills", in: app)
+            XCTAssertTrue(app.buttons["recheck-filesystem"].waitForExistence(timeout: 5))
+            app.activate()
+            let search = app.searchFields["skill-search"]
+            search.click()
+            paste("原始入力 %@", into: search)
+            XCTAssertEqual(search.value as? String, "原始入力 %@")
+            let recheck = app.buttons["recheck-filesystem"]
+            app.activate()
+            let ready = NSPredicate { _, _ in recheck.isEnabled && recheck.isHittable }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: nil)], timeout: 5), .completed)
+            app.buttons["recheck-filesystem"].click()
+            XCTAssertTrue(app.staticTexts[currentFeedback].waitForExistence(timeout: 5))
+            selectNavigation("settings", in: app)
+            let metadata = root.appending(path: ".skillshub.json")
+            let beforeLanguageChange = try Data(contentsOf: metadata)
             app.popUpButtons.firstMatch.click()
             app.menuItems[choice].click()
+            currentFeedback = try XCTUnwrap(feedback[choice])
+            XCTAssertTrue(app.staticTexts[currentFeedback].waitForExistence(timeout: 5))
+            XCTAssertEqual(try Data(contentsOf: metadata), beforeLanguageChange)
+            let authorization = try XCTUnwrap(authorizationFeedback[choice])
+            XCTAssertTrue(app.staticTexts[authorization].firstMatch.waitForExistence(timeout: 5))
+            let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            shot.name = "T012 existing feedback after language choice \(choice)"
+            shot.lifetime = .keepAlways
+            add(shot)
+            selectNavigation("all-skills", in: app)
+            XCTAssertEqual(app.searchFields["skill-search"].value as? String, "原始入力 %@")
             app.terminate()
-            app = launchPlatformRootApp(fixture: fixture, scenario: "language", language: nil, systemLanguages: "(zh-Hans-CN)")
+            app = launchPlatformRootApp(fixture: fixture, scenario: "language", appSupportName: supportName, language: nil, systemLanguages: "(zh-Hans-CN)")
             selectNavigation("settings", in: app)
             XCTAssertEqual(app.popUpButtons.firstMatch.value as? String, expected)
         }
 
         app.terminate()
-        app = launchPlatformRootApp(fixture: fixture, scenario: "language", language: nil, systemLanguages: "(ja-JP)")
+        app = launchPlatformRootApp(fixture: fixture, scenario: "language", appSupportName: supportName, language: nil, systemLanguages: "(ja-JP)")
         selectNavigation("settings", in: app)
         XCTAssertEqual(app.popUpButtons.firstMatch.value as? String, "システムに従う")
         XCTAssertTrue(app.staticTexts["一般"].exists)
@@ -602,7 +650,7 @@ final class SkillsHubUITests: XCTestCase {
             shot.lifetime = .keepAlways
             add(shot)
             selectNavigation("local-sources", in: app)
-            metrics += assertToolbar(page: "local-sources", title: "Local Sources", order: ["add-local-source", "source-search"],
+            metrics += assertToolbar(page: "local-sources", title: "Local Sources", order: ["refresh-local-sources", "add-local-source", "source-search"],
                                      absent: ["check-all-source-updates"], in: app)
             checkToolbarHeight("local-sources")
             XCTAssertGreaterThanOrEqual(app.toolbars.firstMatch.searchFields["source-search"].frame.width, 246)
@@ -688,7 +736,7 @@ final class SkillsHubUITests: XCTestCase {
             XCTAssertTrue((search.placeholderValue ?? "").isEmpty, "\(language): Cmd-F kept placeholder \(search.placeholderValue ?? "nil")")
             app.typeText("review")
             XCTAssertEqual(search.value as? String, "review")
-            let row = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
+            let row = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
             XCTAssertTrue(row.waitForExistence(timeout: 2))
             notes.append("\(language) row label=\(row.label) value=\(String(describing: row.value))")
             // The filtered list relayouts after typing; click only once the row settles on screen, so an
@@ -801,7 +849,7 @@ final class SkillsHubUITests: XCTestCase {
         app.typeKey("f", modifierFlags: .command)
         app.typeText("review")
         XCTAssertEqual(app.descendants(matching: .any)["skill-search"].value as? String, "review")
-        let row = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
+        let row = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
         row.click()
         XCTAssertTrue(app.descendants(matching: .any)["skill-detail"].exists)
         app.typeKey("f", modifierFlags: .command)
@@ -817,7 +865,8 @@ final class SkillsHubUITests: XCTestCase {
     func testNativeListRestoresManualScrollWithoutSelectingAnObject() throws {
         let fixture = try makeFixture()
         for index in 0..<30 {
-            let folder = fixture.source.appending(path: String(format: "scroll-%02d", index), directoryHint: .isDirectory)
+            let folder = fixture.root.appending(path: "local/fixture-source", directoryHint: .isDirectory)
+                .appending(path: String(format: "scroll-%02d", index), directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
             try Data("---\nname: Scroll Fixture \(index)\ndescription: Native list scrolling fixture.\n---\n".utf8).write(to: folder.appending(path: "SKILL.md"))
         }
@@ -827,16 +876,18 @@ final class SkillsHubUITests: XCTestCase {
         app.buttons["recheck-source"].click()
         app.buttons["view-source-skills"].click()
         let list = app.descendants(matching: .any)["skill-library-list"]
-        XCTAssertTrue(list.staticTexts["Scroll Fixture 0"].waitForExistence(timeout: 3))
+        XCTAssertFalse(list.staticTexts["skill-source-summary"].exists, "Source pages omit repeated source summaries")
+        let rows = list.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "skill-row-", "Scroll Fixture"))
+        XCTAssertTrue(rows.matching(NSPredicate(format: "label == %@", "Scroll Fixture 0")).firstMatch.waitForExistence(timeout: 3))
         for _ in 0..<8 { list.swipeUp() }
-        let visible = list.staticTexts.allElementsBoundByIndex.first { (($0.value as? String) ?? $0.label).hasPrefix("Scroll Fixture") && $0.isHittable }
+        let visible = rows.allElementsBoundByIndex.first { $0.isHittable }
         let anchor = try XCTUnwrap(visible)
-        let name = (anchor.value as? String) ?? anchor.label
+        let name = anchor.label
         let y = anchor.frame.minY
         XCTAssertTrue(app.descendants(matching: .any)["skill-detail-empty"].exists)
         app.buttons["return-to-source"].click()
         app.buttons["view-source-skills"].click()
-        let restored = list.staticTexts[name]
+        let restored = rows.matching(NSPredicate(format: "label == %@", name)).firstMatch
         let visibleAgain = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: restored)
         XCTAssertEqual(XCTWaiter.wait(for: [visibleAgain], timeout: 3), .completed)
         XCTAssertEqual(restored.frame.minY, y, accuracy: 3)
@@ -845,17 +896,17 @@ final class SkillsHubUITests: XCTestCase {
         selectNavigation("all-skills", in: app)
         XCTAssertFalse(app.buttons["return-to-source"].exists)
         let allSkills = app.descendants(matching: .any)["skill-library-list"]
-        XCTAssertTrue(allSkills.staticTexts["Scroll Fixture 0"].waitForExistence(timeout: 3))
+        XCTAssertTrue(allSkills.staticTexts.matching(NSPredicate(format: "value == %@ OR label == %@", "Local/fixture-source", "Local/fixture-source")).firstMatch.exists)
+        let allRows = allSkills.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "skill-row-", "Scroll Fixture"))
+        XCTAssertTrue(allRows.matching(NSPredicate(format: "label == %@", "Scroll Fixture 0")).firstMatch.waitForExistence(timeout: 3))
         for _ in 0..<8 { allSkills.swipeUp() }
-        let allAnchor = try XCTUnwrap(allSkills.staticTexts.allElementsBoundByIndex.first {
-            (($0.value as? String) ?? $0.label).hasPrefix("Scroll Fixture") && $0.isHittable
-        })
-        let allName = (allAnchor.value as? String) ?? allAnchor.label
+        let allAnchor = try XCTUnwrap(allRows.allElementsBoundByIndex.first { $0.isHittable })
+        let allName = allAnchor.label
         let allY = allAnchor.frame.minY
         selectNavigation("local-sources", in: app)
         selectNavigation("all-skills", in: app)
         XCTAssertFalse(app.buttons["return-to-source"].exists)
-        let allRestored = allSkills.staticTexts[allName]
+        let allRestored = allRows.matching(NSPredicate(format: "label == %@", allName)).firstMatch
         let allVisibleAgain = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: allRestored)
         XCTAssertEqual(XCTWaiter.wait(for: [allVisibleAgain], timeout: 3), .completed)
         XCTAssertEqual(allRestored.frame.minY, allY, accuracy: 3)
@@ -863,35 +914,101 @@ final class SkillsHubUITests: XCTestCase {
 
     @MainActor
     func testUnifiedSkillLibraryContainsCandidateManagedAndAttentionStates() throws {
-        let fixture = try makeFixture()
-        let app = try launch(fixture: fixture)
+        for (language, appearance, neutralLabel, attentionLabel) in [
+            ("en", "Light", "Not connected to an Agent", "Needs Attention"),
+            ("zh-Hans", "Light", "未接入 Agent", "需要处理"),
+            ("ja", "Light", "Agent に未接続", "要確認"),
+            ("en", "Dark", "Not connected to an Agent", "Needs Attention")
+        ] {
+            let fixture = try makeFixture()
+            let app = try launch(fixture: fixture, language: language, windowWidth: 1040, additionalArguments: ["--skillshub-ui-fixture-appearance", appearance])
 
-        XCTAssertTrue(app.descendants(matching: .any)["skill-library-list"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.descendants(matching: .any)[Phase1UITestFixture.candidateRowIdentifier].exists)
-        let managedRow = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
-        XCTAssertTrue(managedRow.exists)
-        XCTAssertFalse(app.buttons["relation-action-codex-review-fixture-card"].exists)
-        XCTAssertFalse(app.buttons["candidate-agent-action-codex-fixture-publish-candidate"].exists)
-        XCTAssertTrue(app.staticTexts["Broken Fixture"].exists)
+            XCTAssertTrue(app.descendants(matching: .any)["skill-library-list"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.descendants(matching: .any)[Phase1UITestFixture.candidateRowIdentifier].exists)
+            let managedRow = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
+            XCTAssertTrue(managedRow.exists)
+            XCTAssertFalse(app.buttons["relation-action-codex-review-fixture-card"].exists)
+            XCTAssertFalse(app.buttons["candidate-agent-action-codex-fixture-publish-candidate"].exists)
+            let brokenRow = app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "skill-row-", "Broken Fixture")
+            ).firstMatch
+            XCTAssertTrue(brokenRow.exists)
 
-        app.descendants(matching: .any)[Phase1UITestFixture.candidateRowIdentifier].click()
-        XCTAssertTrue(app.descendants(matching: .any)["skill-detail"].waitForExistence(timeout: 2))
-        XCTAssertFalse(app.buttons["review-managed-copy-fixture-publish-candidate"].exists)
+            app.descendants(matching: .any)[Phase1UITestFixture.candidateRowIdentifier].click()
+            XCTAssertTrue(app.descendants(matching: .any)["skill-detail"].waitForExistence(timeout: 2))
+            XCTAssertFalse(app.buttons["review-managed-copy-fixture-publish-candidate"].exists)
 
-        app.descendants(matching: .any)["skill-filter"].click()
-        app.menuItems["Needs Attention"].click()
-        XCTAssertTrue(app.staticTexts["Broken Fixture"].waitForExistence(timeout: 2))
-        XCTAssertTrue(managedRow.exists, "Unverified Agent relationships still need attention")
-        XCTAssertFalse(app.descendants(matching: .any)[Phase1UITestFixture.candidateRowIdentifier].exists)
+            let title = app.descendants(matching: .any)["skill-detail-title"]
+            let description = app.descendants(matching: .any)["skill-detail-description"]
+            XCTAssertEqual(title.value as? String, "Candidate Fixture")
+            let metadataBeforeMarker = try Data(contentsOf: fixture.metadata)
+            let marker = app.buttons["skill-not-connected-33333333-3333-4333-A333-333333333333"]
+            XCTAssertEqual(marker.label, neutralLabel + " · Review Fixture")
+            marker.click()
+            let heading = app.descendants(matching: .any)["skill-relations-heading"]
+            XCTAssertTrue(heading.isHittable, "The neutral marker must locate relationships")
+            XCTAssertEqual(try Data(contentsOf: fixture.metadata), metadataBeforeMarker)
+            XCTAssertEqual(title.value as? String, "Review Fixture")
+            XCTAssertEqual(description.value as? String, "Reviews code changes from a fixture source.")
+            app.descendants(matching: .any)[Phase1UITestFixture.candidateRowIdentifier].click()
+            XCTAssertEqual(title.value as? String, "Candidate Fixture")
+            XCTAssertEqual(description.value as? String, "A valid local candidate waiting for a reviewed managed-copy plan.")
+
+            app.descendants(matching: .any)["skill-filter"].click()
+            app.menuItems[attentionLabel].click()
+            XCTAssertTrue(brokenRow.waitForExistence(timeout: 2))
+            XCTAssertFalse(managedRow.exists, "Unselected Agent availability is not a Skill problem")
+            XCTAssertFalse(app.descendants(matching: .any)[Phase1UITestFixture.candidateRowIdentifier].exists)
+            let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            shot.name = "T008 states \(language) \(appearance) 1040pt"
+            shot.lifetime = .keepAlways
+            add(shot)
+            if language == "en" && appearance == "Light" {
+                app.descendants(matching: .any)["skill-filter"].click()
+                app.menuItems[attentionLabel].click()
+                managedRow.click()
+                let action = app.buttons["relation-action-codex-review-fixture-detail"]
+                XCTAssertTrue(action.isEnabled)
+                action.click()
+                let link = fixture.home.appending(path: ".codex/skills/Review Fixture")
+                XCTAssertTrue(waitForFile(at: link))
+                try FileManager.default.removeItem(at: link)
+                app.buttons["recheck-filesystem"].click()
+                let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: app.buttons["recheck-filesystem"])
+                XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+                app.descendants(matching: .any)["skill-filter"].click()
+                app.menuItems[attentionLabel].click()
+                XCTAssertTrue(managedRow.waitForExistence(timeout: 3), "An enabled missing link must remain an issue")
+                XCTAssertFalse(app.buttons["skill-not-connected-33333333-3333-4333-A333-333333333333"].exists)
+                let missing = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+                missing.name = "T008 enabled missing link"
+                missing.lifetime = .keepAlways
+                add(missing)
+            }
+            app.terminate()
+            try fixture.cleanup()
+            activeFixture = nil
+        }
     }
 
     @MainActor
     func testLocalSourcesAndTaskGroupsMatchPhaseOneContract() throws {
         let fixture = try makeFixture()
-        let app = try launch(fixture: fixture)
+        let app = try launch(fixture: fixture, windowWidth: 1040)
 
         selectNavigation("local-sources", in: app)
+        for width in [1040, 1200] {
+            if width == 1200 {
+                let corner = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
+                corner.click(forDuration: 0.1, thenDragTo: corner.withOffset(CGVector(dx: 160, dy: 0)))
+            }
+            XCTAssertEqual(app.windows.firstMatch.frame.width, CGFloat(width), accuracy: 2)
+            _ = assertToolbar(page: "local-sources", title: "Local Sources",
+                              order: ["refresh-local-sources", "add-local-source", "source-search"],
+                              absent: ["check-all-source-updates"], in: app)
+        }
         XCTAssertTrue(app.buttons["add-local-source"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["refresh-local-sources"].exists)
         XCTAssertFalse(app.buttons["check-local-root"].exists)
         let sourceRow = app.descendants(matching: .any)[Phase1UITestFixture.sourceRowIdentifier]
         XCTAssertTrue(sourceRow.exists)
@@ -917,6 +1034,149 @@ final class SkillsHubUITests: XCTestCase {
         for agent in ["codex", "claudeCode"] {
             XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-status-\(agent)"].exists
                 || app.descendants(matching: .any)["default-agent-directory-verified-\(agent)"].exists)
+        }
+    }
+
+    @MainActor
+    func testLocalRefreshPreservesIdentityMissingRelationsAndFailedObservationsInThreeLanguages() throws {
+        for (language, refreshLabel) in [("en", "Refresh"), ("zh-Hans", "刷新"), ("ja", "更新")] {
+            let fixture = try makeFixture()
+            var app = try launch(fixture: fixture, language: language)
+            selectNavigation("local-sources", in: app)
+            let refresh = app.buttons["refresh-local-sources"]
+            XCTAssertEqual(refresh.label, refreshLabel)
+            XCTAssertLessThan(refresh.frame.midX, app.buttons["add-local-source"].frame.midX)
+            app.descendants(matching: .any)[Phase1UITestFixture.sourceRowIdentifier].click()
+            let query = app.searchFields["source-search"]
+            query.click()
+            query.typeText("Fixture Source")
+            query.typeKey(.return, modifierFlags: [])
+            let first = fixture.root.appending(path: "local/duplicate-a")
+            let second = fixture.root.appending(path: "local/duplicate-b")
+            try writeObservedSkill(at: first, name: "Duplicate")
+            try writeObservedSkill(at: second, name: "Duplicate")
+            app.activate()
+            let refreshReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                refresh.isHittable && refresh.isEnabled
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [refreshReady], timeout: 5), .completed)
+            refresh.click()
+            let indexed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let metadata = try? self.metadataObject(at: fixture.metadata),
+                      let assets = metadata["installedSkills"] as? [[String: Any]] else { return false }
+                return assets.filter { ($0["name"] as? String) == "Duplicate" }.count == 2
+            }, object: nil)
+            let indexedResult = XCTWaiter.wait(for: [indexed], timeout: 8)
+            if indexedResult != .completed {
+                let diagnostic = XCTAttachment(string: app.debugDescription + "\n" + String(decoding: try Data(contentsOf: fixture.metadata), as: UTF8.self))
+                diagnostic.name = "Refresh failure \(language)"
+                diagnostic.lifetime = .keepAlways
+                add(diagnostic)
+            }
+            XCTAssertEqual(indexedResult, .completed)
+            XCTAssertEqual(query.value as? String, "Fixture Source")
+            XCTAssertTrue(app.descendants(matching: .any)["source-detail"].exists)
+            let metadata = try metadataObject(at: fixture.metadata)
+            let assets = try XCTUnwrap(metadata["installedSkills"] as? [[String: Any]])
+            let firstAsset = try XCTUnwrap(assets.first {
+                ($0["installedPath"] as? String).map { URL(fileURLWithPath: $0).standardizedFileURL.path } == first.standardizedFileURL.path
+            })
+            let secondAsset = try XCTUnwrap(assets.first {
+                ($0["installedPath"] as? String).map { URL(fileURLWithPath: $0).standardizedFileURL.path } == second.standardizedFileURL.path
+            })
+            let firstID = try XCTUnwrap(firstAsset["assetID"] as? String)
+            let secondID = try XCTUnwrap(secondAsset["assetID"] as? String)
+            selectNavigation("all-skills", in: app)
+            app.descendants(matching: .any)["skill-row-\(firstID)"].click()
+            let enable = app.buttons["relation-action-codex-duplicate-detail"]
+            XCTAssertTrue(enable.waitForExistence(timeout: 3))
+            let detail = app.descendants(matching: .any)["skill-detail"]
+            for _ in 0..<25 where !enable.isHittable { detail.swipeUp(velocity: .slow) }
+            XCTAssertTrue(enable.isHittable)
+            enable.click()
+            let link = fixture.home.appending(path: ".codex/skills/Duplicate")
+            XCTAssertTrue(waitForFile(at: link))
+            let linkText = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
+            XCTAssertEqual(URL(fileURLWithPath: linkText).standardizedFileURL.path, first.standardizedFileURL.path)
+            app.descendants(matching: .any)["skill-row-\(secondID)"].click()
+            let secondAction = app.buttons["relation-action-codex-duplicate-detail"]
+            XCTAssertTrue(secondAction.exists)
+            if secondAction.isEnabled { secondAction.click() }
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), linkText)
+            let afterSecond = try metadataObject(at: fixture.metadata)
+            XCTAssertFalse((afterSecond["enablementIntents"] as? [[String: Any]])?.contains {
+                ($0["assetID"] as? String) == secondID && ($0["isEnabled"] as? Bool) == true
+            } ?? false)
+            let operations = fixture.root.appending(path: ".skillshub-operations")
+            let operationsBefore = try treeSnapshot(of: operations)
+            let relationRecord = try XCTUnwrap(operationsBefore.first { entry in
+                guard entry.path.hasSuffix("/record.json"),
+                      let record = try? JSONSerialization.jsonObject(with: entry.bytes) as? [String: Any],
+                      let relation = record["relation"] as? [String: Any] else { return false }
+                return relation["assetID"] as? String == firstID
+            })
+            let operationID = URL(fileURLWithPath: relationRecord.path).deletingLastPathComponent().lastPathComponent
+            try FileManager.default.removeItem(at: first)
+            selectNavigation("local-sources", in: app)
+            refresh.click()
+            selectNavigation("all-skills", in: app)
+            let missing = app.descendants(matching: .any)["skill-row-\(firstID)"]
+            XCTAssertTrue(missing.waitForExistence(timeout: 5))
+            missing.click()
+            XCTAssertTrue(app.buttons["clear-managed-relations"].exists)
+            XCTAssertEqual(try treeSnapshot(of: operations), operationsBefore)
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), linkText)
+            let local = fixture.root.appending(path: "local")
+            let saved = fixture.root.appending(path: "saved-local")
+            try FileManager.default.moveItem(at: local, to: saved)
+            try Data("unreadable container".utf8).write(to: local)
+            selectNavigation("local-sources", in: app)
+            refresh.click()
+            let failedStatus = app.descendants(matching: .any)["filesystem-observation-status"]
+            let unknownWord = ["en": "unknown", "zh-Hans": "未知", "ja": "不明"][language]!
+            let failureVisible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                failedStatus.exists && ((failedStatus.value as? String) ?? failedStatus.label).contains(unknownWord)
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [failureVisible], timeout: 5), .completed)
+            XCTAssertEqual(app.searchFields["source-search"].value as? String, "Fixture Source")
+            XCTAssertTrue(app.descendants(matching: .any)[Phase1UITestFixture.sourceRowIdentifier].exists)
+            try FileManager.default.removeItem(at: local)
+            try FileManager.default.moveItem(at: saved, to: local)
+            refresh.click()
+            let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            shot.name = "Local refresh \(language)"
+            shot.lifetime = .keepAlways
+            add(shot)
+            app.terminate()
+            activeApp = nil
+            let support = "SkillsHubUITests-local-refresh-\(fixture.runID.uuidString)"
+            app = launchPlatformRootApp(fixture: fixture, scenario: "local-refresh", appSupportName: support, language: language)
+            openConnectRootPanel(in: app)
+            chooseDirectory(fixture.root, in: app)
+            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(firstID)"].waitForExistence(timeout: 8))
+            selectNavigation("tasks", in: app)
+            XCTAssertTrue(app.descendants(matching: .any)["phase1-task-list"].waitForExistence(timeout: 3))
+            let recoveredTask = app.buttons["phase1-task-\(operationID)"]
+            XCTAssertTrue(recoveredTask.waitForExistence(timeout: 3))
+            recoveredTask.click()
+            XCTAssertTrue(app.buttons["task-open-skill-\(operationID)"].exists)
+            app.buttons["task-open-skill-\(operationID)"].click()
+            XCTAssertTrue(app.buttons["clear-managed-relations"].waitForExistence(timeout: 3))
+            XCTAssertEqual(try treeSnapshot(of: operations), operationsBefore)
+            app.terminate()
+            activeApp = nil
+            app = launchPlatformRootApp(fixture: fixture, scenario: "local-refresh", appSupportName: support, expectEmpty: false, language: language)
+            // This isolated Root is outside the default path; reconnect it after restart.
+            openConnectRootPanel(in: app)
+            chooseDirectory(fixture.root, in: app)
+            selectNavigation("all-skills", in: app)
+            XCTAssertTrue(app.descendants(matching: .any)["skill-row-\(firstID)"].waitForExistence(timeout: 8))
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), linkText)
+            XCTAssertEqual(try treeSnapshot(of: operations), operationsBefore)
+            app.terminate()
+            activeApp = nil
+            try fixture.cleanup()
+            activeFixture = nil
         }
     }
 
@@ -949,6 +1209,28 @@ final class SkillsHubUITests: XCTestCase {
             XCTAssertTrue(finding.waitForExistence(timeout: 2))
             XCTAssertTrue(finding.label.contains("agent-owned-review"))
             XCTAssertTrue(finding.label.contains(nodeType))
+            let address = app.staticTexts["skill-entry-address"]
+            XCTAssertEqual(address.value as? String ?? address.label, "agent-owned-review/SKILL.md")
+            let baseline = app.staticTexts["skill-address-baseline"]
+            XCTAssertTrue((baseline.value as? String ?? baseline.label).contains("Codex"))
+            XCTAssertFalse(app.staticTexts["skill-address-status"].exists)
+            finding.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 27, dy: 0)).click()
+            let nodePath = app.staticTexts.matching(NSPredicate(
+                format: "identifier == %@ AND value BEGINSWITH %@ AND value CONTAINS %@",
+                finding.identifier, "/", "/.codex/skills/agent-owned-review")).firstMatch
+            XCTAssertTrue(nodePath.waitForExistence(timeout: 2))
+            XCTAssertTrue((nodePath.value as? String ?? nodePath.label).hasSuffix("/.codex/skills/agent-owned-review"))
+            let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            shot.name = "External Agent address and folded facts \(language)"
+            shot.lifetime = .keepAlways
+            add(shot)
+
+            app.staticTexts["codex-review"].firstMatch.click()
+            XCTAssertEqual(address.value as? String ?? address.label, "codex-review/SKILL.md")
+            XCTAssertTrue(app.staticTexts["skill-address-status"].exists)
+            app.staticTexts[".hidden-review"].firstMatch.click()
+            XCTAssertFalse(address.exists)
+            XCTAssertTrue(app.staticTexts["skill-address-status"].exists)
 
             selectNavigation("settings", in: app)
             selectNavigation("agent-codex", in: app)
@@ -1123,6 +1405,7 @@ final class SkillsHubUITests: XCTestCase {
     @MainActor
     func testSourceUpdateConfirmationAndResultUseSelectedLanguage() throws {
         for (language, confirmation, resultTitle) in [
+            ("en", "Update Entire Source", "Update Applied"),
             ("zh-Hans", "更新整个来源", "更新已应用"),
             ("ja", "ソース全体を更新", "更新を適用済み")
         ] {
@@ -1142,6 +1425,10 @@ final class SkillsHubUITests: XCTestCase {
             XCTAssertTrue(app.staticTexts[resultTitle].waitForExistence(timeout: 5))
             let managed = fixture.root.appending(path: "local/review-fixture/SKILL.md")
             XCTAssertTrue(try String(contentsOf: managed, encoding: .utf8).contains("Updated upstream"))
+            let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            shot.name = "T012 source update result \(language)"
+            shot.lifetime = .keepAlways
+            add(shot)
             app.terminate()
             try fixture.cleanup()
             activeApp = nil
@@ -1170,7 +1457,7 @@ final class SkillsHubUITests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.root.appending(path: "local/language-source/candidate-fixture/SKILL.md").path))
 
             selectNavigation("all-skills", in: app)
-            app.descendants(matching: .any)["skill-row-fixture-review-candidate"].click()
+            app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
             let detail = app.descendants(matching: .any)["skill-detail"]
             for (agent, directory) in [("codex", ".codex"), ("claudeCode", ".claude"), ("custom", ".custom")] {
                 let action = app.buttons["relation-action-\(agent)-review-fixture-detail"]
@@ -1334,10 +1621,28 @@ final class SkillsHubUITests: XCTestCase {
 
     @MainActor
     func testSidebarBrandIconsRemainReadable() throws {
-        for (language, appearance) in [("en", "Light"), ("zh-Hans", "Light"), ("ja", "Light"), ("en", "Dark")] {
+        for (language, appearance, iconState) in [("en", "Light", "cli"), ("zh-Hans", "Light", "desktop"), ("ja", "Light", "unreadable"), ("en", "Dark", "desktop")] {
             let fixture = try makeFixture()
+            if iconState != "cli" {
+                for agent in ["codex", "claudeCode"] {
+                    let bundle = fixture.runRoot.appendingPathComponent("\(agent).app")
+                    let resources = bundle.appendingPathComponent("Contents/Resources")
+                    try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+                    try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "fixture.\(agent)", "CFBundleIconFile": "Agent.png"], format: .xml, options: 0)
+                        .write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+                    let image = NSImage(size: NSSize(width: 32, height: 32), flipped: false) { rect in
+                        (agent == "codex" ? NSColor.systemTeal : NSColor.systemOrange).setFill()
+                        rect.fill()
+                        return true
+                    }
+                    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(image.tiffRepresentation)))
+                    let data = iconState == "unreadable" ? Data("invalid image".utf8) : try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    try data.write(to: resources.appendingPathComponent("Agent.png"))
+                }
+                try "icons-desktop".write(to: fixture.runRoot.appendingPathComponent("installation-status"), atomically: true, encoding: .utf8)
+            }
             let app = try launch(fixture: fixture, language: language, windowWidth: 1040,
-                                 additionalArguments: ["--skillshub-ui-fixture-appearance", appearance])
+                                 additionalArguments: ["--skillshub-ui-fixture-appearance", appearance] + (iconState == "cli" ? [] : ["--skillshub-ui-installation-status-fixture"]))
             let sidebar = app.descendants(matching: .any)["phase1-product-sidebar"]
             XCTAssertTrue(sidebar.waitForExistence(timeout: 3))
             let divider = app.splitters.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -1352,6 +1657,23 @@ final class SkillsHubUITests: XCTestCase {
                 shot.lifetime = .keepAlways
                 add(shot)
             }
+            selectNavigation("all-skills", in: app)
+            app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
+            let detail = app.descendants(matching: .any)["skill-detail"]
+            for agent in ["codex", "claudeCode"] {
+                let sidebarAgent = app.descendants(matching: .any)["nav-agent-\(agent)"]
+                let detailIcon = detail.descendants(matching: .any)["agent-icon-\(agent)"].firstMatch
+                XCTAssertTrue(sidebarAgent.exists && detailIcon.exists)
+                XCTAssertFalse(detailIcon.label.isEmpty)
+                // Native sidebar buttons merge their icon into the accessible button name.
+                XCTAssertTrue(sidebarAgent.label.contains(detailIcon.label))
+                XCTAssertGreaterThan(detailIcon.frame.width, 0)
+                XCTAssertLessThanOrEqual(detailIcon.frame.width, 38)
+            }
+            let paired = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            paired.name = "T009 paired icons \(language) \(appearance) \(iconState) 1040pt"
+            paired.lifetime = .keepAlways
+            add(paired)
             app.terminate()
             try fixture.cleanup()
             activeFixture = nil
@@ -1411,6 +1733,122 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testHistoricalCreationMaterialsRequireExplicitActionInThreeLanguages() throws {
+        let samples = [
+            ("en", "Settle empty creation directory", "Ready to settle empty creation directory", "Creation directory contains unknown contents.", "Creation directory absent; deletion history unverified."),
+            ("zh-Hans", "结算空创建目录", "已核实空创建目录，可明确发起结算", "创建目录含未知内容，材料予以保留。", "当前创建目录不存在；无法核实历史删除过程。"),
+            ("ja", "空の作成ディレクトリを整理", "空の作成ディレクトリを確認済み。明示的に整理できます", "作成ディレクトリに不明な内容があるため、材料を保持します。", "現在、作成ディレクトリはありません。過去の削除処理は検証できません。")
+        ]
+        for (language, action, ready, unknown, unverified) in samples {
+            let fixture = try makeFixture()
+            var app = try launch(fixture: fixture, language: language, windowWidth: 1040,
+                additionalArguments: ["--skillshub-ui-creation-material-fixture"])
+            selectNavigation("all-skills", in: app)
+            app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
+            let codexLink = fixture.home.appending(path: ".codex/skills/Review Fixture")
+            let claudeLink = fixture.home.appending(path: ".claude/skills/Review Fixture")
+            for (agent, link) in [("codex", codexLink), ("claudeCode", claudeLink)] {
+                let button = app.buttons["relation-action-\(agent)-review-fixture-detail"]
+                XCTAssertTrue(button.waitForExistence(timeout: 3))
+                button.click()
+                XCTAssertTrue(waitForFile(at: link))
+                let done = NSPredicate { _, _ in button.isEnabled && button.label.contains(agent == "codex" ? "Codex" : "Claude Code") }
+                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: done, object: nil)], timeout: 5), .completed)
+            }
+            let directory = fixture.root.appending(path: ".skillshub-operations")
+            func materialRecords() throws -> [(URL, [String: Any])] {
+                try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).compactMap { operation in
+                    let url = operation.appendingPathComponent("record.json")
+                    guard let data = try? Data(contentsOf: url), let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          record["creationMaterials"] != nil else { return nil }
+                    return (url, record)
+                }
+            }
+            // Wait for durable material results, not merely publication of the final link.
+            let persisted = NSPredicate { _, _ in (try? materialRecords().count) == 2 }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: persisted, object: nil)], timeout: 5), .completed)
+            let records = try materialRecords()
+            let codex = try XCTUnwrap(records.first { ($0.1["relation"] as? [String: Any])?["agentID"] as? String == "codex" })
+            let claude = try XCTUnwrap(records.first { ($0.1["relation"] as? [String: Any])?["agentID"] as? String == "claudeCode" })
+            func materialURL(_ record: [String: Any]) throws -> URL {
+                URL(fileURLWithPath: try XCTUnwrap((record["creationMaterials"] as? [String: Any])?["isolationPath"] as? String))
+            }
+            let empty = try materialURL(codex.1)
+            let occupied = try materialURL(claude.1)
+            try Data("unknown".utf8).write(to: occupied.appendingPathComponent("sentinel"))
+            let unrecorded = fixture.home.appending(path: ".codex/skills/.skillshub-create-unrecorded")
+            try FileManager.default.createDirectory(at: unrecorded, withIntermediateDirectories: false)
+            let before = try Data(contentsOf: codex.0)
+            let originalCodexLink = try FileManager.default.destinationOfSymbolicLink(atPath: codexLink.path)
+            let originalClaudeLink = try FileManager.default.destinationOfSymbolicLink(atPath: claudeLink.path)
+            app.terminate()
+            app = try launch(fixture: fixture, language: language, windowWidth: 1040,
+                additionalArguments: ["--skillshub-ui-creation-material-fixture"])
+            XCTAssertTrue(FileManager.default.fileExists(atPath: empty.path))
+            XCTAssertEqual(try Data(contentsOf: codex.0), before)
+            func openDetails(_ recordURL: URL) {
+                selectNavigation("tasks", in: app)
+                let id = recordURL.deletingLastPathComponent().lastPathComponent
+                let row = app.buttons["phase1-task-\(id)"]
+                let list = app.descendants(matching: .any)["phase1-task-list"]
+                for _ in 0..<8 where !row.isHittable { list.swipeUp(velocity: .slow) }
+                XCTAssertTrue(row.waitForExistence(timeout: 3))
+                row.click()
+                let details = app.buttons["task-open-details-\(id)"]
+                for _ in 0..<8 where !details.isHittable { list.swipeUp(velocity: .slow) }
+                XCTAssertTrue(details.waitForExistence(timeout: 3))
+                details.click()
+            }
+            func settleButton() -> XCUIElement {
+                let button = app.buttons["settle-creation-materials"]
+                let detail = app.scrollViews["operation-detail"]
+                for _ in 0..<8 where !detail.frame.insetBy(dx: 0, dy: 12).contains(button.frame) {
+                    detail.swipeUp(velocity: .slow)
+                }
+                XCTAssertTrue(button.waitForExistence(timeout: 3))
+                return button
+            }
+            openDetails(claude.0)
+            XCTAssertFalse(settleButton().isEnabled)
+            XCTAssertEqual(app.staticTexts["creation-material-qualification"].value as? String, unknown)
+            openDetails(codex.0)
+            let settle = settleButton()
+            XCTAssertEqual(settle.label, action)
+            let incomplete = ["en": "Not completed", "zh-Hans": "未完成", "ja": "未完了"][language]!
+            XCTAssertTrue(app.descendants(matching: .any)["recovery-component-creation-directory"].label.contains(incomplete))
+            XCTAssertEqual(app.staticTexts["creation-material-qualification"].value as? String, ready)
+            XCTAssertEqual(app.staticTexts["creation-material-path"].value as? String, empty.path)
+            let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            shot.name = "Creation materials \(language)"
+            shot.lifetime = .keepAlways
+            add(shot)
+            settle.click()
+            let removed = NSPredicate { _, _ in !FileManager.default.fileExists(atPath: empty.path) }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: removed, object: nil)], timeout: 5), .completed)
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: codexLink.path), originalCodexLink)
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: claudeLink.path), originalClaudeLink)
+            XCTAssertEqual(try String(contentsOf: occupied.appendingPathComponent("sentinel"), encoding: .utf8), "unknown")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: unrecorded.path))
+            app.terminate()
+            // Consume the same durable pending/retained shape as a result-writeback failure.
+            var record = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: codex.0)) as? [String: Any])
+            var materials = try XCTUnwrap(record["creationMaterials"] as? [String: Any])
+            materials["status"] = "retained"
+            record["creationMaterials"] = materials
+            try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]).write(to: codex.0)
+            app = try launch(fixture: fixture, language: language, windowWidth: 1040,
+                additionalArguments: ["--skillshub-ui-creation-material-fixture"])
+            openDetails(codex.0)
+            XCTAssertFalse(settleButton().isEnabled)
+            XCTAssertEqual(app.staticTexts["creation-material-qualification"].value as? String, unverified)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: unrecorded.path))
+            app.terminate()
+            try fixture.cleanup()
+            activeFixture = nil
+        }
+    }
+
+    @MainActor
     func testOperationSummaryWithoutPendingRecords() throws {
         for (language, emptyText, completedText) in [
             ("en", "No pending operations", "Recently completed"),
@@ -1460,21 +1898,65 @@ final class SkillsHubUITests: XCTestCase {
 
     @MainActor
     func testAgentDetailsKeepEveryAgentAccessibleInThreeLanguages() throws {
-        for (language, appearance) in [("en", "Light"), ("zh-Hans", "Light"), ("ja", "Light"), ("en", "Dark")] {
+        for (language, appearance, pathTitle) in [
+            ("en", "Light", "Paths and check details"), ("zh-Hans", "Light", "路径与检查详情"),
+            ("ja", "Light", "パスと確認の詳細"), ("en", "Dark", "Paths and check details")
+        ] {
             let fixture = try makeFixture()
+            let sourceFolder = "roles-skills 長いソースフォルダ名 と空白 abcdefghijklmnopqrstuvwxyz"
+            let longRelative = "local/" + sourceFolder + "/長いフォルダ名 と空白/深い階層/UX 設計"
+            let longDirectory = fixture.root.appending(path: longRelative, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: longDirectory, withIntermediateDirectories: true)
+            try Data("---\nname: Address 長い技能\ndescription: Address presentation fixture.\n---\nBody.\n".utf8)
+                .write(to: longDirectory.appending(path: "SKILL.md"))
             let app = try launch(fixture: fixture, language: language, windowWidth: 1040,
                                  additionalArguments: ["--skillshub-ui-agent-overflow-fixture", "--skillshub-ui-fixture-appearance", appearance])
-            let row = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
+            app.buttons["recheck-filesystem"].click()
+            let longRow = app.staticTexts["Address 長い技能"].firstMatch
+            XCTAssertTrue(longRow.waitForExistence(timeout: 8))
+            longRow.click()
+            let prefix = language == "zh-Hans" ? "本地" : language == "ja" ? "ローカル" : "Local"
+            let summary = prefix + "/" + sourceFolder
+            let longItemRow = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@", "skill-row-", "Address 長い技能")).firstMatch
+            let sourceSummary = longItemRow.staticTexts["skill-source-summary"]
+            // Swift equality respects the filesystem's canonical Unicode decomposition.
+            XCTAssertEqual(sourceSummary.value as? String, summary, "The complete source summary remains accessible")
+            let address = app.staticTexts["skill-entry-address"]
+            XCTAssertEqual(address.value as? String ?? address.label, longRelative + "/SKILL.md")
+            XCTAssertGreaterThan(address.frame.height, 0)
+            XCTAssertLessThanOrEqual(address.frame.maxX, app.descendants(matching: .any)["skill-detail"].frame.maxX)
+            XCTAssertFalse(app.staticTexts["content-node-type"].exists)
+            if language == "en", appearance == "Light" {
+                preservingPasteboard { pasteboard in
+                    pasteboard.clearContents()
+                    address.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.25)).click()
+                    app.typeKey("a", modifierFlags: .command)
+                    app.typeKey("c", modifierFlags: .command)
+                    XCTAssertEqual(pasteboard.string(forType: .string), longRelative + "/SKILL.md")
+                }
+                app.activate()
+            }
+            let addressShot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            addressShot.name = "Long relative Skill address \(language) \(appearance)"
+            addressShot.lifetime = .keepAlways
+            add(addressShot)
+            let row = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
             XCTAssertTrue(row.waitForExistence(timeout: 3))
             XCTAssertFalse(row.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "relation-action-")).firstMatch.exists)
-            row.click()
+            row.staticTexts["Review Fixture"].firstMatch.click()
             let detail = app.descendants(matching: .any)["skill-detail"]
             XCTAssertTrue(detail.waitForExistence(timeout: 2))
+            XCTAssertEqual(address.value as? String ?? address.label, "local/fixture-source/review-fixture/SKILL.md")
+            XCTAssertFalse(app.staticTexts["content-node-type"].exists)
             if language == "en" {
                 let window = app.windows.firstMatch
                 let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
                 corner.click(forDuration: 0.1, thenDragTo: corner.withOffset(CGVector(dx: 0, dy: -500)))
-                XCTAssertEqual(app.descendants(matching: .any)["workspace-list-pane"].frame.height, 560, accuracy: 2)
+                // Status rows share the 560pt content area; the native toolbar is outside it.
+                XCTAssertGreaterThanOrEqual(window.frame.height - app.toolbars.firstMatch.frame.height, 560)
+                XCTAssertEqual(window.frame.width, 1040, accuracy: 2)
+                XCTAssertEqual(app.descendants(matching: .any)["workspace-list-pane"].frame.height, detail.frame.height, accuracy: 2)
             }
             let lastAction = app.buttons["relation-action-overflow-16-review-fixture-detail"]
             for _ in 0..<20 where !lastAction.isHittable || lastAction.frame.maxY > detail.frame.maxY - 8 {
@@ -1483,6 +1965,11 @@ final class SkillsHubUITests: XCTestCase {
             XCTAssertTrue(lastAction.isHittable)
             XCTAssertLessThanOrEqual(lastAction.frame.maxY, detail.frame.maxY - 8)
             XCTAssertTrue(app.staticTexts["zzzz 非常に長いカスタムAgent名"].exists)
+            let paths = app.disclosureTriangles.matching(NSPredicate(format: "label BEGINSWITH %@", pathTitle)).firstMatch
+            for _ in 0..<4 where !paths.isHittable { detail.swipeUp() }
+            XCTAssertTrue(paths.isHittable)
+            paths.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 27, dy: 0)).click()
+            XCTAssertTrue(app.staticTexts["content-node-type"].exists)
             if language == "en" {
                 lastAction.click()
                 let completed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label BEGINSWITH %@", "Disable"), object: lastAction)
@@ -1538,11 +2025,24 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(sidebarAgent.waitForExistence(timeout: 3))
         XCTAssertTrue(sidebarAgent.label.contains("長い Custom Agent Name"))
         selectNavigation("all-skills", in: app)
-        app.descendants(matching: .any)["skill-row-fixture-review-candidate"].click()
+        app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
         XCTAssertTrue(app.descendants(matching: .any)["relation-detail-custom-review-fixture"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["長い Custom Agent Name"].exists)
+        let detailIcon = app.descendants(matching: .any)["relation-detail-custom-review-fixture"].descendants(matching: .any)["agent-icon-custom"].firstMatch
+        XCTAssertTrue(detailIcon.exists)
+        XCTAssertTrue((detailIcon.label + " " + (detailIcon.value as? String ?? "")).contains("長い Custom Agent Name"))
         XCTAssertEqual(app.buttons["relation-action-custom-review-fixture-detail"].label,
                        "Enable 長い Custom Agent Name relationship")
+        let detail = app.descendants(matching: .any)["skill-detail"]
+        let customAction = app.buttons["relation-action-custom-review-fixture-detail"]
+        for _ in 0..<8 where !customAction.isHittable || customAction.frame.maxY > detail.frame.maxY - 8 {
+            detail.swipeUp()
+        }
+        XCTAssertTrue(customAction.isHittable)
+        let paired = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        paired.name = "T009 paired custom monogram"
+        paired.lifetime = .keepAlways
+        add(paired)
         sidebarAgent.click()
         XCTAssertTrue(app.descendants(matching: .any)["agent-workspace-search"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["長い Custom Agent Name"].exists)
@@ -1718,7 +2218,7 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertFalse(configurationForm.waitForExistence(timeout: 2))
 
         selectNavigation("all-skills", in: app)
-        let managedRow = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
+        let managedRow = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
         XCTAssertTrue(managedRow.waitForExistence(timeout: 2))
         managedRow.click()
         XCTAssertTrue(app.descendants(matching: .any)["skill-detail"].waitForExistence(timeout: 2))
@@ -1882,7 +2382,7 @@ final class SkillsHubUITests: XCTestCase {
         let app = try launch(fixture: fixture)
 
         selectNavigation("all-skills", in: app)
-        let managedRow = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
+        let managedRow = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
         XCTAssertTrue(managedRow.waitForExistence(timeout: 2))
         managedRow.click()
         let codexAction = app.buttons["relation-action-codex-review-fixture-detail"]
@@ -1944,14 +2444,14 @@ final class SkillsHubUITests: XCTestCase {
         let fixture = try makeFixture()
         let app = try launch(fixture: fixture)
         let canonicalSkill = fixture.root
-            .appending(path: "local/review-fixture", directoryHint: .isDirectory)
+            .appending(path: "local/fixture-source/review-fixture", directoryHint: .isDirectory)
             .resolvingSymlinksInPath()
             .standardizedFileURL
         let codexLink = fixture.home.appending(path: ".codex/skills/Review Fixture")
         let claudeLink = fixture.home.appending(path: ".claude/skills/Review Fixture")
 
         selectNavigation("all-skills", in: app)
-        let managedRow = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
+        let managedRow = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
         XCTAssertTrue(managedRow.waitForExistence(timeout: 2))
         managedRow.click()
         XCTAssertTrue(app.descendants(matching: .any)["skill-detail"].waitForExistence(timeout: 2))
@@ -2041,7 +2541,7 @@ final class SkillsHubUITests: XCTestCase {
         let claudeLink = fixture.home.appending(path: ".claude/skills/Review Fixture")
 
         selectNavigation("all-skills", in: app)
-        let managedRow = app.descendants(matching: .any)["skill-row-fixture-review-candidate"]
+        let managedRow = app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier]
         XCTAssertTrue(managedRow.waitForExistence(timeout: 2))
         managedRow.click()
         let codexAction = app.buttons["relation-action-codex-review-fixture-detail"]
@@ -2233,6 +2733,15 @@ final class SkillsHubUITests: XCTestCase {
 
     @MainActor
     private func paste(_ text: String, into element: XCUIElement) {
+        preservingPasteboard { pasteboard in
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.setString(text, forType: .string))
+            element.typeKey("v", modifierFlags: .command)
+        }
+    }
+
+    @MainActor
+    private func preservingPasteboard(_ action: (NSPasteboard) -> Void) {
         let pasteboard = NSPasteboard.general
         let previousItems = pasteboard.pasteboardItems?.map { item in
             let copy = NSPasteboardItem()
@@ -2249,9 +2758,7 @@ final class SkillsHubUITests: XCTestCase {
                 pasteboard.writeObjects(previousItems)
             }
         }
-        pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.setString(text, forType: .string))
-        element.typeKey("v", modifierFlags: .command)
+        action(pasteboard)
     }
 
     @MainActor

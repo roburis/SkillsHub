@@ -1,5 +1,44 @@
 import Foundation
 
+nonisolated extension RelationOwnershipClassification {
+    var clearMessage: LocalizedMessage {
+        switch self {
+        case .exactManagedLink: "Remove the verified Skills Hub-managed link and disable this relationship."
+        case .vacant: "Disable this relationship; no link node is currently present."
+        case .unmanagedNode: "The current node is not managed by Skills Hub; the object remains unchanged."
+        case .externalLink: "The current link points outside the Management Directory; the object remains unchanged."
+        case .brokenLink: "The current link is broken; the object remains unchanged."
+        case .unreadable: "Current ownership could not be verified; the object remains unchanged."
+        }
+    }
+}
+
+nonisolated extension AgentFindingType {
+    var presentationMessage: LocalizedMessage {
+        switch self {
+        case .pendingAudit: "Agent entries have not been fully checked."
+        case .missingSkillsDirectory: "Agent detected, skills directory not created."
+        case .permissionDenied: "Agent skills directory is not readable or writable."
+        case .directoryEnumerationFailed: "The Agent directory could not be completely checked."
+        case .localDirectoryNotManaged: "Local directory is not governed by Skills Hub."
+        case .externalSymlinkNotManaged: "Agent entry points outside the Management Directory."
+        case .brokenSymlink: "Agent entry is a broken symlink."
+        case .duplicateWithHub: "Agent entry may duplicate a Hub skill."
+        case .aliasConflict: "The Agent entry conflicts with a recorded link name."
+        case .copiedButAgentStillLocal: "A managed copy exists; the Agent still uses its local directory."
+        case .copiedButAgentStillExternal: "A managed copy exists; the Agent still uses its external link."
+        case .linkDrift: "The recorded managed link no longer matches current facts."
+        case .rootMovedRepairAvailable: "Broken Hub-managed link can be repaired after root move."
+        case .rollbackFailed: "Recovery of the Agent relationship needs attention."
+        case .invalidEntry: "Agent entry is not a supported skill directory."
+        }
+    }
+}
+
+nonisolated extension AgentDirectoryFinding {
+    var presentationMessage: LocalizedMessage { type.presentationMessage }
+}
+
 extension AgentKind {
     nonisolated var displayName: String {
         switch self {
@@ -78,9 +117,7 @@ nonisolated struct AgentCapabilityPresentation: Identifiable, Equatable {
 
 nonisolated struct AgentRelationPresentation: Identifiable, Equatable {
     var relation: AgentRelationIdentity
-    var agentKind: AgentKind?
     var agentDisplayName: String
-    var iconMonogram: String?
     var skillID: String
     var skillName: String
     var intendedEnabled: Bool?
@@ -113,13 +150,6 @@ nonisolated struct AgentPresentation: Identifiable, Equatable {
         iconMonogram = descriptor.iconMonogram
     }
 
-    init(relation: AgentRelationPresentation) {
-        id = relation.relation.agentID
-        displayName = relation.agentDisplayName
-        agentKind = relation.agentKind
-        iconMonogram = relation.iconMonogram
-    }
-
     var iconSpecification: AgentIconSpecification {
         AgentIconCatalog.specification(for: agentKind)
     }
@@ -145,14 +175,12 @@ nonisolated struct AgentPresentation: Identifiable, Equatable {
 }
 
 extension AgentRelationPresentation {
-    nonisolated var agentPresentation: AgentPresentation {
-        AgentPresentation(relation: self)
-    }
-
     nonisolated var presentationStatusSymbol: String? {
-        if unavailableReason != nil || verification == .drifted {
+        if verification == .drifted || observation == .brokenSymbolicLink {
             return "exclamationmark.triangle.fill"
         }
+        guard intendedEnabled == true else { return nil }
+        if unavailableReason != nil { return "exclamationmark.triangle.fill" }
         if verification == .notVerified || verification == .currentlyUnverifiable {
             return "questionmark.circle.fill"
         }
@@ -174,7 +202,7 @@ nonisolated struct ManagedRelationClearItem: Identifiable, Equatable, Sendable {
     var agentDisplayName: String
     var linkPath: String
     var disposition: ManagedRelationClearDisposition
-    var detail: String
+    var detail: LocalizedMessage
 
     var id: String { relation.id }
 }
@@ -198,7 +226,7 @@ nonisolated struct ManagedRelationClearResultItem: Identifiable, Equatable, Send
     var relation: AgentRelationIdentity
     var agentDisplayName: String
     var outcome: ControllerRelationActionOutcome
-    var detail: String
+    var detail: LocalizedMessage
 
     var id: String { relation.id }
 }

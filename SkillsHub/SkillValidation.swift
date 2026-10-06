@@ -1,6 +1,26 @@
 import Foundation
 import Yams
 
+nonisolated extension ValidationMessage {
+    var presentationMessage: LocalizedMessage {
+        switch id {
+        case "missing-skill-file": "A readable SKILL.md file within this Skill is required."
+        case "unreadable-skill-file": "SKILL.md could not be read as UTF-8."
+        case "content-changed": "SKILL.md changed after its manifest was observed."
+        case "empty-skill-id": "Normalized skill id is empty."
+        case "skill-id-conflict": "Skill id conflicts with an existing skill."
+        case "name-directory-mismatch": "Frontmatter name does not match directory name."
+        case "description-length": "Description length should be reviewed."
+        case "missing-source-metadata": "Source metadata is missing."
+        case "frontmatter-syntax": "YAML frontmatter has invalid syntax."
+        case "frontmatter-format": "YAML frontmatter must be one mapping with unique, non-empty string name and description fields."
+        case "frontmatter-capability": "YAML frontmatter could not be parsed within the supported parser capability."
+        case "frontmatter-budget": "YAML frontmatter exceeds the bounded parsing limits."
+        default: LocalizedMessage("Check detail (original): %@", arguments: [message])
+        }
+    }
+}
+
 nonisolated struct SkillFrontmatter: Equatable {
     var name: String
     var description: String
@@ -41,14 +61,14 @@ nonisolated enum SkillFrontmatterError: Error, Equatable {
     }
 }
 
-nonisolated struct SkillFrontmatterBudget: Equatable {
+nonisolated struct SkillFrontmatterBudget: Equatable, Sendable {
     var maxInputBytes = 64 * 1024
     var maxDepth = 32
     var maxNodes = 2_048
     var maxAliases = 64
 }
 
-nonisolated struct SkillFrontmatterParser {
+nonisolated struct SkillFrontmatterParser: Sendable {
     var budget = SkillFrontmatterBudget()
 
     func parse(_ text: String) throws -> SkillFrontmatter {

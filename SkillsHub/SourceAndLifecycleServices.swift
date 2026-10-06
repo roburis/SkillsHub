@@ -1030,7 +1030,7 @@ nonisolated struct SourceRemovalResult: Equatable, Sendable {
     var trashPath: String?
     var metadataRemoved: Bool
     var operationRecordCompleted: Bool
-    var detail: String
+    var detail: LocalizedMessage
 
     var succeeded: Bool { contentMovedToTrash && metadataRemoved && operationRecordCompleted }
 }
@@ -1128,7 +1128,8 @@ nonisolated final class SourceRemovalService: @unchecked Sendable {
         allCleared: Bool
     ) throws {
         for result in results {
-            record.relationResults[result.relation.id] = "\(result.outcome.rawValue): \(result.detail)"
+            let originalDetail = SkillsHubLocalization().localized(result.detail, language: .english)
+            record.relationResults[result.relation.id] = "\(result.outcome.rawValue): \(originalDetail)"
         }
         record.stage = allCleared ? .relationshipsCleared : .needsAttention
         record.detail = allCleared

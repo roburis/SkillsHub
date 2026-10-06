@@ -25,11 +25,35 @@ struct SkillsHubApp: App {
         .defaultSize(width: 1200, height: 812)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button(SkillsHubLocalization().localized("About Skills Hub", language: library.language)) {
+                    showAboutPanel()
+                }
+            }
             CommandGroup(after: .textEditing) {
                 Button(SkillsHubLocalization().localized("Search", language: library.language)) { appDelegate.focusSearch() }
                     .keyboardShortcut("f", modifiers: .command)
             }
         }
+    }
+
+    private func showAboutPanel() {
+        let localization = SkillsHubLocalization()
+        let credits: String
+        do {
+            credits = localization.localized("Third-party notices", language: library.language)
+                + "\n\n" + (try AppSettingsService().thirdPartyNotices())
+        } catch {
+            credits = localization.localized(LocalizedMessage(
+                "Could not read third-party notices. Original diagnostic: %@",
+                arguments: [error.localizedDescription]
+            ), language: library.language)
+        }
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: NSAttributedString(
+            string: credits,
+            attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                         .foregroundColor: NSColor.labelColor]
+        )])
     }
 }
 

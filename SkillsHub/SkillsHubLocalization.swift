@@ -82,6 +82,7 @@ nonisolated struct SkillsHubLocalization {
             "Enabled for %@ Agents": "已为 %@ 个 Agent 选择启用",
             "Disabled": "未启用",
             "Not Enabled": "未启用",
+            "Not connected to an Agent": "未接入 Agent",
             "Not set": "未设置",
             "Unknown Source": "未知来源",
             "No current observation": "尚无当前观察结果",
@@ -99,6 +100,10 @@ nonisolated struct SkillsHubLocalization {
             "Unreadable": "无法读取",
             "Observe current facts before preparing another action.": "先重新检查当前事实，再准备下一次操作。",
             "No action is required.": "无需操作。",
+            "Review current relation facts and authorize a new action.": "查看当前关系事实并授权新的操作。",
+            "Wait for the current action on this relation to finish.": "等待当前关系操作完成。",
+            "Review the current target authorization before trying again.": "重试前请查看当前目标的授权。",
+            "Review target access before preparing another action.": "准备下一次操作前请查看目标访问权限。",
             "Review the current relation before preparing another action.": "先查看当前关系，再准备下一次操作。",
             "Restore current access and observe the relation again.": "恢复访问权限后重新检查关系。",
             "Enable": "启用",
@@ -121,6 +126,9 @@ nonisolated struct SkillsHubLocalization {
             "View this source’s Skills": "查看技能",
             "Back": "返回",
             "Search": "搜索",
+            "About Skills Hub": "关于 Skills Hub",
+            "Third-party notices": "第三方声明",
+            "Could not read third-party notices. Original diagnostic: %@": "无法读取第三方声明。诊断原文：%@",
             "Source check incomplete: %@": "来源检查未完成：%@",
             "Checked %@ Skills in this source.": "已检查此来源的 %@ 个技能。",
             "Checked %@ sources: %@ updates, %@ failures.": "已检查 %@ 个来源：%@ 个有更新，%@ 个失败。",
@@ -135,6 +143,13 @@ nonisolated struct SkillsHubLocalization {
             "Reset State Filters": "重置状态筛选",
             "Other Agent relationships": "其他 Agent 关系",
             "Paths and check details": "路径与检查详情",
+            "Skill address": "Skill 地址",
+            "Relative to the management directory": "相对于管理目录",
+            "Relative to %@ skills directory": "相对于 %@ 的 skills 目录",
+            "Skill address could not be verified.": "无法核实 Skill 地址。",
+            "Recorded address; the Skill entry is missing.": "已记录地址；Skill 入口已缺失。",
+            "Recorded address; SKILL.md has not been verified.": "已记录地址；SKILL.md 尚未核实。",
+            "SKILL.md is missing or unreadable.": "SKILL.md 缺失或无法读取。",
             "Preview Update…": "预览更新…",
             "More": "更多",
             "Search Sources…": "搜索来源…",
@@ -160,6 +175,23 @@ nonisolated struct SkillsHubLocalization {
             "Publish managed Skill": "创建受管 Skill",
             "View current Root": "查看当前 Root",
             "View authoritative object": "查看权威对象",
+            "Creation materials": "创建材料",
+            "Not completed": "未完成",
+            "Review creation materials in Operation Details.": "请在操作详情中查看创建材料的当前资格。",
+            "creation-directory": "创建目录",
+            "Settle empty creation directory": "结算空创建目录",
+            "Settling creation materials…": "正在结算创建材料…",
+            "Only this recorded empty directory is considered. Current facts are checked again when you act.": "仅处理这条记录对应的空目录。执行时会再次核验当前事实。",
+            "Creation responsibilities are not resolved.": "创建责任尚未结清，材料予以保留。",
+            "Ready to settle empty creation directory": "已核实空创建目录，可明确发起结算",
+            "Creation directory identity changed.": "创建目录身份已变化，材料予以保留。",
+            "Creation directory contains unknown contents.": "创建目录含未知内容，材料予以保留。",
+            "Creation directory absent; deletion history unverified.": "当前创建目录不存在；无法核实历史删除过程。",
+            "Creation directory settled": "创建目录已结算",
+            "Creation directory retained: no same-volume private isolation.": "创建目录予以保留：缺少同卷私有隔离条件。",
+            "Creation materials could not be verified.": "无法核验创建材料。",
+            "Creation materials retained; review current facts.": "创建材料予以保留，请查看当前事实。",
+            "Creation materials retained; Root write access is unavailable.": "创建材料予以保留：无法取得 Root 写入资格。",
             "Current facts": "当前事实",
             "metadata": "元数据",
             "original-backup": "原始备份",
@@ -369,6 +401,7 @@ nonisolated struct SkillsHubLocalization {
             "Reason": "原因",
             "Ref": "Ref",
             "Refresh": "刷新",
+            "Skill identity conflicts with its source location. Re-check before changing relationships.": "技能身份与来源位置冲突。请先重新检查，再更改关系。",
             "Refresh Catalog": "刷新目录",
             "Refresh GitHub indexes and rescan authorized local source folders.": "刷新 GitHub 索引并重新扫描已授权的本地来源文件夹。",
             "Reload skills from the selected root.": "从当前 Root 重新加载 Skill。",
@@ -581,6 +614,7 @@ nonisolated struct SkillsHubLocalization {
             "All Sources": "すべてのソース",
             "Enabled": "有効",
             "Enabled for %@ Agents": "%@ 件の Agent で有効に設定済み",
+            "Not connected to an Agent": "Agent に未接続",
             "Disabled": "無効",
             "Not Enabled": "未有効化",
             "Not set": "未設定",
@@ -600,6 +634,10 @@ nonisolated struct SkillsHubLocalization {
             "Unreadable": "読み取れません",
             "Observe current facts before preparing another action.": "次の操作を準備する前に、現在の情報を再確認してください。",
             "No action is required.": "操作は不要です。",
+            "Review current relation facts and authorize a new action.": "現在の関係の情報を確認し、新しい操作を許可してください。",
+            "Wait for the current action on this relation to finish.": "現在の関係に対する操作が完了するまでお待ちください。",
+            "Review the current target authorization before trying again.": "再試行する前に、現在の対象への許可を確認してください。",
+            "Review target access before preparing another action.": "次の操作を準備する前に、対象へのアクセス権を確認してください。",
             "Review the current relation before preparing another action.": "次の操作を準備する前に、現在の関係を確認してください。",
             "Restore current access and observe the relation again.": "アクセス権を復元してから、関係を再確認してください。",
             "Enable": "有効にする",
@@ -610,6 +648,9 @@ nonisolated struct SkillsHubLocalization {
             "View this source’s Skills": "スキルを表示",
             "Back": "戻る",
             "Search": "検索",
+            "About Skills Hub": "Skills Hubについて",
+            "Third-party notices": "第三者ソフトウェアの表示",
+            "Could not read third-party notices. Original diagnostic: %@": "第三者ソフトウェアの表示を読み込めません。診断原文：%@",
             "Source check incomplete: %@": "ソースの確認が未完了：%@",
             "Checked %@ Skills in this source.": "このソースの %@ 件のスキルを確認しました。",
             "Checked %@ sources: %@ updates, %@ failures.": "%@ 件のソースを確認：更新 %@ 件、失敗 %@ 件。",
@@ -624,6 +665,13 @@ nonisolated struct SkillsHubLocalization {
             "Reset State Filters": "状態フィルターをリセット",
             "Other Agent relationships": "他の Agent との関係",
             "Paths and check details": "パスと確認の詳細",
+            "Skill address": "Skillアドレス",
+            "Relative to the management directory": "管理ディレクトリからの相対パス",
+            "Relative to %@ skills directory": "%@のskillsディレクトリからの相対パス",
+            "Skill address could not be verified.": "Skillアドレスを確認できません。",
+            "Recorded address; the Skill entry is missing.": "記録されたアドレス：Skillの入口が見つかりません。",
+            "Recorded address; SKILL.md has not been verified.": "記録されたアドレス：SKILL.mdは未確認です。",
+            "SKILL.md is missing or unreadable.": "SKILL.mdが存在しないか読み取れません。",
             "Preview Update…": "更新をプレビュー…",
             "More": "その他",
             "Search Sources…": "ソースを検索…",
@@ -649,6 +697,23 @@ nonisolated struct SkillsHubLocalization {
             "Publish managed Skill": "管理Skillを作成",
             "View current Root": "現在のRootを表示",
             "View authoritative object": "現在の管理対象を表示",
+            "Creation materials": "作成時の材料",
+            "Not completed": "未完了",
+            "Review creation materials in Operation Details.": "操作の詳細で作成時の材料の現在の条件を確認してください。",
+            "creation-directory": "作成ディレクトリ",
+            "Settle empty creation directory": "空の作成ディレクトリを整理",
+            "Settling creation materials…": "作成時の材料を整理中…",
+            "Only this recorded empty directory is considered. Current facts are checked again when you act.": "この記録に対応する空のディレクトリのみが対象です。実行時に現在の事実を再確認します。",
+            "Creation responsibilities are not resolved.": "作成に関する処理が未解決のため、材料を保持します。",
+            "Ready to settle empty creation directory": "空の作成ディレクトリを確認済み。明示的に整理できます",
+            "Creation directory identity changed.": "作成ディレクトリの識別情報が変化したため、材料を保持します。",
+            "Creation directory contains unknown contents.": "作成ディレクトリに不明な内容があるため、材料を保持します。",
+            "Creation directory absent; deletion history unverified.": "現在、作成ディレクトリはありません。過去の削除処理は検証できません。",
+            "Creation directory settled": "作成ディレクトリを整理済み",
+            "Creation directory retained: no same-volume private isolation.": "作成ディレクトリを保持：同じボリュームでの専用隔離が利用できません。",
+            "Creation materials could not be verified.": "作成時の材料を検証できません。",
+            "Creation materials retained; review current facts.": "作成時の材料を保持しました。現在の事実を確認してください。",
+            "Creation materials retained; Root write access is unavailable.": "作成時の材料を保持：Rootへの書き込み権限を取得できません。",
             "Current facts": "現在の事実",
             "metadata": "メタデータ",
             "original-backup": "元のバックアップ",
@@ -853,6 +918,7 @@ nonisolated struct SkillsHubLocalization {
             "Reason": "理由",
             "Ref": "Ref",
             "Refresh": "更新",
+            "Skill identity conflicts with its source location. Re-check before changing relationships.": "スキルの識別情報とソース内の位置が矛盾しています。関係を変更する前に再確認してください。",
             "Refresh Catalog": "カタログを更新",
             "Refresh GitHub indexes and rescan authorized local source folders.": "GitHubインデックスを更新し、認可済みローカルソースフォルダを再スキャンします。",
             "Reload skills from the selected root.": "選択したRootからスキルを再読み込みします。",
@@ -1062,6 +1128,146 @@ nonisolated struct SkillsHubLocalization {
 
     private static let supplementalUIStrings: [AppLanguage: [String: String]] = [
         .chinese: [
+            "Reconnect the current Management Directory before changing this directory.": "更改此目录前，请重新连接当前管理目录。",
+            "Restore access to the current Agent directory and recheck it.": "请恢复当前 Agent 目录访问并重新检查。",
+            "This Skill is still selected for this Agent. Disable it explicitly before changing directories.": "此 Skill 仍为该 Agent 选择启用，更改目录前请明确停用。",
+            "The current relationship could not be verified.": "无法核实当前关系。",
+            "Import GitHub source": "导入 GitHub 来源",
+            "Relationship facts changed after source removal was confirmed.": "来源移除确认后，关系事实发生变化。",
+            "Required relationship cleanup is incomplete. The source content and registration were retained.": "所需关系清理未完成，来源内容及登记已保留。",
+            "Managed relationships were cleared, the complete source was moved to Trash, and active metadata was removed.": "受管关系已清除，完整来源已移至废纸篓，活动管理元数据已移除。",
+            "Interrupted operation has no readable plan snapshot; state is unknown.": "中断的操作没有可读计划快照，状态未知。",
+            "Root objects match the plan, but final journal evidence is missing; re-observe without replaying automatically.": "Root 对象与计划一致，但最终日志证据缺失；请重新观察，不会自动重放。",
+            "Root metadata is present, but initialization is incomplete; it will not be replayed automatically.": "Root 管理元数据存在，但初始化未完成；不会自动重放。",
+            "No verified Root establishment delta is present; the interrupted operation will not be replayed automatically.": "未观察到已核实的 Root 建立变化；不会自动重放中断操作。",
+            "Source import plan is incomplete; state is unknown.": "来源导入计划不完整，状态未知。",
+            "Managed source is outside the current Root; restore current authorization before observing.": "受管来源位于当前 Root 之外；请恢复当前授权后再观察。",
+            "Managed source and metadata are consistent, but final journal evidence is missing; re-observe before completing.": "受管来源与管理元数据一致，但最终日志证据缺失；完成前请重新观察。",
+            "Metadata claims a managed source whose content cannot be verified; state is inconsistent.": "管理元数据记录了无法核实内容的受管来源，状态不一致。",
+            "No verified local-source import delta is present; the interrupted operation will not be replayed automatically.": "未观察到已核实的本地来源导入变化；不会自动重放中断操作。",
+            "Source-registration plan is incomplete; state is unknown.": "来源登记计划不完整，状态未知。",
+            "Managed-copy plan is incomplete; state is unknown.": "受管副本计划不完整，状态未知。",
+            "Managed target is outside the current Root; restore current authorization before observing.": "受管目标位于当前 Root 之外；请恢复当前授权后再观察。",
+            "Managed target and metadata are consistent, but final journal evidence is missing; re-observe before completing.": "受管目标与管理元数据一致，但最终日志证据缺失；完成前请重新观察。",
+            "Metadata claims a managed asset whose target cannot be verified; state is inconsistent.": "管理元数据记录了无法核实目标的受管资产，状态不一致。",
+            "No verified managed delta is present; the interrupted operation will not be replayed automatically.": "未观察到已核实的受管变化；不会自动重放中断操作。",
+            "The selected directory is not readable: %@": "所选目录无法读取：%@",
+            "The selected directory no longer exists: %@": "所选目录已不存在：%@",
+            "The selected object is not a directory: %@": "所选对象不是目录：%@",
+            "A symbolic link cannot be used as the Management Directory: %@": "软链接不能作为管理目录：%@",
+            "The metadata at %@ is damaged or unreadable: %@": "%@ 的管理元数据已损坏或无法读取：%@",
+            "Source check incomplete. Diagnostic (original): %@": "来源检查未完成。诊断原文：%@",
+            "Review operation %@ before changing this Agent directory.": "更改此 Agent 目录前，请查看操作 %@。",
+            "%@. %@. Operation %@. %@. Object %@. %@": "%@。%@。操作 %@。%@。对象 %@。%@",
+            "Target %@ / %@. Requested %@. Outcome %@. Current conclusion %@. %@. %@. Safe next step %@": "目标 %@ / %@。请求 %@。结果 %@。当前结论 %@。%@。%@。下一安全步骤 %@",
+            "The operation plan is invalid. Prepare a new plan.": "操作计划无效，请准备新计划。",
+            "The source or current facts changed. Re-check before continuing.": "来源或当前事实已变化，请重检后继续。",
+            "The confirmation is no longer valid. Review a new preview.": "原确认已失效，请查看新的预览。",
+            "The Skill is unavailable or cannot be validated.": "该 Skill 不可用或无法校验。",
+            "The target is occupied: %@": "目标位置已被占用：%@",
+            "Prepared content could not be verified.": "无法核实准备的内容。",
+            "Metadata could not be committed. Diagnostic (original): %@": "无法提交管理元数据。诊断原文：%@",
+            "Recovery needs attention. Diagnostic (original): %@": "恢复需要处理。诊断原文：%@",
+            "The operation record is unavailable. Restore access before continuing.": "操作记录不可用，请恢复访问后继续。",
+            "Operation failed. Diagnostic (original): %@": "操作失败。诊断原文：%@",
+            "The source is unavailable for updating.": "该来源当前无法更新。",
+            "The source changed while preparing the update. Re-check it.": "准备更新时来源已变化，请重新检查。",
+            "The prepared source is incomplete. Current content was retained.": "准备的来源不完整，当前内容已保留。",
+            "Writing is unavailable. Restore access or wait for the current operation.": "当前无法写入，请恢复访问或等待当前操作结束。",
+            "Required relationship cleanup is incomplete. Review the affected Agents.": "所需关系清理未完成，请查看受影响的 Agent。",
+            "The source removal scope could not be verified.": "无法核实来源移除范围。",
+            "Moving the source to Trash failed. Diagnostic (original): %@": "来源移至废纸篓失败。诊断原文：%@",
+            "The Trash result could not be verified. Inspect the current paths.": "无法核实废纸篓操作结果，请检查当前位置。",
+            "The GitHub request failed. Check the connection and retry.": "GitHub 请求失败，请检查连接后重试。",
+            "GitHub rate limiting prevented the check. Retry later.": "GitHub 请求限流阻止了检查，请稍后重试。",
+            "The repository exceeds the supported complete-check limits.": "该仓库超出支持的完整检查限制。",
+            "The repository contains a restricted path.": "该仓库含有受限路径。",
+            "Only public GitHub repositories are supported.": "仅支持公开 GitHub 仓库。",
+            "Branches, tags, and historical commits cannot be selected. Use the default branch.": "不支持选择分支、标签或历史提交，请使用默认分支。",
+            "Enter a valid public GitHub repository URL.": "请输入有效的公开 GitHub 仓库 URL。",
+            "The repository changed during the check. Re-check it.": "检查时仓库已变化，请重新检查。",
+            "The recorded branch is unavailable. Current content was retained.": "记录的分支不可用，当前内容已保留。",
+            "The GitHub request timed out. Retry the check.": "GitHub 请求超时，请重试检查。",
+            "The check was cancelled.": "检查已取消。",
+            "The downloaded repository could not be verified. Current content was retained.": "无法核实下载的仓库，当前内容已保留。",
+            "No supported Skills were found in this repository.": "该仓库中未发现支持的 Skill。",
+            "The path is outside the authorized directory: %@": "路径位于已授权目录之外：%@",
+            "The symbolic link leaves the authorized directory: %@": "软链接指向已授权目录之外：%@",
+            "A symbolic-link cycle prevents checking: %@": "软链接循环导致无法检查：%@",
+            "Folder permission was denied: %@": "目录访问授权被拒绝：%@",
+            "Another Skills Hub process is writing to this Root. Wait and re-check.": "另一个 Skills Hub 进程正在写入此 Root，请等待后重检。",
+            "Root writing is unavailable. System error: %@": "Root 当前无法写入。系统错误：%@",
+            "This Agent cannot manage the requested relationship: %@": "此 Agent 无法管理请求的关系：%@",
+            "The Skill link name is invalid: %@": "Skill 链接名称无效：%@",
+            "Reconnect the Management Directory before changing relationships.": "请重新连接管理目录后再更改关系。",
+            "Agent directory access could not be verified. Diagnostic (original): %@": "无法核实 Agent 目录访问。诊断原文：%@",
+            "Content could not be completely checked. Diagnostic (original): %@": "无法完成内容检查。诊断原文：%@",
+            "The relationship operation could not be verified. Diagnostic (original): %@": "无法核实关系操作。诊断原文：%@",
+            "Historical record (original): %@": "历史记录原文：%@",
+            "Operation record (original): %@": "操作记录原文：%@",
+            "No current supported capability profile is available.": "当前没有可用的受支持能力配置。",
+            "The Agent skills target is missing.": "Agent 的 skills 目标目录不存在。",
+            "More than one Agent target is eligible.": "存在多个符合条件的 Agent 目标，无法唯一确定。",
+            "Authorize the exact Agent skills target in Settings.": "请在设置中授权准确的 Agent skills 目标目录。",
+            "The saved target authorization is stale. Reauthorize it in Settings.": "保存的目标授权已失效。请在设置中重新授权。",
+            "The saved authorization belongs to a different target.": "保存的授权属于其他目标目录。",
+            "Agent configuration not found.": "未找到 Agent 配置。",
+            "The selected Agent skills target is not a directory.": "所选 Agent skills 目标不是目录。",
+            "The Agent skills target cannot be a symbolic link.": "Agent skills 目标目录不能是软链接。",
+            "Authorize the exact Agent skills target before saving.": "保存前请授权准确的 Agent skills 目标目录。",
+            "Agent directory facts changed before saving. The old configuration was kept.": "保存前 Agent 目录事实已变化，原配置已保留。",
+            "Please resolve the listed Agent relationships or operations before changing the directory.": "更换目录前，请先处理列出的 Agent 关系或操作。",
+            "Another Agent already uses this skills directory.": "其他 Agent 已使用此 skills 目录。",
+            "The saved Agent directory could not be verified.": "无法核实保存的 Agent 目录。",
+            "Local source already registered.": "此本地来源已登记。",
+            "Local source already imported.": "此本地来源已导入。",
+            "Candidate is blocked or unreadable.": "候选技能受阻或无法读取。",
+            "Local source path is unavailable.": "本地来源位置不可用。",
+            "No Phase 1 operation is waiting for confirmation.": "没有等待确认的操作。",
+            "Root establishment must start from the Establish Management Directory button.": "请通过“建立管理目录”按钮发起建立操作。",
+            "Root selection access is unavailable.": "所选管理目录的访问权限不可用。",
+            "Folder authorization was not granted.": "未取得文件夹访问授权。",
+            "The repository check did not produce a publishable source.": "仓库检查未产生可添加的来源。",
+            "Security-scoped access release failed for %@: %@": "无法结束 %@ 的文件访问授权。诊断原文：%@",
+            "Operation %@ is still waiting for action. Open Operation and Recovery before switching the Root.": "操作 %@ 仍等待处理。切换管理目录前，请打开“操作与恢复”。",
+            "Operation %@ is not settled. Open Operation and Recovery before switching the Root.": "操作 %@ 尚未结清。切换管理目录前，请打开“操作与恢复”。",
+            "Agent relationship operation %@ is still running. Open Operation and Recovery before switching the Root.": "Agent 关系操作 %@ 仍在运行。切换管理目录前，请打开“操作与恢复”。",
+            "Check detail (original): %@": "检查详情原文：%@",
+            "Preparing the operation.": "正在准备操作。",
+            "Executing the confirmed operation.": "正在执行已确认的操作。",
+            "Observing the operation result.": "正在观察操作结果。",
+            "Verifying the operation result.": "正在核实操作结果。",
+            "The operation completed.": "操作已完成。",
+            "The operation needs attention. Open its details before continuing.": "操作需要处理，请打开详情后再继续。",
+            "A readable SKILL.md file within this Skill is required.": "此 Skill 必须包含可读的 SKILL.md 文件。",
+            "SKILL.md could not be read as UTF-8.": "无法以 UTF-8 读取 SKILL.md。",
+            "SKILL.md changed after its manifest was observed.": "SKILL.md 在清单观察后发生变化。",
+            "Normalized skill id is empty.": "规范化后的 Skill 标识为空。",
+            "Skill id conflicts with an existing skill.": "Skill 标识与现有 Skill 冲突。",
+            "Frontmatter name does not match directory name.": "Frontmatter 名称与目录名不一致。",
+            "Description length should be reviewed.": "请检查描述长度。",
+            "Source metadata is missing.": "来源元数据缺失。",
+            "YAML frontmatter has invalid syntax.": "YAML frontmatter 语法无效。",
+            "YAML frontmatter must be one mapping with unique, non-empty string name and description fields.": "YAML frontmatter 必须是单个映射，包含唯一、非空的字符串 name 和 description 字段。",
+            "YAML frontmatter could not be parsed within the supported parser capability.": "YAML frontmatter 超出支持的解析能力，无法解析。",
+            "YAML frontmatter exceeds the bounded parsing limits.": "YAML frontmatter 超出解析限制。",
+            "Agent entries have not been fully checked.": "Agent 条目尚未完成完整检查。",
+            "Agent detected, skills directory not created.": "已检测到 Agent，尚未创建 skills 目录。",
+            "The Agent directory could not be completely checked.": "无法完成 Agent 目录检查。",
+            "Local directory is not governed by Skills Hub.": "本地目录不受 Skills Hub 管理。",
+            "Agent entry points outside the Management Directory.": "Agent 条目指向管理目录之外。",
+            "Agent entry is a broken symlink.": "Agent 条目是失效软链接。",
+            "Agent entry may duplicate a Hub skill.": "Agent 条目可能与 Hub 中的 Skill 重复。",
+            "The Agent entry conflicts with a recorded link name.": "Agent 条目与已记录的链接名称冲突。",
+            "A managed copy exists; the Agent still uses its local directory.": "受管副本已存在，Agent 仍使用其本地目录。",
+            "A managed copy exists; the Agent still uses its external link.": "受管副本已存在，Agent 仍使用其外部链接。",
+            "The recorded managed link no longer matches current facts.": "已记录的受管链接与当前事实不一致。",
+            "Broken Hub-managed link can be repaired after root move.": "Root 移动后，失效的 Hub 受管链接可重新核实修复。",
+            "Recovery of the Agent relationship needs attention.": "Agent 关系恢复需要处理。",
+            "Agent entry is not a supported skill directory.": "Agent 条目不是支持的 Skill 目录。",
+            "All ownership": "全部归属",
+            "See relationship evidence": "查看关系证据",
+            "Update check failed: %@": "更新检查失败：%@",
             "1–4 visible characters": "1–4 个可见字符",
             "Agent name is required.": "请输入 Agent 名称。",
             "Enter 1–4 visible characters for the icon abbreviation.": "请输入 1–4 个可见字符作为图标缩写。",
@@ -1133,6 +1339,7 @@ nonisolated struct SkillsHubLocalization {
             "Invalid": "无效",
             "Last result": "上次结果",
             "Local": "本地",
+            "Local/%@": "本地/%@",
             "Local Changes Since Last Success": "上次成功后的本地变化",
             "Local source import in progress": "正在导入本地来源",
             "Managed by Skills Hub": "由 Skills Hub 管理",
@@ -1284,8 +1491,8 @@ nonisolated struct SkillsHubLocalization {
             "relationships have exact Skills Hub management evidence.": "个关系具有准确的 Skills Hub 管理证据。",
             "Dismiss status": "关闭状态提示",
             "%@ for %@ is already current.": "%@ 对 %@ 已是当前状态。",
-            "%@ for %@ needs attention. %@": "%@ 对 %@ 需要处理。%@",
-            "%@ for %@ was not changed. %@": "%@ 对 %@ 未更改。%@",
+            "%@ for %@ needs attention. View the current relationship for the next step.": "%@ 对 %@ 需要处理。请查看当前关系，了解下一步。",
+            "%@ for %@ was not changed. View the current relationship for the next step.": "%@ 对 %@ 未更改。请查看当前关系，了解下一步。",
             "Agent directory saved. Re-enable Skills explicitly when ready.": "Agent 目录已保存。准备好后请明确重新启用 Skills。",
             "Audited %@.": "已审计 %@。",
             "Audited detected agent directories.": "已审计检测到的 Agent 目录。",
@@ -1312,7 +1519,6 @@ nonisolated struct SkillsHubLocalization {
             "Agent configuration is unavailable": "Agent 配置不可用",
             "Authorize Management Directory": "授权管理目录",
             "Bound action to %@; other Agent relationships are excluded.": "操作已绑定到 %@；不包含其他 Agent 关系。",
-            "Broken link was not deleted. Next step: %@.": "失效链接未删除。下一步：%@。",
             "Corrupted journal record detected during recovery.": "恢复期间检测到损坏的 journal 记录。",
             "Current conclusion: %@.": "当前结论：%@。",
             "Current directory cannot be verified": "无法核验当前目录",
@@ -1366,7 +1572,6 @@ nonisolated struct SkillsHubLocalization {
             "Metadata read back at generation %@.": "已在代次 %@ 回读元数据。",
             "No change: %@ relationship for %@.": "%@ 对 %@ 的关系没有变化。",
             "Operation staging was preserved because cleanup could not be verified: %@": "因无法核验清理结果，已保留操作暂存内容：%@",
-            "Recorded operation step: %@": "已记录操作步骤：%@",
             "Relation action finished. Review the current conclusion and safe next step.": "关系操作已结束。请检查当前结论和安全的下一步。",
             "Source metadata committed, but final observation evidence is incomplete: %@": "来源元数据已提交，但最终观察证据不完整：%@",
             "Stale: %@ relationship for %@.": "%@ 对 %@ 的关系事实已过期。",
@@ -1451,10 +1656,152 @@ nonisolated struct SkillsHubLocalization {
             "Remove the verified Skills Hub-managed link and disable this relationship.": "移除已核实的 Skills Hub 受管链接，并取消启用此关系。",
             "Disable this relationship; no link node is currently present.": "取消启用此关系；当前没有链接节点。",
             "Agent configuration is unavailable; no cleanup was authorized.": "Agent 配置不可用；未授权清理。",
-            "Current ownership is %@; the object remains unchanged.": "当前归属为 %@；对象保持不变。",
-            "Current facts could not be verified: %@": "无法核实当前事实：%@"
+            "The current node is not managed by Skills Hub; the object remains unchanged.": "当前节点不受 Skills Hub 管理；对象保持不变。",
+            "The current link points outside the Management Directory; the object remains unchanged.": "当前链接指向管理目录之外；对象保持不变。",
+            "The current link is broken; the object remains unchanged.": "当前链接已失效；对象保持不变。",
+            "Current ownership could not be verified; the object remains unchanged.": "无法核实当前归属；对象保持不变。"
         ],
         .japanese: [
+            "Reconnect the current Management Directory before changing this directory.": "このディレクトリを変更する前に、現在の管理ディレクトリへ再接続してください。",
+            "Restore access to the current Agent directory and recheck it.": "現在のAgentディレクトリへのアクセスを回復して再確認してください。",
+            "This Skill is still selected for this Agent. Disable it explicitly before changing directories.": "このSkillはまだこのAgentで有効化されています。ディレクトリを変更する前に明示的に無効にしてください。",
+            "The current relationship could not be verified.": "現在の関係を検証できませんでした。",
+            "Import GitHub source": "GitHubソースを取り込む",
+            "Relationship facts changed after source removal was confirmed.": "ソース削除の確認後に関係の情報が変わりました。",
+            "Required relationship cleanup is incomplete. The source content and registration were retained.": "必要な関係の整理が未完了です。ソースの内容と登録は保持されています。",
+            "Managed relationships were cleared, the complete source was moved to Trash, and active metadata was removed.": "管理対象の関係を整理し、ソース全体をゴミ箱へ移動し、有効な管理メタデータを削除しました。",
+            "Interrupted operation has no readable plan snapshot; state is unknown.": "中断された操作に読み取り可能なプランがなく、状態は不明です。",
+            "Root objects match the plan, but final journal evidence is missing; re-observe without replaying automatically.": "Rootの対象はプランと一致しますが、最終ログの根拠がありません。自動で再実行せず再確認してください。",
+            "Root metadata is present, but initialization is incomplete; it will not be replayed automatically.": "Rootの管理メタデータは存在しますが、初期化は未完了です。自動で再実行しません。",
+            "No verified Root establishment delta is present; the interrupted operation will not be replayed automatically.": "検証済みのRoot作成による変更はありません。中断した操作を自動で再実行しません。",
+            "Source import plan is incomplete; state is unknown.": "ソース取り込みプランが不完全で、状態は不明です。",
+            "Managed source is outside the current Root; restore current authorization before observing.": "管理対象のソースは現在のRootの外にあります。現在の許可を回復してから確認してください。",
+            "Managed source and metadata are consistent, but final journal evidence is missing; re-observe before completing.": "管理ソースとメタデータは一致しますが、最終ログの根拠がありません。完了する前に再確認してください。",
+            "Metadata claims a managed source whose content cannot be verified; state is inconsistent.": "管理メタデータに記録されたソースの内容を検証できず、状態が一致しません。",
+            "No verified local-source import delta is present; the interrupted operation will not be replayed automatically.": "検証済みのローカルソース取り込みによる変更はありません。中断した操作を自動で再実行しません。",
+            "Source-registration plan is incomplete; state is unknown.": "ソース登録プランが不完全で、状態は不明です。",
+            "Managed-copy plan is incomplete; state is unknown.": "管理コピーのプランが不完全で、状態は不明です。",
+            "Managed target is outside the current Root; restore current authorization before observing.": "管理対象は現在のRootの外にあります。現在の許可を回復してから確認してください。",
+            "Managed target and metadata are consistent, but final journal evidence is missing; re-observe before completing.": "管理対象とメタデータは一致しますが、最終ログの根拠がありません。完了する前に再確認してください。",
+            "Metadata claims a managed asset whose target cannot be verified; state is inconsistent.": "管理メタデータに記録された対象を検証できず、状態が一致しません。",
+            "No verified managed delta is present; the interrupted operation will not be replayed automatically.": "検証済みの管理対象への変更はありません。中断した操作を自動で再実行しません。",
+            "The selected directory is not readable: %@": "選択したディレクトリを読み取れません：%@",
+            "The selected directory no longer exists: %@": "選択したディレクトリは存在しません：%@",
+            "The selected object is not a directory: %@": "選択した対象はディレクトリではありません：%@",
+            "A symbolic link cannot be used as the Management Directory: %@": "シンボリックリンクを管理ディレクトリとして使用できません：%@",
+            "The metadata at %@ is damaged or unreadable: %@": "%@の管理メタデータが破損しているか、読み取れません：%@",
+            "Source check incomplete. Diagnostic (original): %@": "ソースの確認が未完了です。診断原文：%@",
+            "Review operation %@ before changing this Agent directory.": "このAgentディレクトリを変更する前に、操作%@を確認してください。",
+            "%@. %@. Operation %@. %@. Object %@. %@": "%@。%@。操作%@。%@。対象%@。%@",
+            "Target %@ / %@. Requested %@. Outcome %@. Current conclusion %@. %@. %@. Safe next step %@": "対象%@ / %@。要求%@。結果%@。現在の結論%@。%@。%@。次の安全な手順%@",
+            "The operation plan is invalid. Prepare a new plan.": "操作プランが無効です。新しいプランを準備してください。",
+            "The source or current facts changed. Re-check before continuing.": "ソースまたは現在の情報が変わりました。再確認してから続けてください。",
+            "The confirmation is no longer valid. Review a new preview.": "確認が無効になりました。新しいプレビューを確認してください。",
+            "The Skill is unavailable or cannot be validated.": "このSkillは利用できないか、検証できません。",
+            "The target is occupied: %@": "対象の場所は使用されています：%@",
+            "Prepared content could not be verified.": "準備した内容を検証できませんでした。",
+            "Metadata could not be committed. Diagnostic (original): %@": "管理メタデータを保存できませんでした。診断原文：%@",
+            "Recovery needs attention. Diagnostic (original): %@": "復旧の確認が必要です。診断原文：%@",
+            "The operation record is unavailable. Restore access before continuing.": "操作記録を利用できません。アクセスを回復してから続けてください。",
+            "Operation failed. Diagnostic (original): %@": "操作に失敗しました。診断原文：%@",
+            "The source is unavailable for updating.": "このソースは現在更新できません。",
+            "The source changed while preparing the update. Re-check it.": "更新の準備中にソースが変わりました。再確認してください。",
+            "The prepared source is incomplete. Current content was retained.": "準備したソースが不完全です。現在の内容は保持されています。",
+            "Writing is unavailable. Restore access or wait for the current operation.": "現在書き込めません。アクセスを回復するか、現在の操作が終わるまで待ってください。",
+            "Required relationship cleanup is incomplete. Review the affected Agents.": "必要な関係の整理が完了していません。対象のAgentを確認してください。",
+            "The source removal scope could not be verified.": "ソース削除の範囲を検証できませんでした。",
+            "Moving the source to Trash failed. Diagnostic (original): %@": "ソースをゴミ箱へ移動できませんでした。診断原文：%@",
+            "The Trash result could not be verified. Inspect the current paths.": "ゴミ箱への移動結果を検証できませんでした。現在の場所を確認してください。",
+            "The GitHub request failed. Check the connection and retry.": "GitHubへの要求に失敗しました。接続を確認して再試行してください。",
+            "GitHub rate limiting prevented the check. Retry later.": "GitHubの利用制限により確認できませんでした。後で再試行してください。",
+            "The repository exceeds the supported complete-check limits.": "このリポジトリは完全な確認に対応できる制限を超えています。",
+            "The repository contains a restricted path.": "このリポジトリには制限されたパスがあります。",
+            "Only public GitHub repositories are supported.": "公開GitHubリポジトリのみ対応しています。",
+            "Branches, tags, and historical commits cannot be selected. Use the default branch.": "ブランチ、タグ、過去のコミットは選択できません。既定のブランチを使用してください。",
+            "Enter a valid public GitHub repository URL.": "有効な公開GitHubリポジトリのURLを入力してください。",
+            "The repository changed during the check. Re-check it.": "確認中にリポジトリが変わりました。再確認してください。",
+            "The recorded branch is unavailable. Current content was retained.": "記録されたブランチを利用できません。現在の内容は保持されています。",
+            "The GitHub request timed out. Retry the check.": "GitHubへの要求がタイムアウトしました。確認を再試行してください。",
+            "The check was cancelled.": "確認をキャンセルしました。",
+            "The downloaded repository could not be verified. Current content was retained.": "ダウンロードしたリポジトリを検証できません。現在の内容は保持されています。",
+            "No supported Skills were found in this repository.": "このリポジトリには対応するSkillが見つかりませんでした。",
+            "The path is outside the authorized directory: %@": "パスは許可されたディレクトリの外にあります：%@",
+            "The symbolic link leaves the authorized directory: %@": "シンボリックリンクは許可されたディレクトリの外を指しています：%@",
+            "A symbolic-link cycle prevents checking: %@": "シンボリックリンクの循環により確認できません：%@",
+            "Folder permission was denied: %@": "フォルダーへのアクセスが拒否されました：%@",
+            "Another Skills Hub process is writing to this Root. Wait and re-check.": "別のSkills HubプロセスがこのRootへ書き込んでいます。待ってから再確認してください。",
+            "Root writing is unavailable. System error: %@": "Rootへ現在書き込めません。システムエラー：%@",
+            "This Agent cannot manage the requested relationship: %@": "このAgentは要求された関係を管理できません：%@",
+            "The Skill link name is invalid: %@": "Skillのリンク名が無効です：%@",
+            "Reconnect the Management Directory before changing relationships.": "関係を変更する前に管理ディレクトリへ再接続してください。",
+            "Agent directory access could not be verified. Diagnostic (original): %@": "Agentディレクトリへのアクセスを検証できません。診断原文：%@",
+            "Content could not be completely checked. Diagnostic (original): %@": "内容を完全に確認できませんでした。診断原文：%@",
+            "The relationship operation could not be verified. Diagnostic (original): %@": "関係の操作を検証できませんでした。診断原文：%@",
+            "Historical record (original): %@": "履歴記録の原文：%@",
+            "Operation record (original): %@": "操作記録の原文：%@",
+            "No current supported capability profile is available.": "現在、対応する有効な機能プロファイルはありません。",
+            "The Agent skills target is missing.": "Agent の skills 対象ディレクトリがありません。",
+            "More than one Agent target is eligible.": "条件を満たす Agent の対象が複数あり、一意に特定できません。",
+            "Authorize the exact Agent skills target in Settings.": "設定で正確な Agent の skills 対象ディレクトリを許可してください。",
+            "The saved target authorization is stale. Reauthorize it in Settings.": "保存された対象の許可は期限切れです。設定で再度許可してください。",
+            "The saved authorization belongs to a different target.": "保存された許可は別の対象ディレクトリのものです。",
+            "Agent configuration not found.": "Agent の設定が見つかりません。",
+            "The selected Agent skills target is not a directory.": "選択した Agent の skills 対象はディレクトリではありません。",
+            "The Agent skills target cannot be a symbolic link.": "Agent の skills 対象ディレクトリにシンボリックリンクは使用できません。",
+            "Authorize the exact Agent skills target before saving.": "保存する前に、正確な Agent の skills 対象ディレクトリを許可してください。",
+            "Agent directory facts changed before saving. The old configuration was kept.": "保存前に Agent ディレクトリの状態が変わりました。元の設定を保持しました。",
+            "Please resolve the listed Agent relationships or operations before changing the directory.": "ディレクトリを変更する前に、表示された Agent の関係または操作を解決してください。",
+            "Another Agent already uses this skills directory.": "この skills ディレクトリは別の Agent が使用しています。",
+            "The saved Agent directory could not be verified.": "保存された Agent ディレクトリを確認できません。",
+            "Local source already registered.": "このローカルソースは登録済みです。",
+            "Local source already imported.": "このローカルソースは読み込み済みです。",
+            "Candidate is blocked or unreadable.": "候補の Skill はブロックされているか、読み取れません。",
+            "Local source path is unavailable.": "ローカルソースのパスを利用できません。",
+            "No Phase 1 operation is waiting for confirmation.": "確認待ちの操作はありません。",
+            "Root establishment must start from the Establish Management Directory button.": "管理ディレクトリの作成は「管理ディレクトリを作成」ボタンから開始してください。",
+            "Root selection access is unavailable.": "選択した管理ディレクトリのアクセス許可を利用できません。",
+            "Folder authorization was not granted.": "フォルダへのアクセス許可を取得できませんでした。",
+            "The repository check did not produce a publishable source.": "リポジトリの確認で追加可能なソースを取得できませんでした。",
+            "Security-scoped access release failed for %@: %@": "%@ のファイルアクセス許可を終了できませんでした。診断原文：%@",
+            "Operation %@ is still waiting for action. Open Operation and Recovery before switching the Root.": "操作 %@ は処理待ちです。管理ディレクトリを切り替える前に「操作と復旧」を開いてください。",
+            "Operation %@ is not settled. Open Operation and Recovery before switching the Root.": "操作 %@ は未解決です。管理ディレクトリを切り替える前に「操作と復旧」を開いてください。",
+            "Agent relationship operation %@ is still running. Open Operation and Recovery before switching the Root.": "Agent の関係操作 %@ は実行中です。管理ディレクトリを切り替える前に「操作と復旧」を開いてください。",
+            "Check detail (original): %@": "確認詳細の原文：%@",
+            "Preparing the operation.": "操作を準備しています。",
+            "Executing the confirmed operation.": "確認済みの操作を実行しています。",
+            "Observing the operation result.": "操作結果を確認しています。",
+            "Verifying the operation result.": "操作結果を検証しています。",
+            "The operation completed.": "操作が完了しました。",
+            "The operation needs attention. Open its details before continuing.": "操作の確認が必要です。詳細を開いてから続けてください。",
+            "A readable SKILL.md file within this Skill is required.": "このSkillには読み取り可能なSKILL.mdファイルが必要です。",
+            "SKILL.md could not be read as UTF-8.": "SKILL.mdをUTF-8として読み取れませんでした。",
+            "SKILL.md changed after its manifest was observed.": "内容一覧の確認後にSKILL.mdが変更されました。",
+            "Normalized skill id is empty.": "正規化したSkillの識別子が空です。",
+            "Skill id conflicts with an existing skill.": "Skillの識別子が既存のSkillと競合しています。",
+            "Frontmatter name does not match directory name.": "Frontmatterの名前がディレクトリ名と一致しません。",
+            "Description length should be reviewed.": "説明の長さを確認してください。",
+            "Source metadata is missing.": "ソースのメタデータがありません。",
+            "YAML frontmatter has invalid syntax.": "YAML frontmatterの構文が無効です。",
+            "YAML frontmatter must be one mapping with unique, non-empty string name and description fields.": "YAML frontmatterは、重複のない空でない文字列のnameとdescriptionを持つ単一のマッピングである必要があります。",
+            "YAML frontmatter could not be parsed within the supported parser capability.": "YAML frontmatterは対応する解析能力の範囲内で解析できませんでした。",
+            "YAML frontmatter exceeds the bounded parsing limits.": "YAML frontmatterが解析の制限を超えています。",
+            "Agent entries have not been fully checked.": "Agentの項目はまだ完全に確認されていません。",
+            "Agent detected, skills directory not created.": "Agentは検出されましたが、skillsディレクトリは未作成です。",
+            "The Agent directory could not be completely checked.": "Agentディレクトリを完全に確認できませんでした。",
+            "Local directory is not governed by Skills Hub.": "このローカルディレクトリはSkills Hubの管理対象ではありません。",
+            "Agent entry points outside the Management Directory.": "Agentの項目は管理ディレクトリの外を指しています。",
+            "Agent entry is a broken symlink.": "Agentの項目は無効なシンボリックリンクです。",
+            "Agent entry may duplicate a Hub skill.": "Agentの項目はHub内のSkillと重複している可能性があります。",
+            "The Agent entry conflicts with a recorded link name.": "Agentの項目が記録されたリンク名と競合しています。",
+            "A managed copy exists; the Agent still uses its local directory.": "管理コピーは存在しますが、Agentは引き続きローカルディレクトリを使用しています。",
+            "A managed copy exists; the Agent still uses its external link.": "管理コピーは存在しますが、Agentは引き続き外部リンクを使用しています。",
+            "The recorded managed link no longer matches current facts.": "記録された管理リンクが現在の情報と一致しません。",
+            "Broken Hub-managed link can be repaired after root move.": "Root移動後の無効なHub管理リンクは、再確認して修復できます。",
+            "Recovery of the Agent relationship needs attention.": "Agent関係の復旧に確認が必要です。",
+            "Agent entry is not a supported skill directory.": "Agentの項目は対応するSkillディレクトリではありません。",
+            "All ownership": "すべての所有状態",
+            "See relationship evidence": "関係の根拠を確認",
+            "Update check failed: %@": "更新の確認に失敗：%@",
             "1–4 visible characters": "表示文字1～4文字",
             "Agent name is required.": "Agent名を入力してください。",
             "Enter 1–4 visible characters for the icon abbreviation.": "アイコンの略称には表示文字を1～4文字入力してください。",
@@ -1538,6 +1885,7 @@ nonisolated struct SkillsHubLocalization {
             "Invalid": "無効",
             "Last result": "前回の結果",
             "Local": "ローカル",
+            "Local/%@": "ローカル/%@",
             "Local Changes Since Last Success": "前回成功以降のローカル変更",
             "Local source import in progress": "ローカルソースを読み込み中",
             "Managed by Skills Hub": "Skills Hubが管理",
@@ -1689,8 +2037,8 @@ nonisolated struct SkillsHubLocalization {
             "relationships have exact Skills Hub management evidence.": "件の関係に正確なSkills Hub管理証拠があります。",
             "Dismiss status": "ステータスを閉じる",
             "%@ for %@ is already current.": "%@ の %@ はすでに最新です。",
-            "%@ for %@ needs attention. %@": "%@ の %@ は確認が必要です。%@",
-            "%@ for %@ was not changed. %@": "%@ の %@ は変更されませんでした。%@",
+            "%@ for %@ needs attention. View the current relationship for the next step.": "%@ の %@ は確認が必要です。次の手順は現在の関係を確認してください。",
+            "%@ for %@ was not changed. View the current relationship for the next step.": "%@ の %@ は変更されませんでした。次の手順は現在の関係を確認してください。",
             "Agent directory saved. Re-enable Skills explicitly when ready.": "Agentディレクトリを保存しました。準備ができたらSkillsを明示的に再有効化してください。",
             "Audited %@.": "%@ を監査しました。",
             "Audited detected agent directories.": "検出されたAgentディレクトリを監査しました。",
@@ -1717,7 +2065,6 @@ nonisolated struct SkillsHubLocalization {
             "Agent configuration is unavailable": "Agent設定を利用できません",
             "Authorize Management Directory": "管理ディレクトリを認証",
             "Bound action to %@; other Agent relationships are excluded.": "操作を%@に限定しました。他のAgent関係は対象外です。",
-            "Broken link was not deleted. Next step: %@.": "壊れたリンクは削除されませんでした。次の手順：%@。",
             "Corrupted journal record detected during recovery.": "復旧中に破損したジャーナル記録を検出しました。",
             "Current conclusion: %@.": "現在の結論：%@。",
             "Current directory cannot be verified": "現在のディレクトリを検証できません",
@@ -1771,7 +2118,6 @@ nonisolated struct SkillsHubLocalization {
             "Metadata read back at generation %@.": "世代%@のメタデータを読み戻しました。",
             "No change: %@ relationship for %@.": "%@と%@の関係に変更はありません。",
             "Operation staging was preserved because cleanup could not be verified: %@": "クリーンアップを検証できなかったため、操作ステージングを保持しました：%@",
-            "Recorded operation step: %@": "記録済み操作手順：%@",
             "Relation action finished. Review the current conclusion and safe next step.": "関係操作が終了しました。現在の判定と安全な次の手順を確認してください。",
             "Source metadata committed, but final observation evidence is incomplete: %@": "ソースメタデータはコミットされましたが、最終観察の証拠が不完全です：%@",
             "Stale: %@ relationship for %@.": "%@と%@の関係情報は古くなっています。",
@@ -1863,8 +2209,10 @@ nonisolated struct SkillsHubLocalization {
             "Remove the verified Skills Hub-managed link and disable this relationship.": "確認済みの Skills Hub 管理対象リンクを削除し、この関係を無効にします。",
             "Disable this relationship; no link node is currently present.": "この関係を無効にします。現在リンクノードはありません。",
             "Agent configuration is unavailable; no cleanup was authorized.": "Agent 設定を利用できないため、削除は許可されていません。",
-            "Current ownership is %@; the object remains unchanged.": "現在の所有状態は %@ です。対象は変更されません。",
-            "Current facts could not be verified: %@": "現在の状態を確認できません：%@"
+            "The current node is not managed by Skills Hub; the object remains unchanged.": "現在のノードは Skills Hub の管理対象ではありません。対象は変更されません。",
+            "The current link points outside the Management Directory; the object remains unchanged.": "現在のリンクは管理ディレクトリの外部を指しています。対象は変更されません。",
+            "The current link is broken; the object remains unchanged.": "現在のリンクは壊れています。対象は変更されません。",
+            "Current ownership could not be verified; the object remains unchanged.": "現在の所有状態を確認できません。対象は変更されません。"
         ]
     ]
 
@@ -1943,6 +2291,123 @@ nonisolated struct SkillsHubLocalization {
     func localized(_ message: LocalizedMessage, language: AppLanguage) -> String {
         let template = message.isVerbatim ? message.template : localized(message.template, language: language)
         return Self.interpolate(template, arguments: message.arguments)
+    }
+
+    static func errorPresentation(for error: Error) -> LocalizedMessage {
+        switch error {
+        case let failure as SkillsHubLibraryFailure:
+            switch failure {
+            case .missingRoot: return "Choose a root before continuing."
+            case .missingSkill(let id): return "Skill not found: \(id)."
+            case .invalidSource(let detail): return detail
+            case .missingAgentPath(let agent): return "Choose a directory for \(agent.displayName) before creating links."
+            }
+        case let failure as Phase1OperationError:
+            switch failure {
+            case .invalidPlan: return "The operation plan is invalid. Prepare a new plan."
+            case .staleFacts, .sourceChanged: return "The source or current facts changed. Re-check before continuing."
+            case .confirmationMismatch, .confirmationReplayed: return "The confirmation is no longer valid. Review a new preview."
+            case .candidateUnavailable: return "The Skill is unavailable or cannot be validated."
+            case .targetConflict(let path): return "The target is occupied: \(path)"
+            case .stagingVerificationFailed: return "Prepared content could not be verified."
+            case .metadataCommitFailed(let detail): return "Metadata could not be committed. Diagnostic (original): \(detail)"
+            case .compensationFailed(let detail): return "Recovery needs attention. Diagnostic (original): \(detail)"
+            case .journalUnavailable: return "The operation record is unavailable. Restore access before continuing."
+            case .injectedFailure(let detail): return "Operation failed. Diagnostic (original): \(detail)"
+            }
+        case let failure as SourceUpdateError:
+            switch failure {
+            case .invalidSource: return "The source is unavailable for updating."
+            case .sourceChangedDuringPreparation: return "The source changed while preparing the update. Re-check it."
+            case .preparedSourceIncomplete: return "The prepared source is incomplete. Current content was retained."
+            case .confirmationChanged: return "The confirmation is no longer valid. Review a new preview."
+            case .writeUnavailable: return "Writing is unavailable. Restore access or wait for the current operation."
+            case .relationshipCleanupIncomplete: return "Required relationship cleanup is incomplete. Review the affected Agents."
+            case .operationRecordUnavailable: return "The operation record is unavailable. Restore access before continuing."
+            }
+        case let failure as SourceRemovalError:
+            switch failure {
+            case .invalidScope: return "The source removal scope could not be verified."
+            case .planChanged: return "The confirmation is no longer valid. Review a new preview."
+            case .relationshipsRemain: return "Required relationship cleanup is incomplete. Review the affected Agents."
+            case .recordUnavailable: return "The operation record is unavailable. Restore access before continuing."
+            case .trashFailed(let detail): return "Moving the source to Trash failed. Diagnostic (original): \(detail)"
+            case .trashResultUnverified: return "The Trash result could not be verified. Inspect the current paths."
+            case .metadataCommitFailed(let detail): return "Metadata could not be committed. Diagnostic (original): \(detail)"
+            }
+        case let failure as GitHubSourceIssue:
+            switch failure {
+            case .networkFailure: return "The GitHub request failed. Check the connection and retry."
+            case .rateLimited: return "GitHub rate limiting prevented the check. Retry later."
+            case .treeTruncated, .repositoryTooLarge: return "The repository exceeds the supported complete-check limits."
+            case .pathRestricted: return "The repository contains a restricted path."
+            case .unsupportedProvider: return "Only public GitHub repositories are supported."
+            case .unsupportedVersion: return "Branches, tags, and historical commits cannot be selected. Use the default branch."
+            case .invalidURL: return "Enter a valid public GitHub repository URL."
+            case .repositoryChanged: return "The repository changed during the check. Re-check it."
+            case .branchUnavailable: return "The recorded branch is unavailable. Current content was retained."
+            case .timedOut: return "The GitHub request timed out. Retry the check."
+            case .cancelled: return "The check was cancelled."
+            case .archiveInvalid, .contentMismatch: return "The downloaded repository could not be verified. Current content was retained."
+            case .noSkills: return "No supported Skills were found in this repository."
+            }
+        case let failure as GitHubAPIClientFailure:
+            let issue: GitHubSourceIssue = switch failure {
+            case .networkFailure: .networkFailure
+            case .rateLimited: .rateLimited
+            case .repositoryTooLarge: .repositoryTooLarge
+            case .pathRestricted: .pathRestricted
+            case .repositoryChanged: .repositoryChanged
+            case .branchUnavailable: .branchUnavailable
+            case .timedOut: .timedOut
+            case .cancelled: .cancelled
+            case .invalidArchive: .archiveInvalid
+            case .contentMismatch: .contentMismatch
+            }
+            return errorPresentation(for: issue)
+        case let failure as FileAccessFailure:
+            switch failure {
+            case .outsideAuthorizedDirectory(let path): return "The path is outside the authorized directory: \(path)"
+            case .unreadable(let path): return "The selected directory is not readable: \(path)"
+            case .symlinkEscapesRoot(let path): return "The symbolic link leaves the authorized directory: \(path)"
+            case .symlinkCycle(let path): return "A symbolic-link cycle prevents checking: \(path)"
+            }
+        case let failure as RootInspectionFailure:
+            switch failure {
+            case .missing(let path): return "The selected directory no longer exists: \(path)"
+            case .notDirectory(let path): return "The selected object is not a directory: \(path)"
+            case .symbolicLink(let path): return "A symbolic link cannot be used as the Management Directory: \(path)"
+            case .unreadable(let path): return "The selected directory is not readable: \(path)"
+            case .invalidMetadata(let path, let reason): return "The metadata at \(path) is damaged or unreadable: \(reason)"
+            }
+        case let failure as SecurityScopedAccessError:
+            switch failure {
+            case .startDenied(let path, _): return "Folder permission was denied: \(path)"
+            }
+        case let failure as RootWriteUnavailableReason:
+            switch failure {
+            case .heldByAnotherProcess: return "Another Skills Hub process is writing to this Root. Wait and re-check."
+            case .lockUnavailable(let code): return "Root writing is unavailable. System error: \(code)"
+            }
+        case let failure as ControllerRelationActionError:
+            switch failure {
+            case .unsupportedAgent(let id): return "This Agent cannot manage the requested relationship: \(id)"
+            case .invalidSkillAlias(let alias): return "The Skill link name is invalid: \(alias)"
+            case .missingRootSession: return "Reconnect the Management Directory before changing relationships."
+            }
+        case is ManagedRelationClearError:
+            return "The Skill or Agent scope changed after confirmation. Review a new preview before clearing."
+        case is AgentTargetAccessError:
+            return "Agent directory access could not be verified. Diagnostic (original): \(error)"
+        case is MetadataCommitError:
+            return "Metadata could not be committed. Diagnostic (original): \(error)"
+        case is ContentManifestFailure:
+            return "Content could not be completely checked. Diagnostic (original): \(error)"
+        case is RelationActionTokenBuildError, is BrokenLinkDeletionError, is RelationLinkPrimitiveError, is RelationActionOperationRecordError:
+            return "The relationship operation could not be verified. Diagnostic (original): \(error)"
+        default:
+            return "Operation failed. Diagnostic (original): \(error)"
+        }
     }
 
     private static func interpolate(_ template: String, arguments: [String]) -> String {

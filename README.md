@@ -40,7 +40,7 @@ See [Releases](https://github.com/roburis/SkillsHub/releases) for user-facing ch
 
 ## Third-party software
 
-Third-party notices are included in `SkillsHub/Resources/ThirdPartyNotices.txt`.
+Open **Skills Hub → About Skills Hub** to read the bundled third-party notices. The source text is in `SkillsHub/Resources/ThirdPartyNotices.txt`.
 
 ## License
 
@@ -84,7 +84,7 @@ SkillsHub 正在积极开发中。当前版本聚焦于全局 skill 管理、本
 
 ## 第三方软件
 
-第三方软件声明位于 `SkillsHub/Resources/ThirdPartyNotices.txt`。
+通过 **Skills Hub → 关于 Skills Hub** 阅读应用内完整第三方声明。声明原文位于 `SkillsHub/Resources/ThirdPartyNotices.txt`。
 
 ## 许可证
 

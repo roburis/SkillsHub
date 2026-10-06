@@ -14,6 +14,10 @@ nonisolated enum RelationLinkPrimitiveHookPoint: Equatable, Sendable {
     case afterUnlink
     case beforeRestore
     case afterRestore
+    case beforeMaterialIsolation
+    case afterMaterialIsolation
+    case beforeMaterialRemoval
+    case afterMaterialRemoval
 }
 
 nonisolated enum RelationLinkPrimitiveError: Error, Equatable, Sendable {
@@ -79,6 +83,16 @@ nonisolated struct LinkRemovalEvidence: Codable, Equatable, Sendable {
     let isolationDirectoryIdentity: LinkNodeIdentity
 }
 
+nonisolated struct CreationMaterialSettlement: Codable, Equatable, Sendable {
+    enum Status: String, Codable, Sendable { case pending, settled, retained }
+    var status: Status
+    var isolationPath: String? = nil
+    var operationDirectoryIdentity: LinkNodeIdentity? = nil
+    var isolationDirectoryIdentity: LinkNodeIdentity? = nil
+    var observedIdentity: LinkNodeIdentity? = nil
+    var limitation: String? = nil
+}
+
 nonisolated final class AgentLinkService {
     private let relationPrimitiveHook: (@Sendable (RelationLinkPrimitiveHookPoint, URL) throws -> Void)?
 
@@ -115,7 +129,7 @@ nonisolated final class AgentLinkService {
             guard Darwin.mkdirat(descriptor, stagingName, 0o700) == 0 else {
                 throw RelationLinkPrimitiveError.createFailed(errno)
             }
-            // Retain the private directory on every outcome; recovery owns its disposition.
+            // Keep preparation until the caller has durably verified the published relationship.
             let stagingDescriptor = Darwin.openat(descriptor, stagingName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             guard stagingDescriptor >= 0 else {
                 throw RelationLinkPrimitiveError.parentUnavailable(errno)
@@ -308,6 +322,163 @@ nonisolated final class AgentLinkService {
                 }
             }
         }
+    }
+
+    /// Uses the existing durable operation directory as the private isolation owner. A different
+    /// volume retains preparation; it never prevents link publication or falls back to path rmdir.
+    func settleCreationDirectory(
+        creation: LinkCreationEvidence,
+        operationDirectory: URL,
+        expectedOperationIdentity: TargetFileIdentity,
+        previous: CreationMaterialSettlement?,
+        recordSettlement: (CreationMaterialSettlement) throws -> Void,
+        verifyRecord: () throws -> Void
+    ) throws {
+        let staging = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
+        let location = try relationLocation(for: staging)
+        try withDirectoryDescriptor(for: location.parentURL) { parent in
+            guard try descriptorIdentity(parent) == creation.parentIdentity else {
+                throw RelationLinkPrimitiveError.identityChanged
+            }
+            try withDirectoryDescriptor(for: operationDirectory) { operation in
+                let operationIdentity = try descriptorIdentity(operation)
+                guard operationIdentity.file == expectedOperationIdentity else {
+                    throw RelationLinkPrimitiveError.identityChanged
+                }
+                guard operationIdentity.file.volumeNumber == creation.parentIdentity.file.volumeNumber else {
+                    throw RelationLinkPrimitiveError.isolationFailed(EXDEV)
+                }
+                let directory = operationDirectory.appendingPathComponent("creation-settlement", isDirectory: true)
+                let isolated = directory.appendingPathComponent("directory", isDirectory: true)
+                if previous?.isolationPath == nil {
+                    try verifyRecord()
+                    try verifyParent(operationDirectory, identity: operationIdentity)
+                    guard Darwin.mkdirat(operation, "creation-settlement", 0o700) == 0 else {
+                        throw RelationLinkPrimitiveError.isolationFailed(errno)
+                    }
+                }
+                try withDirectoryDescriptor(for: directory) { isolation in
+                    let isolationIdentity = try descriptorIdentity(isolation)
+                    if let previous, previous.isolationPath != nil {
+                        guard previous.isolationPath == isolated.path,
+                              previous.operationDirectoryIdentity == operationIdentity,
+                              previous.isolationDirectoryIdentity == isolationIdentity else {
+                            throw RelationLinkPrimitiveError.isolationChanged
+                        }
+                    }
+                    var settlement = CreationMaterialSettlement(status: .pending,
+                        isolationPath: isolated.path, operationDirectoryIdentity: operationIdentity,
+                        isolationDirectoryIdentity: isolationIdentity)
+                    func verifyDirectories() throws {
+                        try verifyParent(location.parentURL, identity: creation.parentIdentity)
+                        try verifyParent(operationDirectory, identity: operationIdentity)
+                        try verifyParent(directory, identity: isolationIdentity)
+                        var status = stat()
+                        guard Darwin.fstat(isolation, &status) == 0,
+                              status.st_uid == geteuid(), status.st_mode & 0o777 == 0o700 else {
+                            throw RelationLinkPrimitiveError.isolationChanged
+                        }
+                    }
+                    try verifyDirectories()
+                    try synchronize(isolation)
+                    try synchronize(operation)
+                    // Persist both possible locations before the first irreversible filesystem action.
+                    try recordSettlement(settlement)
+                    let sourceIdentity = try nodeIdentity(descriptor: parent, name: location.name)
+                    let isolatedIdentity = try nodeIdentity(descriptor: isolation, name: "directory")
+                    let nodeParent: Int32
+                    let nodeName: String
+                    if isolatedIdentity != nil {
+                        guard sourceIdentity == nil, isolatedIdentity == creation.stagingDirectoryIdentity,
+                              previous?.isolationPath == isolated.path else {
+                            throw RelationLinkPrimitiveError.replacementRetained
+                        }
+                        nodeParent = isolation
+                        nodeName = "directory"
+                    } else {
+                        guard sourceIdentity == creation.stagingDirectoryIdentity else {
+                            throw RelationLinkPrimitiveError.identityChanged
+                        }
+                        nodeParent = parent
+                        nodeName = location.name
+                    }
+                    let node = Darwin.openat(nodeParent, nodeName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    guard node >= 0 else { throw RelationLinkPrimitiveError.identityChanged }
+                    defer { Darwin.close(node) }
+                    guard try descriptorIdentity(node) == creation.stagingDirectoryIdentity,
+                          try directoryIsEmpty(node) else {
+                        throw RelationLinkPrimitiveError.identityChanged
+                    }
+                    if nodeParent == parent {
+                        try relationPrimitiveHook?(.beforeMaterialIsolation, staging)
+                        try Task.checkCancellation()
+                        try verifyRecord()
+                        try verifyDirectories()
+                        guard Darwin.renameatx_np(parent, location.name, isolation, "directory", UInt32(RENAME_EXCL)) == 0 else {
+                            throw RelationLinkPrimitiveError.isolationFailed(errno)
+                        }
+                        settlement.observedIdentity = try nodeIdentity(descriptor: isolation, name: "directory")
+                        try recordSettlement(settlement)
+                        try relationPrimitiveHook?(.afterMaterialIsolation, isolated)
+                        try synchronize(parent)
+                        try synchronize(isolation)
+                    }
+                    // Unknown replacements stay at their actual isolation location, without restoration.
+                    guard try nodeIdentity(descriptor: isolation, name: "directory") == creation.stagingDirectoryIdentity else {
+                        throw RelationLinkPrimitiveError.replacementRetained
+                    }
+                    try relationPrimitiveHook?(.beforeMaterialRemoval, isolated)
+                    try Task.checkCancellation()
+                    try verifyRecord()
+                    try verifyDirectories()
+                    guard try nodeIdentity(descriptor: isolation, name: "directory") == creation.stagingDirectoryIdentity,
+                          try descriptorIdentity(node) == creation.stagingDirectoryIdentity,
+                          try directoryIsEmpty(node) else {
+                        throw RelationLinkPrimitiveError.isolationChanged
+                    }
+                    // Only this private namespace is eligible. ENOTEMPTY also protects late contents.
+                    guard Darwin.unlinkat(isolation, "directory", AT_REMOVEDIR) == 0 else {
+                        throw RelationLinkPrimitiveError.removalFailed(errno)
+                    }
+                    try relationPrimitiveHook?(.afterMaterialRemoval, isolated)
+                    try synchronize(isolation)
+                    try verifyDirectories()
+                    guard try nodeIdentity(descriptor: isolation, name: "directory") == nil else {
+                        throw RelationLinkPrimitiveError.isolationChanged
+                    }
+                    settlement.status = .settled
+                    settlement.observedIdentity = creation.stagingDirectoryIdentity
+                    try recordSettlement(settlement)
+                }
+            }
+        }
+    }
+
+    private func nodeIdentity(descriptor: Int32, name: String) throws -> LinkNodeIdentity? {
+        var status = stat()
+        if Darwin.fstatat(descriptor, name, &status, AT_SYMLINK_NOFOLLOW) == 0 { return LinkNodeIdentity(status) }
+        if errno == ENOENT { return nil }
+        throw RelationLinkPrimitiveError.parentUnavailable(errno)
+    }
+
+    private func directoryIsEmpty(_ descriptor: Int32) throws -> Bool {
+        let copy = Darwin.dup(descriptor)
+        guard copy >= 0 else { throw RelationLinkPrimitiveError.parentUnavailable(errno) }
+        guard let stream = Darwin.fdopendir(copy) else {
+            Darwin.close(copy)
+            throw RelationLinkPrimitiveError.parentUnavailable(errno)
+        }
+        defer { Darwin.closedir(stream) }
+        Darwin.rewinddir(stream)
+        errno = 0
+        while let entry = Darwin.readdir(stream) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) { String(cString: $0) }
+            }
+            if name != ".", name != ".." { return false }
+        }
+        guard errno == 0 else { throw RelationLinkPrimitiveError.parentUnavailable(errno) }
+        return true
     }
 
     private func verifyNode(

@@ -3,6 +3,42 @@ import Testing
 @testable import SkillsHub
 
 struct CoreModelsTests {
+    @Test(arguments: [
+        ("/root", "/root", "SKILL.md"),
+        ("/root/local/L2", "/root", "local/L2/SKILL.md"),
+        ("/root/local/L2/nested/UX 設計", "/root", "local/L2/nested/UX 設計/SKILL.md"),
+        ("/root/github/owner/repo/review", "/root", "github/owner/repo/review/SKILL.md"),
+        ("/agent/skills/review", "/agent/skills", "review/SKILL.md"),
+        ("/private/tmp/skills/review", "/tmp/skills", "review/SKILL.md"),
+        ("/var/folders/skills/review", "/private/var/folders/skills", "review/SKILL.md"),
+        ("/private/tmp-other/review", "/tmp", nil),
+        ("/root/local/a/../review", "/root", "local/review/SKILL.md"),
+        ("/root-other/review", "/root", nil),
+        ("/root/../outside/review", "/root", nil),
+        ("relative/review", "/root", nil),
+        ("/root/review", "relative", nil),
+        ("/root/review\0other", "/root", nil),
+        ("/review", "/", "review/SKILL.md")
+    ] as [(String, String, String?)])
+    func entryAddressUsesExactBaselineWithoutResolvingLinks(sample: (String, String, String?)) {
+        let address = SkillCatalogPresentationService.entryAddress(directoryPath: sample.0,
+            relativeTo: sample.1, nodeKind: .directory, entryVerified: true)
+        #expect(address.path == sample.2)
+        #expect((address.status == nil) == (sample.2 != nil))
+        for kind in [TargetNodeKind.vacant, .brokenSymbolicLink, .unreadable, .regularFile, .other] {
+            let uncertain = SkillCatalogPresentationService.entryAddress(directoryPath: sample.0,
+                relativeTo: sample.1, nodeKind: kind, entryVerified: true)
+            #expect(uncertain.status != nil)
+            #expect(uncertain.path == ([.regularFile, .other].contains(kind) ? nil : sample.2))
+        }
+        let missing = SkillCatalogPresentationService.entryAddress(directoryPath: "/root/review",
+            relativeTo: "/root", nodeKind: .vacant, entryVerified: false)
+        #expect(missing.status?.template == "Recorded address; the Skill entry is missing.")
+        let unreadable = SkillCatalogPresentationService.entryAddress(directoryPath: "/root/review",
+            relativeTo: "/root", nodeKind: .directory, entryVerified: false, entryUnavailable: true)
+        #expect(unreadable.status?.template == "SKILL.md is missing or unreadable.")
+    }
+
     @Test func modelsEncodeManifestWithoutCredentialFields() throws {
         let source = SkillSource(kind: .githubRepository, name: "owner/repo", urlString: "https://github.com/owner/repo", ref: "main")
         let validation = SkillValidationResult.valid

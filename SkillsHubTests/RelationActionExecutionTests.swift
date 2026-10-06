@@ -72,7 +72,7 @@ struct RelationActionExecutionTests {
 
     @MainActor
     @Test func clearAllManagedRelationsUsesSingleRelationPathForThreeAgents() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
         let customTarget = fixture.root.appendingPathComponent("custom-agent", isDirectory: true)
         try FileManager.default.createDirectory(at: customTarget, withIntermediateDirectories: false)
         try fixture.controller.rememberUserSelectedAccess(to: customTarget)
@@ -109,19 +109,19 @@ struct RelationActionExecutionTests {
         for agentID in [AgentKind.codex.rawValue, AgentKind.claudeCode.rawValue, custom.id] {
             #expect(try await fixture.controller.setGlobalAgentEnablement(
                 agentID: agentID,
-                skillID: "writer",
+                assetID: fixture.assetID,
                 enabled: true
             ).outcome == .succeeded)
         }
         #expect(try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "control",
+            assetID: try #require(afterControlCommit.metadata.installedSkills.first { $0.id == "control" }).assetID,
             enabled: true
         ).outcome == .succeeded)
 
         let writerURL = fixture.root.appendingPathComponent("local/writer/SKILL.md")
         let writerBytes = try Data(contentsOf: writerURL)
-        let plan = try fixture.controller.prepareManagedRelationClearPlan(skillID: "writer")
+        let plan = try fixture.controller.prepareManagedRelationClearPlan(assetID: fixture.assetID)
         #expect(plan.items.count == 3)
         #expect(plan.removableItems.count == 3)
 
@@ -129,6 +129,12 @@ struct RelationActionExecutionTests {
 
         #expect(result.items.count == 3)
         #expect(result.items.allSatisfy { $0.outcome == .succeeded })
+        #expect(result.items.allSatisfy { $0.detail.template == "No action is required." && !$0.detail.isVerbatim })
+        for language in [AppLanguage.chinese, .japanese] {
+            #expect(result.items.allSatisfy {
+                SkillsHubLocalization().localized($0.detail, language: language) != $0.detail.template
+            })
+        }
         #expect((try? LinkNodeIdentity.read(at: fixture.targets[.codex]!.appendingPathComponent("Writer"))) == nil)
         #expect((try? LinkNodeIdentity.read(at: fixture.targets[.claudeCode]!.appendingPathComponent("Writer"))) == nil)
         #expect((try? LinkNodeIdentity.read(at: customTarget.appendingPathComponent("Writer"))) == nil)
@@ -146,7 +152,7 @@ struct RelationActionExecutionTests {
 
     @MainActor
     @Test func clearAllManagedRelationsRejectsStalePreviewThenReportsBlockedAgent() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
         let customTarget = fixture.root.appendingPathComponent("custom-agent", isDirectory: true)
         try FileManager.default.createDirectory(at: customTarget, withIntermediateDirectories: false)
         try fixture.controller.rememberUserSelectedAccess(to: customTarget)
@@ -158,12 +164,12 @@ struct RelationActionExecutionTests {
         for agentID in [AgentKind.codex.rawValue, AgentKind.claudeCode.rawValue, custom.id] {
             _ = try await fixture.controller.setGlobalAgentEnablement(
                 agentID: agentID,
-                skillID: "writer",
+                assetID: fixture.assetID,
                 enabled: true
             )
         }
 
-        let stalePlan = try fixture.controller.prepareManagedRelationClearPlan(skillID: "writer")
+        let stalePlan = try fixture.controller.prepareManagedRelationClearPlan(assetID: fixture.assetID)
         let customLink = customTarget.appendingPathComponent("Writer")
         try FileManager.default.moveItem(at: customLink, to: customLink.appendingPathExtension("managed"))
         try Data("external".utf8).write(to: customLink)
@@ -174,9 +180,10 @@ struct RelationActionExecutionTests {
         #expect(try LinkNodeIdentity.read(at: fixture.targets[.codex]!.appendingPathComponent("Writer")).kind == S_IFLNK)
         #expect(try LinkNodeIdentity.read(at: fixture.targets[.claudeCode]!.appendingPathComponent("Writer")).kind == S_IFLNK)
 
-        let currentPlan = try fixture.controller.prepareManagedRelationClearPlan(skillID: "writer")
+        let currentPlan = try fixture.controller.prepareManagedRelationClearPlan(assetID: fixture.assetID)
         #expect(currentPlan.removableItems.count == 2)
         #expect(currentPlan.items.first { $0.relation.agentID == custom.id }?.disposition == .blocked)
+        #expect(currentPlan.items.first { $0.relation.agentID == custom.id }?.detail == RelationOwnershipClassification.unmanagedNode.clearMessage)
         let result = try await fixture.controller.clearAllManagedRelations(using: currentPlan)
 
         #expect(result.items.filter { $0.outcome == .succeeded }.count == 2)
@@ -639,8 +646,20 @@ struct RelationActionExecutionTests {
         #expect(result.verification?.conclusion == .verifiedConsistent)
     }
 
-    @Test func enableCreatesOneExactLinkAndCommitsOnlyItsIntentAndEvidence() throws {
-        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+    static var creationVolumes: [String?] {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let volume = root.appendingPathComponent(".tmp/028-library-performance/m002-test-volume")
+        // An explicitly mounted task volume adds an actual cross-volume case to the canonical fixture.
+        if let identity = try? LinkNodeIdentity.read(at: volume),
+           let rootIdentity = try? LinkNodeIdentity.read(at: root), identity.file.volumeNumber != rootIdentity.file.volumeNumber {
+            return [nil, volume.path]
+        }
+        return [nil]
+    }
+
+    @Test(arguments: creationVolumes)
+    func enableCreatesOneExactLinkAndCommitsOnlyItsIntentAndEvidence(_ agentParent: String?) throws {
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false, agentParent: agentParent)
         let otherIntent = try #require(fixture.metadataStore.load(from: fixture.rootURL).enablementIntents.last)
 
         let result = fixture.executor().execute(
@@ -672,14 +691,190 @@ struct RelationActionExecutionTests {
         #expect(try creation.nodeIdentity == LinkNodeIdentity.read(at: fixture.linkURL))
         #expect(try creation.parentIdentity == LinkNodeIdentity.read(at: fixture.targetURL))
         let record = try RelationActionOperationRecordStore().load(operationID: creation.operationID, rootURL: fixture.rootURL)
-        Attachment.record(try JSONEncoder().encode(record), named: "creation-publication-record.json")
+        Attachment.record(try JSONEncoder().encode(record), named: "creation-publication-record-\(creation.parentIdentity.file.volumeNumber).json")
         #expect(record.creation == creation)
         #expect(record.preparationPaths.contains(creation.stagingPath))
-        #expect(try FileManager.default.contentsOfDirectory(atPath: URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent().path).isEmpty)
+        let staging = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
+        let expectedMaterialState: CreationMaterialSettlement.Status = agentParent == nil ? .settled : .retained
+        #expect(record.creationMaterials?.status == expectedMaterialState)
+        #expect(result.creationMaterials?.status == expectedMaterialState)
+        let recovery = fixture.executor().recover(operationID: creation.operationID, rootURL: fixture.rootURL,
+            currentInstallation: { nil }, recordObservation: false)
+        #expect(recovery.verification?.conclusion == .verifiedConsistent)
+        if agentParent == nil {
+            #expect(!FileManager.default.fileExists(atPath: staging.path))
+            #expect(record.retainedPaths.isEmpty)
+            #expect(recovery.components.allSatisfy { $0.state == .completed })
+        } else {
+            #expect(try LinkNodeIdentity.read(at: fixture.rootURL).file.volumeNumber != creation.parentIdentity.file.volumeNumber)
+            #expect(try LinkNodeIdentity.read(at: staging) == creation.stagingDirectoryIdentity)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: staging.path).isEmpty)
+            #expect(recovery.creationMaterials?.detail == "Creation directory retained: no same-volume private isolation.")
+        }
         let local = try fixture.localStateStore.load(from: fixture.rootURL)
         #expect(local.verificationRecords.first { $0.relation == fixture.relation }?.conclusion == .verifiedConsistent)
         #expect(local.managedRelationEvidence.isEmpty)
         #expect(fixture.quarantineEntries().isEmpty)
+    }
+
+    @Test(arguments: [RelationLinkPrimitiveHookPoint.beforeMaterialIsolation, .afterMaterialIsolation,
+                      .beforeMaterialRemoval, .afterMaterialRemoval])
+    func creationMaterialInterruptionPreservesLinkAndRestartOnlyObserves(_ point: RelationLinkPrimitiveHookPoint) throws {
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+        let authorization = fixture.authorization(desiredEnabled: true)
+        let result = fixture.executor(linkService: AgentLinkService(relationPrimitiveHook: { current, _ in
+            if current == point { throw RelationExecutionTestError.injected }
+        })).execute(authorization: authorization, rootURL: fixture.rootURL, currentInstallation: { nil })
+        #expect(result.status == .succeeded)
+        #expect(result.creationMaterials?.status == .retained)
+        #expect(try fixture.currentInspection().classification == .exactManagedLink)
+        let store = RelationActionOperationRecordStore()
+        let record = try store.load(operationID: authorization.actionID, rootURL: fixture.rootURL)
+        let creation = try #require(record.creation)
+        let source = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
+        let isolated = URL(fileURLWithPath: try #require(record.creationMaterials?.isolationPath))
+        let before = try JSONEncoder().encode(record)
+        let recovery = fixture.executor().recover(operationID: authorization.actionID, rootURL: fixture.rootURL,
+            currentInstallation: { nil }, recordObservation: false)
+        #expect(try store.load(operationID: authorization.actionID, rootURL: fixture.rootURL) == record)
+        #expect(recovery.verification?.conclusion == .verifiedConsistent)
+        if point == .beforeMaterialIsolation {
+            #expect(try LinkNodeIdentity.read(at: source) == creation.stagingDirectoryIdentity)
+            #expect(record.retainedPaths.contains(source.path))
+        } else if point != .afterMaterialRemoval {
+            #expect(try LinkNodeIdentity.read(at: isolated) == creation.stagingDirectoryIdentity)
+            #expect(record.retainedPaths.contains(isolated.path))
+            #expect(!record.retainedPaths.contains(source.path))
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: isolated.path))
+            #expect(recovery.creationMaterials?.detail == "Creation directory absent; deletion history unverified.")
+        }
+        Attachment.record(before, named: "material-interruption-\(point).json")
+    }
+
+    @Test(arguments: [RelationLinkPrimitiveHookPoint.beforeMaterialIsolation, .afterMaterialIsolation, .beforeMaterialRemoval],
+          ["replacement", "contents", "parent"])
+    func materialRacesRetainUnknownObjects(_ point: RelationLinkPrimitiveHookPoint, _ change: String) throws {
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+        let authorization = fixture.authorization(desiredEnabled: true)
+        let result = fixture.executor(linkService: AgentLinkService(relationPrimitiveHook: { current, path in
+            guard current == point else { return }
+            switch change {
+            case "replacement":
+                try FileManager.default.moveItem(at: path, to: path.appendingPathExtension("original"))
+                try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+            case "contents": try Data("unknown".utf8).write(to: path.appendingPathComponent("sentinel"))
+            default:
+                let parent = path.deletingLastPathComponent()
+                try FileManager.default.moveItem(at: parent, to: parent.appendingPathExtension("original"))
+                try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+            }
+        })).execute(authorization: authorization, rootURL: fixture.rootURL, currentInstallation: { nil })
+        #expect(result.status == (change == "parent" && point == .beforeMaterialIsolation ? .unknown : .succeeded))
+        #expect(result.creationMaterials?.status == .retained)
+        // Even an empty directory substituted in the final window must remain.
+        let record = try RelationActionOperationRecordStore().load(operationID: authorization.actionID, rootURL: fixture.rootURL)
+        let creation = try #require(record.creation)
+        let staging = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
+        let isolated = URL(fileURLWithPath: try #require(record.creationMaterials?.isolationPath))
+        let changedPath = point == .beforeMaterialIsolation ? staging : isolated
+        if change == "replacement" {
+            let retained = point == .beforeMaterialIsolation ? isolated : changedPath
+            #expect(try LinkNodeIdentity.read(at: retained) != creation.stagingDirectoryIdentity)
+            #expect(try LinkNodeIdentity.read(at: changedPath.appendingPathExtension("original")) == creation.stagingDirectoryIdentity)
+        } else if change == "contents" {
+            #expect(try String(contentsOf: isolated.appendingPathComponent("sentinel"), encoding: .utf8) == "unknown")
+        } else {
+            #expect(FileManager.default.fileExists(atPath: changedPath.deletingLastPathComponent().appendingPathExtension("original").path))
+        }
+        Attachment.record(try JSONEncoder().encode(record), named: "material-race-\(point)-\(change).json")
+    }
+
+    @Test func continuousAndRepeatedEnablementDoesNotLeaveCreationDirectories() throws {
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+        for enabled in [true, true, false, true, true] {
+            let result = fixture.executor().execute(
+                authorization: fixture.authorization(desiredEnabled: enabled, usingCurrentFacts: true),
+                rootURL: fixture.rootURL, currentInstallation: { nil })
+            #expect(result.status == .succeeded || result.status == .noChange)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.targetURL.path)
+                .allSatisfy { !$0.hasPrefix(".skillshub-create-") })
+        }
+        #expect(try fixture.currentInspection().classification == .exactManagedLink)
+    }
+
+    @Test(arguments: ["enabled", "disabled", "contents"])
+    func legacyCreationRecordRemainsReadableAndRequiresExplicitSettlement(_ state: String) throws {
+        let unknownContents = state == "contents"
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+        let authorization = fixture.authorization(desiredEnabled: true)
+        _ = fixture.executor(faultHook: RelationTestHook { point in
+            if point == .beforeMaterialSettlement { throw RelationExecutionTestError.injected }
+        }).execute(authorization: authorization, rootURL: fixture.rootURL, currentInstallation: { nil })
+        let store = RelationActionOperationRecordStore()
+        var record = try store.load(operationID: authorization.actionID, rootURL: fixture.rootURL)
+        let creation = try #require(record.creation)
+        record.creationMaterials = nil
+        try store.save(record, rootURL: fixture.rootURL)
+        let legacyData = try JSONEncoder().encode(record)
+        #expect((try JSONSerialization.jsonObject(with: legacyData) as? [String: Any])?["creationMaterials"] == nil)
+        let staging = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
+        if unknownContents { try Data("unknown".utf8).write(to: staging.appendingPathComponent("sentinel")) }
+        if state == "disabled" {
+            #expect(fixture.executor().execute(authorization: fixture.authorization(desiredEnabled: false, usingCurrentFacts: true),
+                rootURL: fixture.rootURL, currentInstallation: { nil }).status == .succeeded)
+        }
+        let recovery = fixture.executor().recover(operationID: authorization.actionID, rootURL: fixture.rootURL,
+            currentInstallation: { nil }, recordObservation: false)
+        #expect(recovery.creationMaterials?.canSettle == !unknownContents)
+        #expect(try LinkNodeIdentity.read(at: staging) == creation.stagingDirectoryIdentity)
+        #expect(try store.load(operationID: authorization.actionID, rootURL: fixture.rootURL) == record)
+        let result = fixture.executor().settleCreationMaterials(operationID: authorization.actionID, rootURL: fixture.rootURL)
+        #expect(result.status == (unknownContents ? .retained : .settled))
+        if unknownContents { #expect(try String(contentsOf: staging.appendingPathComponent("sentinel"), encoding: .utf8) == "unknown") }
+        else { #expect(!FileManager.default.fileExists(atPath: staging.path)) }
+        #expect(try store.load(operationID: authorization.actionID, rootURL: fixture.rootURL).creation == creation)
+        #expect(try fixture.currentInspection().classification == (state == "disabled" ? .vacant : .exactManagedLink))
+        Attachment.record(legacyData, named: "legacy-creation-record-\(state).json")
+    }
+
+    @Test func unrecordedPrivateIsolationDoesNotOfferSettlementOrDeleteContents() throws {
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+        let authorization = fixture.authorization(desiredEnabled: true)
+        _ = fixture.executor(faultHook: RelationTestHook { point in
+            if point == .beforeMaterialSettlement { throw RelationExecutionTestError.injected }
+        }).execute(authorization: authorization, rootURL: fixture.rootURL, currentInstallation: { nil })
+        let store = RelationActionOperationRecordStore()
+        let record = try store.load(operationID: authorization.actionID, rootURL: fixture.rootURL)
+        let staging = URL(fileURLWithPath: try #require(record.creation).stagingPath).deletingLastPathComponent()
+        let operation = fixture.metadataStore.rootLayout(for: fixture.rootURL).operationRecoveryDirectory
+            .appendingPathComponent(authorization.actionID.uuidString)
+        let unknown = operation.appendingPathComponent("creation-settlement")
+        try FileManager.default.createDirectory(at: unknown, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: unknown.appendingPathComponent("sentinel"))
+        let recovery = fixture.executor().recover(operationID: authorization.actionID, rootURL: fixture.rootURL,
+            currentInstallation: { nil }, recordObservation: false)
+        #expect(recovery.creationMaterials?.canSettle == false)
+        #expect(recovery.creationMaterials?.detail == "Creation materials could not be verified.")
+        #expect(fixture.executor().settleCreationMaterials(operationID: authorization.actionID, rootURL: fixture.rootURL).status == .retained)
+        #expect(try LinkNodeIdentity.read(at: staging) == record.creation?.stagingDirectoryIdentity)
+        #expect(try String(contentsOf: unknown.appendingPathComponent("sentinel"), encoding: .utf8) == "keep")
+    }
+
+    @Test func materialWritebackFailureDoesNotInvalidateLinkOrInventDeletionOnRestart() throws {
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+        let authorization = fixture.authorization(desiredEnabled: true)
+        let result = fixture.executor(faultHook: RelationTestHook { point in
+            if point == .beforeMaterialResultRecord { throw RelationExecutionTestError.injected }
+        }).execute(authorization: authorization, rootURL: fixture.rootURL, currentInstallation: { nil })
+        #expect(result.status == .succeeded)
+        #expect(result.creationMaterials?.status == .retained)
+        let recovery = fixture.executor().recover(operationID: authorization.actionID, rootURL: fixture.rootURL,
+            currentInstallation: { nil }, recordObservation: false)
+        #expect(recovery.verification?.conclusion == .verifiedConsistent)
+        #expect(recovery.creationMaterials?.detail == "Creation directory absent; deletion history unverified.")
+        #expect(recovery.components.first { $0.kind == .creationDirectory }?.state == .unknown)
+        #expect(recovery.components.first { $0.kind == .preparationNode }?.state == .completed)
     }
 
     @Test(arguments: [AgentKind.codex, .claudeCode])
@@ -1195,7 +1390,7 @@ private final class RelationExecutionFixture: @unchecked Sendable {
     private let ownership: RelationOwnershipClassification
     private let intent: EnablementIntent
 
-    init(node: Node, intentEnabled: Bool, agent: AgentKind = .codex) throws {
+    init(node: Node, intentEnabled: Bool, agent: AgentKind = .codex, agentParent: String? = nil) throws {
         self.agent = agent
         profileID = try #require(AgentCapabilityProfileRegistry.builtIn.profile(for: agent, scope: .global)).profileID
         let container = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -1204,7 +1399,8 @@ private final class RelationExecutionFixture: @unchecked Sendable {
         )
         containerURL = container
         rootURL = container.appendingPathComponent("root", isDirectory: true)
-        targetURL = container.appendingPathComponent("agent-skills", isDirectory: true)
+        targetURL = agentParent.map { URL(fileURLWithPath: $0).appendingPathComponent(container.lastPathComponent, isDirectory: true) }
+            ?? container.appendingPathComponent("agent-skills", isDirectory: true)
         canonicalURL = rootURL.appendingPathComponent("local/review", isDirectory: true)
         linkURL = targetURL.appendingPathComponent("review")
         relation = AgentRelationIdentity(assetID: UUID(), agentID: agent.rawValue, scope: .global)
@@ -1333,10 +1529,15 @@ private final class RelationExecutionFixture: @unchecked Sendable {
     }
 
     deinit {
+        if targetURL.deletingLastPathComponent() != containerURL {
+            try? FileManager.default.removeItem(at: targetURL)
+        }
         try? FileManager.default.removeItem(at: containerURL)
     }
 
-    func authorization(desiredEnabled: Bool) -> RelationActionAuthorization {
+    func authorization(desiredEnabled: Bool, usingCurrentFacts: Bool = false) -> RelationActionAuthorization {
+        let actionSnapshot = usingCurrentFacts ? try! metadataStore.loadCurrentSnapshot(from: rootURL) : snapshot
+        let current = usingCurrentFacts ? try! currentInspection() : nil
         let qualification = AgentTargetQualification(
             agentID: agent.rawValue,
             agent: agent,
@@ -1354,12 +1555,12 @@ private final class RelationExecutionFixture: @unchecked Sendable {
             relation: relation,
             rootURL: rootURL,
             rootSessionOwner: .rootSession(UUID()),
-            snapshot: snapshot,
-            asset: snapshot.metadata.installedSkills[0],
+            snapshot: actionSnapshot,
+            asset: actionSnapshot.metadata.installedSkills[0],
             qualification: qualification,
-            observation: observation,
-            ownership: ownership,
-            currentIntent: intent
+            observation: current?.observation ?? observation,
+            ownership: current?.classification ?? ownership,
+            currentIntent: usingCurrentFacts ? actionSnapshot.metadata.enablementIntents.first { $0.id == relation.id } : intent
         )
         let builder = RelationActionTokenBuilder()
         let actionID = UUID()

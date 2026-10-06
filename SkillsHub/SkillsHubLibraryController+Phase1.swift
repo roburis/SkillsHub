@@ -7,13 +7,13 @@ extension SkillsHubLibraryController {
 
     func establishSelectedRoot(_ url: URL) async {
         do {
-            let result = try inspectSelectedRoot(url)
+            let result = try await inspectSelectedRoot(url)
             switch result {
             case .existingRoot(let facts):
-                try activateExistingRoot(facts, announceStatus: true, resolvingPersistedBookmark: false)
+                try await activateExistingRoot(facts, announceStatus: true, resolvingPersistedBookmark: false)
             case .initializationRequired(let facts):
                 if fileManager.fileExists(atPath: metadataStore.rootLayout(for: facts.url).skillshubMetadataFile.path) {
-                    try activateExistingRoot(facts, announceStatus: true, resolvingPersistedBookmark: false)
+                    try await activateExistingRoot(facts, announceStatus: true, resolvingPersistedBookmark: false)
                 } else {
                     let plan = try phase1OperationPlanner.rootInitializationPlan(facts: facts)
                     pendingRootInitialization = facts
@@ -108,7 +108,10 @@ extension SkillsHubLibraryController {
                 fileManager: fileManager
             )
             guard result.issue == nil, let staged = result.stagedRepository else {
-                throw SkillsHubLibraryFailure.invalidSource(githubSourceMessage(for: result.issue))
+                throw SkillsHubLibraryFailure.invalidSource(
+                    result.issue.map { errorPresentation(for: $0) }
+                        ?? "The repository check did not produce a publishable source."
+                )
             }
             let plan: Phase1OperationPlan
             do {
@@ -156,23 +159,6 @@ extension SkillsHubLibraryController {
             repositoryID: repositoryID,
             sourceID: sourceID
         )
-    }
-
-    private func githubSourceMessage(for issue: GitHubSourceIssue?) -> LocalizedMessage {
-        switch issue {
-        case .noSkills: "No source was added because the complete repository contains no SKILL.md candidates."
-        case .unsupportedVersion: "The first version supports repository roots on their default branch only."
-        case .cancelled: "GitHub source addition was cancelled."
-        case .rateLimited: "GitHub rate-limited this request. Try again after the service limit resets."
-        case .branchUnavailable: "The recorded GitHub branch is unavailable."
-        case .repositoryTooLarge: "The repository exceeds the safe fetch or staging budget."
-        case .pathRestricted: "The public repository is unavailable or cannot be read without authentication."
-        case .treeTruncated, .archiveInvalid, .contentMismatch: "The complete repository could not be verified, so nothing was added."
-        case .networkFailure, .timedOut: "The repository check failed. Existing managed content was not changed."
-        case .unsupportedProvider, .invalidURL: "Enter a public GitHub repository root such as https://github.com/owner/repository."
-        case .repositoryChanged: "The repository identity changed during the operation. Check it again."
-        case nil: "The repository check did not produce a publishable source."
-        }
     }
 
     func prepareManagedCopy(candidateID: String) throws {
@@ -276,8 +262,8 @@ extension SkillsHubLibraryController {
         for await record in progress.stream {
             guard contextIsCurrent(), record.event != .final else { continue }
             running.phase = record.phase == .waitingConfirmation ? .executing : record.phase
-            running.result = .verbatim(record.result)
-            running.events.append(Phase1TaskEvent(id: UUID(), phase: record.phase, message: LocalizedMessage(record.result), occurredAt: record.occurredAt))
+            running.result = record.progressMessage
+            running.events.append(Phase1TaskEvent(id: UUID(), phase: record.phase, message: record.progressMessage, occurredAt: record.occurredAt))
             running.updatedAt = record.occurredAt
             upsertTask(running)
         }
@@ -309,7 +295,7 @@ extension SkillsHubLibraryController {
         }
         do {
             if plan.kind == .initializeRoot {
-                try activateInitializedRoot(plan: plan, snapshot: snapshot)
+                try await activateInitializedRoot(plan: plan, snapshot: snapshot)
             } else {
                 applyPhase1Snapshot(snapshot)
             }
@@ -397,7 +383,7 @@ extension SkillsHubLibraryController {
     private func activateInitializedRoot(
         plan: Phase1OperationPlan,
         snapshot: RootSnapshot
-    ) throws {
+    ) async throws {
         let normalizedRoot = URL(fileURLWithPath: plan.rootPath, isDirectory: true).standardizedFileURL
         guard plan.kind == .initializeRoot,
               snapshot.generation == 0,
@@ -431,7 +417,7 @@ extension SkillsHubLibraryController {
             try endSecurityScopedAccessLease(previousLease)
         }
         // Newly established Root: subscribe and run the initial authorized-range scan.
-        subscribeAndInitialScan()
+        await subscribeAndInitialScan()
     }
 
     private func waitingTask(for plan: Phase1OperationPlan) -> Phase1TaskRecord {
@@ -475,9 +461,9 @@ extension SkillsHubLibraryController {
         }
     }
 
-    func recheckRecoveryTasks() {
+    func recheckRecoveryTasks() async {
         do {
-            try reloadFromDisk()
+            try await reloadFromDisk()
             setStatus("Current operation facts were re-checked. No recorded action was replayed.")
             errorMessage = nil
         } catch {
@@ -485,7 +471,89 @@ extension SkillsHubLibraryController {
         }
     }
 
-    func mergeRecoveredOperationTasks(rootURL: URL) {
+    /// The detail page authorizes only this recorded material, with fresh Root and Agent access.
+    func settleCreationMaterials(operationID: UUID) async {
+        guard let rootURL, let sessionID = rootSessionLease?.id else { return }
+        do {
+            let record = try RelationActionOperationRecordStore(fileManager: fileManager)
+                .load(operationID: operationID, rootURL: rootURL)
+            guard inFlightRelationActionIDs.insert(record.relation.id).inserted else { return }
+            defer { inFlightRelationActionIDs.remove(record.relation.id) }
+            let lease = try acquireSecurityScopedAccess(to: rootURL, owner: .operation(UUID()),
+                endingSelectedInspection: false, resolvingPersistedBookmark: true)
+            defer { _ = lease.end(by: lease.owner) }
+            let targetAccess = try acquireAgentTargetAccess(agentID: record.relation.agentID, actionID: UUID())
+            defer { _ = targetAccess.endByOwningAction() }
+            let runtime = relationActionRuntime
+            let outcome = try await RootMutationOwner.shared.withWriteQualification(at: rootURL) {
+                guard await MainActor.run(body: { self.rootURL == rootURL && self.rootSessionLease?.id == sessionID }) else {
+                    throw ControllerRelationActionError.missingRootSession
+                }
+                return try await Task.detached {
+                    try runtime.settleCreationMaterials(operationID: operationID, rootURL: rootURL, targetAccess: targetAccess)
+                }.value
+            }
+            guard self.rootURL == rootURL, rootSessionLease?.id == sessionID else { return }
+            await mergeRecoveredOperationTasks(rootURL: rootURL)
+            guard self.rootURL == rootURL, rootSessionLease?.id == sessionID else { return }
+            switch outcome {
+            case .performed(let materials):
+                setStatus(materials.status == .settled ? "Creation directory settled" : "Creation materials retained; review current facts.")
+                errorMessage = nil
+            case .writeUnavailable:
+                setStatus("Creation materials retained; Root write access is unavailable.")
+            }
+        } catch {
+            guard self.rootURL == rootURL, rootSessionLease?.id == sessionID else { return }
+            await mergeRecoveredOperationTasks(rootURL: rootURL)
+            guard self.rootURL == rootURL, rootSessionLease?.id == sessionID else { return }
+            handle(error)
+        }
+    }
+
+    func mergeRecoveredOperationTasks(rootURL: URL) async {
+        let sessionID = rootSessionLease?.id
+        let expected = rootSnapshot
+        let generation = libraryReadGeneration
+        let input = RecoveryTaskRead(metadataStore: metadataStore, fileManager: fileManager,
+            relationActionRuntime: relationActionRuntime, sourceRemovalService: sourceRemovalService,
+            sourceUpdateService: sourceUpdateService, rootSnapshot: expected,
+            visibleInstalledAgentDescriptors: visibleInstalledAgentDescriptors)
+        let lease: SecurityScopedAccessLease?
+        do {
+            lease = try rootSessionLease.map {
+                try securityScopedAccessProvider.acquire(url: $0.url, owner: .inspection(UUID()))
+            }
+        } catch { handle(error); return }
+        defer { if let lease { _ = lease.end(by: lease.owner) } }
+        let recovered = await input.read(rootURL: rootURL)
+        guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
+              rootSnapshot == expected, libraryReadGeneration == generation else { return }
+        let recoveredIDs = Set(recovered.map(\.id))
+        phase1Tasks.removeAll {
+            ($0.recoveryEvidence != nil && $0.operationPlan == nil) || recoveredIDs.contains($0.id)
+        }
+        for task in recovered { upsertTask(task) }
+    }
+
+    func upsertTask(_ task: Phase1TaskRecord) {
+        phase1Tasks.removeAll { $0.id == task.id }
+        phase1Tasks.append(task)
+        phase1Tasks.sort { $0.updatedAt > $1.updatedAt }
+    }
+}
+
+// Immutable inputs for the existing recovery readers; only their result enters observed state.
+nonisolated private struct RecoveryTaskRead {
+    let metadataStore: SkillsHubMetadataStore
+    let fileManager: FileManager
+    let relationActionRuntime: RelationActionControllerRuntime
+    let sourceRemovalService: SourceRemovalService
+    let sourceUpdateService: SourceUpdateService
+    let rootSnapshot: RootSnapshot?
+    let visibleInstalledAgentDescriptors: [InstalledAgentDescriptor]
+
+    @concurrent func read(rootURL: URL) async -> [Phase1TaskRecord] {
         var recovered: [Phase1TaskRecord] = []
         let relationStore = RelationActionOperationRecordStore(fileManager: fileManager)
         let operationPath = metadataStore.rootLayout(for: rootURL).operationRecoveryDirectory.path
@@ -514,11 +582,7 @@ extension SkillsHubLibraryController {
         for operationID in updateIDs where !relationIDs.contains(operationID) && !sourceIDs.contains(operationID) {
             recovered.append(recoveredSourceUpdateTask(operationID: operationID, rootURL: rootURL))
         }
-        let recoveredIDs = Set(recovered.map(\.id))
-        phase1Tasks.removeAll {
-            ($0.recoveryEvidence != nil && $0.operationPlan == nil) || recoveredIDs.contains($0.id)
-        }
-        for task in recovered { upsertTask(task) }
+        return recovered
     }
 
     private func recoveredRelationTask(
@@ -535,7 +599,7 @@ extension SkillsHubLibraryController {
                 let components = recovery.components.map {
                     Phase1RecoveryComponent(
                         kind: $0.kind.rawValue,
-                        state: recoveryState($0.state),
+                        state: Phase1RecoveryState($0.state),
                         path: $0.path,
                         detail: $0.detail
                     )
@@ -563,12 +627,16 @@ extension SkillsHubLibraryController {
                         skillName: skillName,
                         desiredEnabled: record.desiredEnabled,
                         outcome: recoveryPhase(components) == .completed ? "Completed" : "Needs attention",
-                        actualDelta: components.map { "\($0.kind): \($0.state.presentationLabel)" },
+                        actualDelta: components.map {
+                            $0.kind == RelationActionRecoveryComponent.Kind.creationDirectory.rawValue
+                                ? $0.detail : "\($0.kind): \($0.state.presentationLabel)"
+                        },
                         verification: recovery.verification?.conclusion ?? .currentlyUnverifiable,
                         limitations: recovery.limitations,
                         safeNextStep: recovery.safeNextStep
                     ),
-                    recoveryEvidence: Phase1RecoveryEvidence(components: components, agentID: record.relation.agentID)
+                    recoveryEvidence: Phase1RecoveryEvidence(components: components,
+                        creationMaterials: recovery.creationMaterials, agentID: record.relation.agentID)
                 )
             case .brokenLink(let record):
                 let originalIdentity = try? LinkNodeIdentity.read(at: URL(fileURLWithPath: record.facts.linkPath))
@@ -822,14 +890,6 @@ extension SkillsHubLibraryController {
         )
     }
 
-    private func recoveryState(_ state: RelationActionRecoveryState) -> Phase1RecoveryState {
-        switch state {
-        case .completed: .completed
-        case .notCompleted: .notCompleted
-        case .unknown: .unknown
-        }
-    }
-
     private func recoveryPhase(_ components: [Phase1RecoveryComponent]) -> Phase1OperationPhase {
         components.allSatisfy { $0.state == .completed } ? .completed : .needsAttention
     }
@@ -851,7 +911,8 @@ extension SkillsHubLibraryController {
             return Phase1TaskEvent(
                 id: StableIdentity.uuid(namespace: "recovery-component", value: "\($0.kind)|\($0.path)|\($0.state.rawValue)"),
                 phase: $0.state == .completed ? .completed : .needsAttention,
-                message: message,
+                message: $0.kind == RelationActionRecoveryComponent.Kind.creationDirectory.rawValue
+                    ? LocalizedMessage($0.detail) : message,
                 occurredAt: date
             )
         }
@@ -867,9 +928,4 @@ extension SkillsHubLibraryController {
         return attributes[.modificationDate] as? Date
     }
 
-    func upsertTask(_ task: Phase1TaskRecord) {
-        phase1Tasks.removeAll { $0.id == task.id }
-        phase1Tasks.append(task)
-        phase1Tasks.sort { $0.updatedAt > $1.updatedAt }
-    }
 }

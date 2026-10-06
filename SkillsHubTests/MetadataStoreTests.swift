@@ -759,7 +759,7 @@ struct MetadataStoreTests {
         )
 
         let controller = SkillsHubLibraryController()
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
         await controller.waitForPendingRechecks()
 
         // local/ direct content is discovered and registered on connect (REQ-003/REQ-014),

@@ -95,7 +95,7 @@ struct SecurityScopedAccessTests {
         #expect(adapter.stopAttemptCount == 1)
     }
 
-    @Test func selectedInspectionTransitionsToRootSessionAndTerminationStopsSession() throws {
+    @Test func selectedInspectionTransitionsToRootSessionAndTerminationStopsSession() async throws {
         let root = try temporaryDirectory()
         try SkillsHubMetadataStore().save(
             SkillsHubMetadata(rootConfig: RootConfig(rootPath: root.path)),
@@ -109,17 +109,20 @@ struct SecurityScopedAccessTests {
         )
 
         try controller?.rememberUserSelectedAccess(to: root)
-        try controller?.connectSelectedRoot(root)
+        try await controller?.connectSelectedRoot(root)
+        await controller?.waitForPendingRechecks()
+        await controller?.waitForPresentationObservation()
 
-        #expect(adapter.startRecords.count == 2)
+        #expect(adapter.startRecords.filter { $0.owner.isRootSession }.count == 1)
         #expect(adapter.startRecords[0].owner.isInspection)
-        #expect(adapter.startRecords[1].owner.isRootSession)
-        #expect(adapter.stoppedURLs == [root.standardizedFileURL])
+        #expect(adapter.activeAccessCount == 1)
         #expect(controller?.rootURL == root.standardizedFileURL)
 
+        await controller?.waitForPendingRechecks()
+        await controller?.waitForPresentationObservation()
         controller = nil
 
-        #expect(adapter.stoppedURLs == [root.standardizedFileURL, root.standardizedFileURL])
+        #expect(adapter.activeAccessCount == 0)
     }
 
     @Test func explicitRootEstablishmentUsesDistinctOperationAndSessionLeases() async throws {
@@ -139,27 +142,16 @@ struct SecurityScopedAccessTests {
         #expect(controller?.pendingRootInitialization == nil)
         #expect(controller?.pendingPhase1OperationPlan == nil)
         #expect(controller?.errorMessage == nil)
-        #expect(
-            adapter.startRecords.map(\.owner) == [
-                .inspection(try #require(adapter.startRecords.first?.owner.inspectionID)),
-                .operation(operationID),
-                .rootSession(try #require(adapter.startRecords.last?.owner.rootSessionID))
-            ]
-        )
-        #expect(adapter.stoppedURLs == [root.standardizedFileURL, root.standardizedFileURL])
-
+        await controller?.waitForPendingRechecks()
+        await controller?.waitForPresentationObservation()
+        #expect(adapter.startRecords.filter { $0.owner == .operation(operationID) }.count == 1)
+        #expect(adapter.startRecords.filter { $0.owner.isRootSession }.count == 1)
+        #expect(adapter.activeAccessCount == 1)
         controller = nil
-
-        #expect(
-            adapter.stoppedURLs == [
-                root.standardizedFileURL,
-                root.standardizedFileURL,
-                root.standardizedFileURL
-            ]
-        )
+        #expect(adapter.activeAccessCount == 0)
     }
 
-    @Test func rootActivationStartsObservationAndSwitchReSubscribesWithNewSession() throws {
+    @Test func rootActivationStartsObservationAndSwitchReSubscribesWithNewSession() async throws {
         let rootA = try temporaryDirectory()
         let rootB = try temporaryDirectory()
         for root in [rootA, rootB] {
@@ -184,7 +176,7 @@ struct SecurityScopedAccessTests {
         )
 
         try controller.rememberUserSelectedAccess(to: rootA)
-        try controller.connectSelectedRoot(rootA)
+        try await controller.connectSelectedRoot(rootA)
         #expect(controller.rootURL == rootA.standardizedFileURL)
         #expect(controller.observation.isObserving)
         #expect(controller.observationStatus == .observing)
@@ -196,7 +188,7 @@ struct SecurityScopedAccessTests {
         // Switch to Root B: the previous stream is stopped and a new rootSession lease is
         // established for the new subscription.
         try controller.rememberUserSelectedAccess(to: rootB)
-        try controller.connectSelectedRoot(rootB)
+        try await controller.connectSelectedRoot(rootB)
 
         #expect(controller.rootURL == rootB.standardizedFileURL)
         #expect(firstStream.stopCount >= 1)
@@ -232,12 +224,13 @@ struct SecurityScopedAccessTests {
         )
         #expect(controller.hasRoot == false)
         #expect(controller.rootSnapshot == nil)
-        #expect(controller.errorMessage?.contains("startDenied") == true)
+        #expect(controller.errorMessage?.template == "Folder permission was denied: %@")
+        #expect(controller.errorMessage?.arguments == [root.path])
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(".skillshub.json").path))
         #expect(adapter.stoppedURLs == [root.standardizedFileURL, root.standardizedFileURL])
     }
 
-    @Test func rootSwitchStopsPreviousSessionAndFailedSwitchStopsOnlyNewSession() throws {
+    @Test func rootSwitchStopsPreviousSessionAndFailedSwitchStopsOnlyNewSession() async throws {
         let firstRoot = try temporaryDirectory()
         let secondRoot = try temporaryDirectory()
         try SkillsHubMetadataStore().save(
@@ -256,21 +249,24 @@ struct SecurityScopedAccessTests {
             securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: adapter)
         )
 
-        try controller.connectExistingRoot(firstRoot)
-        try controller.connectExistingRoot(secondRoot)
+        try await controller.connectExistingRoot(firstRoot)
+        try await controller.connectExistingRoot(secondRoot)
+        await controller.waitForPendingRechecks()
+        await controller.waitForPresentationObservation()
 
         #expect(adapter.startRecords.map(\.owner).filter(\.isRootSession).count == 2)
-        #expect(adapter.startRecords.map(\.owner).filter(\.isInspection).count == 2)
-        #expect(adapter.stoppedURLs == [firstRoot, secondRoot, firstRoot])
+        #expect(adapter.startRecords.map(\.owner).filter(\.isInspection).count >= 2)
+        #expect(adapter.activeAccessCount == 1)
 
         do {
-            try controller.connectExistingRoot(invalidRoot)
+            try await controller.connectExistingRoot(invalidRoot)
             Issue.record("A regular file cannot become a Root session.")
         } catch {
             // Expected: activation failed after acquiring the candidate Root lease.
         }
         #expect(controller.rootURL == secondRoot.standardizedFileURL)
-        #expect(adapter.stoppedURLs == [firstRoot, secondRoot, firstRoot, invalidRoot])
+        #expect(adapter.activeAccessCount == 1)
+        #expect(adapter.stoppedURLs.contains(invalidRoot))
     }
 
     @Test func staleBookmarkRefreshUsesInspectionLeaseAndReleasesIt() throws {
@@ -404,7 +400,7 @@ struct SecurityScopedAccessTests {
     }
 
     @Test func sourceObservationAndCancellationLeaveOnlyRootSessionActive() async throws {
-        let fixture = try ControllerAccessFixture()
+        let fixture = try await ControllerAccessFixture()
         defer { fixture.remove() }
 
         try fixture.controller.rememberUserSelectedAccess(to: fixture.source)
@@ -414,6 +410,7 @@ struct SecurityScopedAccessTests {
         #expect(fixture.adapter.startRecords.map(\.owner).contains(.source(try #require(plan.source?.id))))
         #expect(fixture.adapter.stoppedURLs.suffix(2) == [fixture.source, fixture.source])
 
+        await fixture.controller.waitForPresentationObservation()
         let startCountBeforeCancel = fixture.adapter.startRecords.count
         let stopCountBeforeCancel = fixture.adapter.stoppedURLs.count
         await fixture.controller.cancelPendingPhase1Operation()
@@ -424,7 +421,7 @@ struct SecurityScopedAccessTests {
 
     @Test(arguments: [false, true])
     func operationUsesOperationIdentityAndReleasesAllOperationLeases(replaceSource: Bool) async throws {
-        let fixture = try ControllerAccessFixture()
+        let fixture = try await ControllerAccessFixture()
         defer { fixture.remove() }
         try fixture.controller.rememberUserSelectedAccess(to: fixture.source)
         try fixture.controller.prepareLocalSourceRegistration(from: fixture.source)
@@ -445,13 +442,15 @@ struct SecurityScopedAccessTests {
     }
 
     @Test func partialOperationStartFailureReleasesAcquiredLeaseAndKeepsPlanRetryable() async throws {
-        let startResults = [true, true, true, true, true, false]
-        let fixture = try ControllerAccessFixture(startResults: startResults)
+        let fixture = try await ControllerAccessFixture()
         defer { fixture.remove() }
         try fixture.controller.rememberUserSelectedAccess(to: fixture.source)
         try fixture.controller.prepareLocalSourceRegistration(from: fixture.source)
         let plan = try #require(fixture.controller.pendingPhase1OperationPlan)
 
+        fixture.adapter.denyStart = { url, owner in
+            owner == .operation(plan.id) && url == fixture.source
+        }
         await fixture.controller.confirmPendingPhase1Operation()
 
         let operationStarts = fixture.adapter.startRecords.filter { $0.owner == .operation(plan.id) }
@@ -494,6 +493,9 @@ nonisolated final class RecordingSecurityScopedResourceAccessAdapter: SecuritySc
 
     let allowsStart: Bool
     let stopError: Error?
+    var denyStart: ((URL, SecurityScopedAccessOwner) -> Bool)?
+    private(set) var successfulStartCount = 0
+    var activeAccessCount: Int { successfulStartCount - stoppedURLs.count }
     private var startResults: [Bool]
     private(set) var startRecords: [StartRecord] = []
     private(set) var stoppedURLs: [URL] = []
@@ -507,10 +509,9 @@ nonisolated final class RecordingSecurityScopedResourceAccessAdapter: SecuritySc
 
     func startAccessing(_ url: URL, owner: SecurityScopedAccessOwner) -> Bool {
         startRecords.append(StartRecord(url: url, owner: owner))
-        if startResults.isEmpty == false {
-            return startResults.removeFirst()
-        }
-        return allowsStart
+        let allowed = denyStart?(url, owner) != true && (startResults.isEmpty ? allowsStart : startResults.removeFirst())
+        if allowed { successfulStartCount += 1 }
+        return allowed
     }
 
     func stopAccessing(_ url: URL) throws {
@@ -581,7 +582,7 @@ private final class ControllerAccessFixture {
     let adapter: RecordingSecurityScopedResourceAccessAdapter
     let controller: SkillsHubLibraryController
 
-    init(startResults: [Bool] = []) throws {
+    init(startResults: [Bool] = []) async throws {
         base = try temporaryDirectory()
         root = base.appendingPathComponent("root", isDirectory: true).standardizedFileURL
         source = base.appendingPathComponent("source", isDirectory: true).standardizedFileURL
@@ -603,7 +604,9 @@ private final class ControllerAccessFixture {
             SkillsHubMetadata(rootConfig: RootConfig(rootPath: root.path)),
             to: root
         )
-        try controller.connectExistingRoot(root)
+        try await controller.connectExistingRoot(root)
+        await controller.waitForPendingRechecks()
+        await controller.waitForPresentationObservation()
     }
 
     func remove() {

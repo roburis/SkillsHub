@@ -583,10 +583,10 @@ struct AgentDirectoryAuditTests {
         #expect(result.issues.map(\.agentID) == ["custom-orphan"])
     }
 
-    @Test func builtInAgentsRemainConfigurableWithoutInstallationEvidence() throws {
+    @Test func builtInAgentsRemainConfigurableWithoutInstallationEvidence() async throws {
         let root = try temporaryDirectory()
         let controller = SkillsHubLibraryController(agentAuditService: AgentDirectoryAuditService(installationPresence: { _, _ in .absent }), agentEnvironment: [:])
-        try connectInitializedTestRoot(controller, at: root)
+        try await connectInitializedTestRoot(controller, at: root)
 
         #expect(controller.visibleInstalledAgentDescriptors.map(\.id) == ["claudeCode", "codex"])
         #expect(controller.visibleInstalledAgentDescriptors.allSatisfy { $0.isDetected == false })
@@ -594,7 +594,7 @@ struct AgentDirectoryAuditTests {
     }
 
     @Test func agentDirectoryChangesOnlyAfterOldRelationsAreClear() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
         let oldDirectory = try #require(fixture.targets[.codex])
         let newDirectory = try temporaryDirectory()
         try fixture.controller.rememberUserSelectedAccess(to: newDirectory)
@@ -612,7 +612,7 @@ struct AgentDirectoryAuditTests {
 
         let result = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         #expect(result.outcome == .succeeded)
@@ -622,11 +622,11 @@ struct AgentDirectoryAuditTests {
     }
 
     @Test func enabledSelectionWithMissingNodeStillBlocksAgentDirectoryChange() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
         let oldDirectory = try #require(fixture.targets[.codex])
         _ = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: true
         )
         try FileManager.default.removeItem(at: oldDirectory.appendingPathComponent("Writer"))
@@ -657,10 +657,10 @@ struct AgentDirectoryAuditTests {
 
         _ = try await fixture.controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
-            skillID: "writer",
+            assetID: fixture.assetID,
             enabled: false
         )
-        try fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
+        try await fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
         #expect(fixture.controller.agentDirectoryChangeBlockers(agentID: AgentKind.codex.rawValue).isEmpty)
         try await fixture.controller.saveAgentDirectory(
             agentID: AgentKind.codex.rawValue,
@@ -672,7 +672,7 @@ struct AgentDirectoryAuditTests {
     }
 
     @Test func verifiedExternalObjectDoesNotBlockAgentDirectoryChange() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
         let oldDirectory = try #require(fixture.targets[.codex])
         try FileManager.default.createDirectory(
             at: oldDirectory.appendingPathComponent("external-owned", isDirectory: true),
@@ -680,7 +680,7 @@ struct AgentDirectoryAuditTests {
         )
         try localSkillText(name: "External", description: "External skill.").write(
             to: oldDirectory.appendingPathComponent("external-owned/SKILL.md"), atomically: true, encoding: .utf8)
-        try fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
+        try await fixture.controller.auditAgentDirectory(agentID: AgentKind.codex.rawValue)
 
         let blockers = fixture.controller.agentDirectoryChangeBlockers(agentID: AgentKind.codex.rawValue)
         #expect(blockers.isEmpty)
@@ -690,7 +690,7 @@ struct AgentDirectoryAuditTests {
     }
 
     @Test func directoryChangeReauditsOldTargetImmediatelyBeforeSaving() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [.codex])
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
         let oldDirectory = try #require(fixture.targets[.codex])
         let newDirectory = try temporaryDirectory()
         try fixture.controller.rememberUserSelectedAccess(to: newDirectory)
@@ -712,7 +712,7 @@ struct AgentDirectoryAuditTests {
     }
 
     @Test func customAgentDirectoryUsesTheSameChangePreflight() async throws {
-        let fixture = try makeControllerRelationFixture(agents: [])
+        let fixture = try await makeControllerRelationFixture(agents: [])
         let oldDirectory = try temporaryDirectory()
         let newDirectory = try temporaryDirectory()
         try fixture.controller.rememberUserSelectedAccess(to: oldDirectory)

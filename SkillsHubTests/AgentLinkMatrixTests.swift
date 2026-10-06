@@ -3,6 +3,36 @@ import Testing
 @testable import SkillsHub
 
 struct AgentLinkMatrixTests {
+    @Test func presentationSeparatesUnselectedAvailabilityFromRealRelationshipIssues() {
+        var relation = AgentRelationPresentation(
+            relation: AgentRelationIdentity(assetID: UUID(), agentID: "codex", scope: .global),
+            agentDisplayName: "Codex",
+            skillID: "review", skillName: "Review", intendedEnabled: nil,
+            observation: nil, verification: .notVerified, isInFlight: false,
+            canPerformAction: false, unavailableReason: "Permission required",
+            lastOutcome: nil, safeNextStep: "Observe current facts before preparing another action.")
+        for intent in [Bool?.none, false] {
+            relation.intendedEnabled = intent
+            for verification in [VerificationConclusion.notVerified, .currentlyUnverifiable, .verifiedConsistent] {
+                relation.verification = verification
+                #expect(!relation.hasPresentationIssue)
+            }
+        }
+        relation.intendedEnabled = true
+        #expect(relation.hasPresentationIssue)
+        relation.unavailableReason = nil
+        relation.verification = .currentlyUnverifiable
+        #expect(relation.presentationStatusSymbol == "questionmark.circle.fill")
+        relation.verification = .drifted
+        relation.observation = .vacant
+        #expect(relation.presentationStatusSymbol == "exclamationmark.triangle.fill")
+        relation.intendedEnabled = false
+        #expect(relation.hasPresentationIssue, "A verified mismatch remains a real issue after disabling")
+        relation.verification = .notVerified
+        relation.observation = .brokenSymbolicLink
+        #expect(relation.hasPresentationIssue)
+    }
+
     @Test(arguments: [AgentKind.codex, .claudeCode])
     func authorizedTargetQualifiesWithoutInstallationEvidence(_ agent: AgentKind) {
         let target = URL(fileURLWithPath: "/authorized/\(agent.rawValue)/skills", isDirectory: true)

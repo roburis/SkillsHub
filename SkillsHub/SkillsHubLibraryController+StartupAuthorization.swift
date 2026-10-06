@@ -1,7 +1,8 @@
 import Foundation
 
 extension SkillsHubLibraryController {
-    func startupAuthorizationRequest() throws -> StartupAuthorizationRequest? {
+    func startupAuthorizationRequest() async throws -> StartupAuthorizationRequest? {
+        await refreshStartupAgentPathFacts()
         var targets: [StartupAuthorizationTarget] = []
         if let defaultRootTarget = defaultRootAuthorizationTargetIfNeeded() {
             targets.append(defaultRootTarget)
@@ -13,7 +14,7 @@ extension SkillsHubLibraryController {
         return StartupAuthorizationRequest(targets: targets)
     }
 
-    func completeStartupAuthorization(for target: StartupAuthorizationTarget, selectedURL: URL) throws {
+    func completeStartupAuthorization(for target: StartupAuthorizationTarget, selectedURL: URL) async throws {
         let normalizedSelection = selectedURL.standardizedFileURL
         let normalizedAuthorizationURL = target.authorizationURL.standardizedFileURL
         guard normalizedSelection.path == normalizedAuthorizationURL.path else {
@@ -24,20 +25,31 @@ extension SkillsHubLibraryController {
         try rememberUserSelectedAccess(to: normalizedSelection)
         switch target.kind {
         case .defaultRoot:
-            _ = try inspectSelectedRoot(normalizedSelection)
+            _ = try await inspectSelectedRoot(normalizedSelection)
         case .builtInAgent:
-            refreshAgentAccessAfterStartupAuthorization()
+            await refreshAgentAccessAfterStartupAuthorization()
             try endSelectedInspectionAccess(to: normalizedSelection)
         }
     }
 
-    func authorizationTarget(for agent: AgentKind) throws -> StartupAuthorizationTarget? {
-        try builtInAgentAuthorizationTargets().first {
+    func authorizationTarget(for agent: AgentKind) async throws -> StartupAuthorizationTarget? {
+        await refreshStartupAgentPathFacts()
+        return try builtInAgentAuthorizationTargets().first {
             guard case .builtInAgent(let targetAgent) = $0.kind else {
                 return false
             }
             return targetAgent == agent
         }
+    }
+
+    private func refreshStartupAgentPathFacts() async {
+        let root = rootURL
+        let overrides = agentPathOverrides
+        let snapshot = rootSnapshot
+        let facts = await Self.inspectAgentPathSettings(detections: agentDetections,
+            home: agentHomeDirectory, environment: agentEnvironment, overrides: overrides, fileManager: fileManager)
+        guard !Task.isCancelled, rootURL == root, rootSnapshot == snapshot, agentPathOverrides == overrides else { return }
+        agentPathSettingsSnapshot = facts
     }
 
     private func defaultRootAuthorizationTargetIfNeeded() -> StartupAuthorizationTarget? {
@@ -78,14 +90,14 @@ extension SkillsHubLibraryController {
         }
     }
 
-    private func refreshAgentAccessAfterStartupAuthorization() {
+    private func refreshAgentAccessAfterStartupAuthorization() async {
         guard rootURL != nil else {
             return
         }
-        refreshAgentLightScan()
+        await refreshAgentLightScan()
         // Re-subscribe so the newly authorized Agent directory is watched, then re-scan
         // the authorized range.
-        subscribeAndInitialScan()
+        await subscribeAndInitialScan()
         setStatus("Updated startup access.")
         errorMessage = nil
     }
