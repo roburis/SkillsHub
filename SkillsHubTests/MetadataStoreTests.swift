@@ -162,15 +162,35 @@ struct MetadataStoreTests {
         #expect(loaded == metadata)
         #expect(object["enablementIntents"] != nil)
         #expect(object["targetObservations"] == nil)
-        // schema 4 makes managedRelationEvidence an authoritative field; with none set it round-trips
-        // as an empty array rather than leaking any local-state evidence into the public JSON.
-        #expect(object["managedRelationEvidence"] as? [Any] != nil)
-        #expect((object["managedRelationEvidence"] as? [Any])?.isEmpty == true)
-        #expect(loaded.managedRelationEvidence.isEmpty)
+        #expect(object["managedRelationEvidence"] == nil)
         #expect(object["verificationRecords"] == nil)
     }
 
-    @Test func localStateRoundTripsObservationOwnershipAndVerificationWithoutChangingPublicIntent() throws {
+    @Test func legacyCreationEvidenceIsIgnoredWithoutRebuildingManagementRecords() throws {
+        let root = try temporaryDirectory()
+        let store = SkillsHubMetadataStore()
+        let relation = canonicalRelation()
+        let metadata = SkillsHubMetadata(
+            generation: 7, rootConfig: canonicalRootConfig(path: root.path),
+            installedSkills: [canonicalInstalledSkill(relation: relation)],
+            enablementIntents: [EnablementIntent(assetID: relation.assetID, agentID: relation.agentID,
+                scope: .global, isEnabled: true, generation: 7)]
+        )
+        try store.save(metadata, to: root)
+        let file = store.rootLayout(for: root).skillshubMetadataFile
+        var legacy = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        legacy["managedRelationEvidence"] = ["obsolete-creation-record"]
+        try JSONSerialization.data(withJSONObject: legacy).write(to: file)
+        let snapshot = try store.loadCurrentSnapshot(from: root)
+        #expect(snapshot.metadata == metadata)
+        let committed = try store.commit(at: root, expected: snapshot) { _ in }
+        #expect(committed.metadata.enablementIntents == metadata.enablementIntents)
+        #expect(committed.metadata.installedSkills == metadata.installedSkills)
+        let saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(saved["managedRelationEvidence"] == nil)
+    }
+
+    @Test func localStateRoundTripsObservationAndVerificationWithoutChangingPublicIntent() throws {
         let root = try temporaryDirectory()
         let metadataStore = SkillsHubMetadataStore()
         let localStore = SkillsHubLocalStateStore()
@@ -195,16 +215,6 @@ struct MetadataStoreTests {
             observedAt: Date(timeIntervalSince1970: 123),
             limitation: nil
         )
-        let evidence = ManagedRelationEvidence(
-            relation: relation,
-            linkPath: observation.linkPath,
-            canonicalTargetPath: "/root/local/review",
-            profileID: "skillshub.agent-profile.codex.global",
-            profileVersion: 1,
-            createdAtGeneration: 4,
-            fileIdentity: identity,
-            createdAt: Date(timeIntervalSince1970: 120)
-        )
         let bindings = canonicalBindings(intent: intent, observation: observation)
         let verification = VerificationRecord(
             relation: relation,
@@ -217,7 +227,6 @@ struct MetadataStoreTests {
         )
         let localState = SkillsHubLocalState(
             targetObservations: [observation],
-            managedRelationEvidence: [evidence],
             verificationRecords: [verification]
         )
         let metadata = SkillsHubMetadata(
@@ -309,7 +318,6 @@ struct MetadataStoreTests {
         #expect(try Data(contentsOf: publicFile) == publicBytes)
         #expect(try metadataStore.load(from: root).enablementIntents == [intent])
     }
-
 
     @Test(arguments: [UInt64(0), UInt64.max])
     func metadataCommitUsesGenerationAndDigestCAS(generation: UInt64) throws {
@@ -418,18 +426,6 @@ struct MetadataStoreTests {
 
     /// Each unexplainable mapping must produce its own blocking reason naming the
     /// object, and none of them may be silently repaired, merged or renumbered.
-
-
-
-
-
-
-
-
-
-
-
-
 
     @Test(arguments: MetadataWritePhase.allCases)
     func metadataWriteFaultsPreserveOriginalBytesOrExplicitRecovery(phase: MetadataWritePhase) throws {
@@ -643,7 +639,7 @@ struct MetadataStoreTests {
         #expect(try Data(contentsOf: file) == originalData)
     }
 
-    @Test func currentFormatRoundTripsIdentityGenerationStableNameIntentsAndOwnershipEvidence() throws {
+    @Test func currentFormatRoundTripsIdentityGenerationStableNameAndIntents() throws {
         let root = try temporaryDirectory()
         let store = SkillsHubMetadataStore()
         let relation = canonicalRelation()
@@ -665,7 +661,6 @@ struct MetadataStoreTests {
             assetID: relation.assetID, agentID: relation.agentID,
             scope: relation.scope, isEnabled: true, generation: 7
         )
-        let evidence = canonicalEvidence(relation: relation)
         let metadata = SkillsHubMetadata(
             logicalRevision: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
             generation: 7,
@@ -673,9 +668,7 @@ struct MetadataStoreTests {
             sources: [source],
             availableSkills: [candidate],
             installedSkills: [asset],
-            enablementIntents: [intent],
-            managedRelationEvidence: [evidence]
-        )
+            enablementIntents: [intent])
 
         try store.save(metadata, to: root)
         let loaded = try store.load(from: root)
@@ -689,12 +682,11 @@ struct MetadataStoreTests {
         #expect(loaded.generation == 7)
         #expect(loaded.installedSkills.first?.stableLinkName == "review-link")
         #expect(loaded.enablementIntents == [intent])
-        #expect(loaded.managedRelationEvidence == [evidence])
         #expect(loaded.sources.first?.baselineManifest == canonicalBaselineManifest())
         #expect(object["schemaVersion"] as? Int == 4)
     }
 
-    @Test(arguments: ["duplicateEvidence", "danglingEvidence", "illegalStableName", "escapingBaselinePath", "absoluteBaselinePath", "creationIdentity", "creationTarget"])
+    @Test(arguments: ["illegalStableName", "escapingBaselinePath", "absoluteBaselinePath"])
     func currentFormatRejectsUnprovenIdentityReferencesAndOutOfBoundsPaths(defect: String) throws {
         let root = try metadataTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -703,17 +695,7 @@ struct MetadataStoreTests {
         var source = SkillSource(kind: .localDirectory, name: "Source", localPath: "/source")
         var asset = canonicalInstalledSkill(relation: relation)
         asset.sourceID = source.id
-        var evidence = [canonicalEvidence(relation: relation)]
         switch defect {
-        case "creationIdentity":
-            evidence[0].fileIdentity.fileNumber += 1
-        case "creationTarget":
-            evidence[0].canonicalTargetPath = "/root/local/other"
-        case "duplicateEvidence":
-            evidence.append(canonicalEvidence(relation: relation))
-        case "danglingEvidence":
-            let orphan = AgentRelationIdentity(assetID: UUID(), agentID: AgentKind.codex.rawValue, scope: .global)
-            evidence = [canonicalEvidence(relation: orphan)]
         case "illegalStableName":
             asset.stableLinkName = "../escape"
         case "escapingBaselinePath":
@@ -727,9 +709,7 @@ struct MetadataStoreTests {
             generation: 1,
             rootConfig: canonicalRootConfig(path: root.path),
             sources: [source],
-            installedSkills: [asset],
-            managedRelationEvidence: evidence
-        )
+            installedSkills: [asset])
         let file = store.rootLayout(for: root).skillshubMetadataFile
         try store.ensureRootLayout(at: root)
         try metadataBytes(metadata).write(to: file, options: [.atomic])
@@ -833,35 +813,6 @@ private func canonicalInstalledSkill(relation: AgentRelationIdentity) -> Install
         currentRevision: "revision-v1",
         manifestDigest: "manifest-v1",
         managedGeneration: 4
-    )
-}
-
-private func canonicalEvidence(relation: AgentRelationIdentity) -> ManagedRelationEvidence {
-    var node = stat()
-    node.st_dev = 11
-    node.st_ino = 29
-    node.st_mode = mode_t(S_IFLNK)
-    node.st_birthtimespec.tv_sec = 120
-    let nodeIdentity = LinkNodeIdentity(node)
-    node.st_ino = 28
-    node.st_mode = mode_t(S_IFDIR)
-    let parentIdentity = LinkNodeIdentity(node)
-    node.st_ino = 30
-    let operationID = UUID()
-    return ManagedRelationEvidence(
-        relation: relation,
-        linkPath: "/agent/review",
-        canonicalTargetPath: "/root/local/review",
-        profileID: "skillshub.agent-profile.codex.global",
-        profileVersion: 1,
-        createdAtGeneration: 4,
-        fileIdentity: TargetFileIdentity(volumeNumber: 11, fileNumber: 29),
-        createdAt: Date(timeIntervalSince1970: 120),
-        creation: LinkCreationEvidence(
-            operationID: operationID, stagingPath: "/agent/.skillshub-create-\(operationID.uuidString)/link",
-            parentIdentity: parentIdentity, stagingDirectoryIdentity: LinkNodeIdentity(node),
-            nodeIdentity: nodeIdentity, linkText: "/root/local/review"
-        )
     )
 }
 

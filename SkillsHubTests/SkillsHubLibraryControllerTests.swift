@@ -500,8 +500,6 @@ struct SkillsHubLibraryControllerTests {
         #expect(enabledSnapshot.metadata.enablementIntents.count == 1)
         #expect(enabledSnapshot.metadata.enablementIntents.first?.agentID == AgentKind.codex.rawValue)
         #expect(enabledSnapshot.metadata.enablementIntents.first?.isEnabled == true)
-        #expect(enabledSnapshot.metadata.managedRelationEvidence.count == 1)
-        #expect(try SkillsHubLocalStateStore().load(from: root).managedRelationEvidence.isEmpty)
 
         let repeated = try await controller.setGlobalAgentEnablement(
             agentID: AgentKind.codex.rawValue,
@@ -520,7 +518,6 @@ struct SkillsHubLibraryControllerTests {
         #expect((try? LinkNodeIdentity.read(at: link)) == nil)
         let disabledSnapshot = try SkillsHubMetadataStore().loadCurrentSnapshot(from: root)
         #expect(disabledSnapshot.metadata.enablementIntents.first?.isEnabled == false)
-        #expect(disabledSnapshot.metadata.managedRelationEvidence.isEmpty)
         #expect(controller.agentLinks.isEmpty)
     }
 
@@ -779,7 +776,9 @@ struct SkillsHubLibraryControllerTests {
         #expect(results.filter { $0.outcome == .replayed }.count == 1)
         let snapshot = try SkillsHubMetadataStore().loadCurrentSnapshot(from: fixture.root)
         #expect(snapshot.metadata.enablementIntents.count == 1)
-        let creation = try #require(snapshot.metadata.managedRelationEvidence.first?.creation)
+        let operation = try #require(RelationActionOperationRecordStore().recoveryOperationIDs(rootURL: fixture.root).first)
+        let record = try RelationActionOperationRecordStore().load(operationID: operation, rootURL: fixture.root)
+        let creation = try #require(record.creation)
         let stagingDirectory = URL(fileURLWithPath: creation.stagingPath).deletingLastPathComponent()
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.targets[.codex]!.path).sorted()
             == ["Writer"])
@@ -840,13 +839,10 @@ struct SkillsHubLibraryControllerTests {
         #expect(claudeLink.resolvingSymlinksInPath().standardizedFileURL.path == canonicalSkill.path)
 
         let dualState = fixture.controller.localState
-        let dualEvidence = fixture.controller.rootSnapshot?.metadata.managedRelationEvidence ?? []
+        let dualIntents = fixture.controller.rootSnapshot?.metadata.enablementIntents ?? []
         let dualVerifications = dualState.verificationRecords
-        #expect(Set(dualEvidence.map(\.profileID)) == [
-            "skillshub.agent-profile.codex.global@1",
-            "skillshub.agent-profile.claude-code.global@1"
-        ])
-        #expect(Set(dualEvidence.map(\.canonicalTargetPath)) == [canonicalSkill.path])
+        #expect(Set(dualIntents.filter(\.isEnabled).map(\.agentID)) == ["codex", "claudeCode"])
+        #expect(Set(dualState.targetObservations.compactMap(\.resolvedTargetPath)) == [canonicalSkill.path])
         #expect(Set(dualVerifications.map(\.relation.agentID)) == [
             AgentKind.codex.rawValue,
             AgentKind.claudeCode.rawValue
@@ -1048,7 +1044,6 @@ struct SkillsHubLibraryControllerTests {
         #expect(fixture.controller.entryAddress(for: item).status != nil) // A historical record alone does not verify SKILL.md.
         let otherObservation = fixture.controller.localState.targetObservations.first { $0.relation.agentID != agent.rawValue }
         let otherVerification = fixture.controller.localState.verificationRecords.first { $0.relation.agentID != agent.rawValue }
-        let ownership = fixture.controller.rootSnapshot?.metadata.managedRelationEvidence ?? []
         let intents = fixture.controller.rootSnapshot?.metadata.enablementIntents
         let metadataURL = fixture.root.appendingPathComponent(".skillshub.json")
         let metadata = try Data(contentsOf: metadataURL)
@@ -1072,8 +1067,6 @@ struct SkillsHubLibraryControllerTests {
         #expect(fixture.controller.rootSnapshot?.metadata.enablementIntents == intents)
         #expect(try Data(contentsOf: metadataURL) == metadata)
         #expect(try Data(contentsOf: link) == externalContent)
-        #expect(fixture.controller.rootSnapshot?.metadata.managedRelationEvidence == ownership)
-        #expect(fixture.controller.localState.managedRelationEvidence.isEmpty)
         #expect(fixture.controller.localState.targetObservations.first { $0.relation.agentID != agent.rawValue } == otherObservation)
         #expect(fixture.controller.localState.verificationRecords.first { $0.relation.agentID != agent.rawValue } == otherVerification)
         let persisted = try SkillsHubLocalStateStore().load(from: fixture.root)
@@ -1082,7 +1075,7 @@ struct SkillsHubLibraryControllerTests {
         encoder.outputFormatting = [.sortedKeys]
         #expect(try encoder.encode(persisted) == encoder.encode(fixture.controller.localState))
         let observation = try #require(persisted.targetObservations.first { $0.relation.agentID == agent.rawValue })
-        #expect(observation.fileIdentity != ownership.first { $0.relation.agentID == agent.rawValue }?.fileIdentity)
+        #expect(observation.nodeKind == .regularFile)
         #expect(persisted.verificationRecords.first { $0.relation.agentID == agent.rawValue }?.bindings.observationDigest == observation.digest)
         fixture.controller.agentDirectoryAuditFailures[agent.rawValue] = "Access unavailable"
         let unavailable = try #require(fixture.controller.relationPresentations(for: skill).first { $0.relation.agentID == agent.rawValue })
@@ -1103,7 +1096,6 @@ struct SkillsHubLibraryControllerTests {
         let link = target.appendingPathComponent("Writer")
         let metadataURL = fixture.root.appendingPathComponent(".skillshub.json")
         let metadata = try Data(contentsOf: metadataURL)
-        let ownership = fixture.controller.rootSnapshot?.metadata.managedRelationEvidence ?? []
         let node: TargetNodeKind
         if change != "unchanged" && change != "permission" {
             try FileManager.default.moveItem(at: link, to: fixture.root.appendingPathComponent("original-link"))
@@ -1124,7 +1116,7 @@ struct SkillsHubLibraryControllerTests {
         default: node = .symbolicLink
         }
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.path) }
-        let expected: VerificationConclusion = change == "unchanged" ? .verifiedConsistent
+        let expected: VerificationConclusion = change == "unchanged" || change == "replacement" ? .verifiedConsistent
             : change == "permission" ? .currentlyUnverifiable : .drifted
 
         await fixture.controller.refreshAgentLightScan()
@@ -1157,8 +1149,6 @@ struct SkillsHubLibraryControllerTests {
         if change != "permission" {
             #expect(try encoder.encode(persisted) == encoder.encode(fixture.controller.localState))
         }
-        #expect(fixture.controller.rootSnapshot?.metadata.managedRelationEvidence == ownership)
-        #expect(fixture.controller.localState.managedRelationEvidence.isEmpty)
         #expect(try Data(contentsOf: metadataURL) == metadata)
 
         if change == "permission" {
@@ -1334,7 +1324,6 @@ struct SkillsHubLibraryControllerTests {
         #expect(first.id != second.id)
         #expect(controller.rootSnapshot?.metadata.agents.filter { $0.displayName == "Reviewer" }.count == 2)
         let intentsBefore = controller.rootSnapshot?.metadata.enablementIntents
-        let evidenceBefore = controller.rootSnapshot?.metadata.managedRelationEvidence
         try await controller.saveAgentDisplayFields(
             agentID: first.id,
             displayName: "Reviewer Renamed",
@@ -1347,7 +1336,6 @@ struct SkillsHubLibraryControllerTests {
         #expect(controller.rootSnapshot?.metadata.agents.first { $0.id == first.id }?.skillsDirectory == firstDirectory.path)
         #expect(controller.rootSnapshot?.metadata.agents.first { $0.id == second.id }?.displayName == "Reviewer")
         #expect(controller.rootSnapshot?.metadata.enablementIntents == intentsBefore)
-        #expect(controller.rootSnapshot?.metadata.managedRelationEvidence == evidenceBefore)
     }
 
     @Test func localSourceAddRequiresRoot() async throws {

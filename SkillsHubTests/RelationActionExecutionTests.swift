@@ -5,7 +5,7 @@ import Testing
 
 struct RelationActionExecutionTests {
     @MainActor
-    @Test func unverifiedBrokenRelationCanDeleteNodeThenCancelOnlyItsRecord() async throws {
+    @Test func brokenRelationCanDeleteNodeThenCancelOnlyItsRecord() async throws {
         let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
         let controller = fixture.controller
         for agent in ["codex", "claudeCode"] {
@@ -13,16 +13,11 @@ struct RelationActionExecutionTests {
         }
         let asset = try #require(controller.installedSkills.first)
         try FileManager.default.removeItem(at: URL(fileURLWithPath: asset.installedPath))
-        let snapshot = try #require(controller.rootSnapshot)
-        controller.rootSnapshot = try SkillsHubMetadataStore().commit(at: fixture.root, expected: snapshot) { metadata in
-            let index = metadata.managedRelationEvidence.firstIndex { $0.relation.agentID == "codex" }!
-            metadata.managedRelationEvidence[index].creation = nil
-        }
         try await controller.reloadFromDisk()
         try await controller.auditAgentDirectory(agentID: "codex")
         let relation = try #require(controller.relationPresentations(for: asset).first { $0.relation.agentID == "codex" })
         #expect(relation.observation == .brokenSymbolicLink)
-        #expect(relation.ownership == .brokenLink)
+        #expect(relation.ownership == .exactManagedLink)
         let before = try #require(controller.rootSnapshot)
         let plan = try controller.prepareBrokenLinkDeletion(relation: relation.relation)
         let result = try await controller.deleteBrokenLink(using: plan)
@@ -38,7 +33,6 @@ struct RelationActionExecutionTests {
         #expect(cancelled.execution?.fileEvents.isEmpty == true)
         #expect(controller.rootSnapshot?.metadata.enablementIntents.first { $0.agentID == "codex" }?.isEnabled == false)
         #expect(controller.rootSnapshot?.metadata.enablementIntents.first { $0.agentID == "claudeCode" }?.isEnabled == true)
-        #expect(controller.rootSnapshot?.metadata.managedRelationEvidence.contains { $0.relation.agentID == "codex" } == false)
         #expect(controller.relationPresentations(for: asset).first { $0.relation == relation.relation }?.verification == .verifiedConsistent)
         try await controller.reloadFromDisk()
         #expect(controller.rootSnapshot?.metadata.enablementIntents.first { $0.agentID == "codex" }?.isEnabled == false)
@@ -517,7 +511,7 @@ struct RelationActionExecutionTests {
     }
 
     @Test(arguments: [RelationLinkPrimitiveHookPoint.afterCreate, .beforePublish, .afterPublish])
-    func sameTargetReplacementNeverAcquiresOwnership(_ checkpoint: RelationLinkPrimitiveHookPoint) throws {
+    func sameTargetReplacementDuringCreationCannotCompleteTheOperation(_ checkpoint: RelationLinkPrimitiveHookPoint) throws {
         let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
         let originalMetadata = try fixture.metadataStore.loadCurrentSnapshot(from: fixture.rootURL)
         let authorization = fixture.authorization(desiredEnabled: true)
@@ -537,7 +531,7 @@ struct RelationActionExecutionTests {
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: replaced.path) == fixture.canonicalURL.path)
         #expect(try LinkNodeIdentity.read(at: replaced) != creation.nodeIdentity)
         #expect(try LinkNodeIdentity.read(at: replaced.appendingPathExtension("original")) == creation.nodeIdentity)
-        #expect(try fixture.currentInspection().classification == (checkpoint == .afterPublish ? .externalLink : .vacant))
+        #expect(try fixture.currentInspection().classification == (checkpoint == .afterPublish ? .exactManagedLink : .vacant))
     }
 
     @Test(arguments: [RelationLinkPrimitiveHookPoint.beforeCreate, .beforePublish], ["file", "directory", "same-target-link"])
@@ -553,7 +547,6 @@ struct RelationActionExecutionTests {
         })).execute(authorization: fixture.authorization(desiredEnabled: true), rootURL: fixture.rootURL,
                     currentInstallation: { AgentInstallationEvidence(agent: .codex, digest: "fixture-installation") })
         #expect(result.status == .unknown)
-        #expect(try fixture.metadataStore.load(from: fixture.rootURL).managedRelationEvidence.isEmpty)
         switch kind {
         case "file": #expect(try String(contentsOf: fixture.linkURL, encoding: .utf8) == "external")
         case "directory": #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.linkURL.path).isEmpty)
@@ -574,7 +567,6 @@ struct RelationActionExecutionTests {
                     currentInstallation: { AgentInstallationEvidence(agent: .codex, digest: "fixture-installation") })
         #expect(result.status == (checkpoint == .beforeCreate ? .blocked : .unknown))
         #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.targetURL.path) == ["sentinel"])
-        #expect(try fixture.metadataStore.load(from: fixture.rootURL).managedRelationEvidence.isEmpty)
         #expect(FileManager.default.fileExists(atPath: originalParent.path))
     }
 
@@ -606,7 +598,6 @@ struct RelationActionExecutionTests {
             == (checkpoint == .afterPublish ? .completed : .notCompleted))
         #expect(try targetTree(at: fixture.targetURL) == beforeTree)
         #expect(try fixture.metadataStore.loadCurrentSnapshot(from: fixture.rootURL).metadataDigest == beforeMetadata)
-        #expect(try fixture.metadataStore.load(from: fixture.rootURL).managedRelationEvidence.isEmpty)
     }
 
     @Test func unavailableCreationRecordPreventsPublication() throws {
@@ -621,7 +612,6 @@ struct RelationActionExecutionTests {
                     currentInstallation: { AgentInstallationEvidence(agent: .codex, digest: "fixture-installation") })
         #expect(result.status == .unknown)
         #expect(try fixture.currentInspection().classification == .vacant)
-        #expect(try fixture.metadataStore.load(from: fixture.rootURL).managedRelationEvidence.isEmpty)
         #expect(result.fileEvents.contains { if case .retainedForRecovery = $0 { true } else { false } })
     }
 
@@ -635,9 +625,9 @@ struct RelationActionExecutionTests {
         }).execute(authorization: fixture.authorization(desiredEnabled: true), rootURL: fixture.rootURL,
                    currentInstallation: { AgentInstallationEvidence(agent: .codex, digest: "fixture-installation") })
         #expect(result.status == .unknown)
-        #expect(try fixture.currentInspection().classification == .externalLink)
+        #expect(try fixture.currentInspection().classification == .exactManagedLink)
         if checkpoint == .beforeMetadataCAS {
-            #expect(try fixture.metadataStore.load(from: fixture.rootURL).managedRelationEvidence.isEmpty)
+            #expect(try fixture.metadataStore.load(from: fixture.rootURL).enablementIntents.first?.isEnabled == false)
         }
     }
 
@@ -741,7 +731,7 @@ struct RelationActionExecutionTests {
     }
 
     @Test(arguments: creationVolumes)
-    func enableCreatesOneExactLinkAndCommitsOnlyItsIntentAndEvidence(_ agentParent: String?) throws {
+    func enableCreatesOneExactLinkAndCommitsOnlyItsIntent(_ agentParent: String?) throws {
         let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false, agentParent: agentParent)
         let otherIntent = try #require(fixture.metadataStore.load(from: fixture.rootURL).enablementIntents.last)
 
@@ -759,21 +749,12 @@ struct RelationActionExecutionTests {
         #expect(metadata.installedSkills.first?.stableLinkName == "review")
         #expect(metadata.enablementIntents.first { $0.id == fixture.relation.id }?.isEnabled == true)
         #expect(metadata.enablementIntents.first { $0.id == otherIntent.id } == otherIntent)
-        let evidence = try #require(metadata.managedRelationEvidence.first { $0.relation == fixture.relation })
-        let observedIdentity = try #require(
-            RelationOwnershipInspector().inspect(
-                linkURL: fixture.linkURL,
-                relation: fixture.relation,
-                canonicalTargetPath: fixture.canonicalURL.path,
-                evidence: evidence
-            ).observation.fileIdentity
-        )
-        #expect(evidence.fileIdentity == observedIdentity)
-        let creation = try #require(evidence.creation)
+        let operation = try #require(RelationActionOperationRecordStore().recoveryOperationIDs(rootURL: fixture.rootURL).first)
+        let record = try RelationActionOperationRecordStore().load(operationID: operation, rootURL: fixture.rootURL)
+        let creation = try #require(record.creation)
         #expect(creation.linkText == fixture.canonicalURL.path)
         #expect(try creation.nodeIdentity == LinkNodeIdentity.read(at: fixture.linkURL))
         #expect(try creation.parentIdentity == LinkNodeIdentity.read(at: fixture.targetURL))
-        let record = try RelationActionOperationRecordStore().load(operationID: creation.operationID, rootURL: fixture.rootURL)
         Attachment.record(try JSONEncoder().encode(record), named: "creation-publication-record-\(creation.parentIdentity.file.volumeNumber).json")
         #expect(record.creation == creation)
         #expect(record.preparationPaths.contains(creation.stagingPath))
@@ -796,7 +777,6 @@ struct RelationActionExecutionTests {
         }
         let local = try fixture.localStateStore.load(from: fixture.rootURL)
         #expect(local.verificationRecords.first { $0.relation == fixture.relation }?.conclusion == .verifiedConsistent)
-        #expect(local.managedRelationEvidence.isEmpty)
         #expect(fixture.quarantineEntries().isEmpty)
     }
 
@@ -998,7 +978,6 @@ struct RelationActionExecutionTests {
         #expect(try directoryManifest(at: content) == canonicalManifest)
         let metadata = try fixture.metadataStore.load(from: fixture.rootURL)
         #expect(metadata.enablementIntents.first { $0.agentID == agent.rawValue }?.isEnabled == false)
-        #expect(metadata.managedRelationEvidence.isEmpty)
         let record = try RelationActionOperationRecordStore().load(operationID: authorization.actionID, rootURL: fixture.rootURL)
         #expect(record.removal != nil)
         #expect(record.isolationPaths.count == 1)
@@ -1054,8 +1033,7 @@ struct RelationActionExecutionTests {
     @Test(arguments: [
         RelationExecutionFixture.Node.regularFile,
         .externalLink,
-        .brokenLink,
-        .unownedLink
+        .brokenLink
     ], [AgentKind.codex, .claudeCode])
     fileprivate func conflictingNodesAreBlockedWithZeroProductWrite(node: RelationExecutionFixture.Node, agent: AgentKind) throws {
         for desiredEnabled in [true, false] {
@@ -1077,6 +1055,23 @@ struct RelationActionExecutionTests {
             #expect(try Data(contentsOf: fixture.localStateStore.localStateFile(for: fixture.rootURL)) == localBytes)
             #expect(try targetTree(at: fixture.targetURL) == beforeTree)
         }
+    }
+
+    @Test(arguments: [AgentKind.codex, .claudeCode])
+    func correctlyLocatedExistingLinkCanBeEnabledAndDisabledWithoutCreationHistory(_ agent: AgentKind) throws {
+        let fixture = try RelationExecutionFixture(node: .unownedLink, intentEnabled: false, agent: agent)
+        let identity = try LinkNodeIdentity.read(at: fixture.linkURL)
+        let enabled = fixture.executor().execute(authorization: fixture.authorization(desiredEnabled: true),
+            rootURL: fixture.rootURL, currentInstallation: { nil })
+        #expect(enabled.status == .succeeded)
+        #expect(enabled.fileEvents.isEmpty)
+        #expect(try LinkNodeIdentity.read(at: fixture.linkURL) == identity)
+        #expect(enabled.verification?.conclusion == .verifiedConsistent)
+        let disabled = fixture.executor().execute(authorization: fixture.authorization(desiredEnabled: false, usingCurrentFacts: true),
+            rootURL: fixture.rootURL, currentInstallation: { nil })
+        #expect(disabled.status == .succeeded)
+        #expect(try fixture.currentInspection().classification == .vacant)
+        #expect(try String(contentsOf: fixture.canonicalURL.appendingPathComponent("SKILL.md"), encoding: .utf8) == "canonical")
     }
 
     @Test(arguments: [AgentKind.codex, .claudeCode])
@@ -1367,7 +1362,7 @@ struct RelationActionExecutionTests {
         )
 
         #expect(recovery.components.first { $0.kind == .metadata }?.state == .notCompleted)
-        #expect(recovery.components.first { $0.kind == .linkNode }?.state == .unknown)
+        #expect(recovery.components.first { $0.kind == .linkNode }?.state == .completed)
         #expect(recovery.components.first { $0.kind == .targetDirectory }?.state == .completed)
         #expect(recovery.components.first { $0.kind == .operationMaterials }?.state == .completed)
         #expect(try Data(contentsOf: metadataFile) == metadataBeforeRecovery)
@@ -1409,8 +1404,6 @@ struct RelationActionExecutionTests {
         #expect(result.status == .succeeded)
         #expect(result.metadataDelta == .committed)
         let metadata = try fixture.metadataStore.load(from: fixture.rootURL)
-        #expect(metadata.managedRelationEvidence.contains { $0.relation == fixture.relation })
-        #expect(try fixture.localStateStore.load(from: fixture.rootURL).managedRelationEvidence.isEmpty)
     }
 }
 
@@ -1495,16 +1488,15 @@ private final class RelationExecutionFixture: @unchecked Sendable {
         try Data("canonical".utf8).write(to: canonicalURL.appendingPathComponent("SKILL.md"))
 
         let external = container.appendingPathComponent("external", isDirectory: true)
-        var creation: LinkCreationEvidence?
         switch node {
         case .vacant:
             break
         case .managed, .managedBroken:
-            creation = try AgentLinkService().createManagedLink(
+            _ = try AgentLinkService().createManagedLink(
                 at: linkURL, linkText: canonicalURL.path, operationID: UUID(),
                 expectedParentIdentity: LinkNodeIdentity.read(at: targetURL),
                 recordPreparation: { _ in }, recordCreation: { _ in }, onCreated: { _ in }
-            ).creation
+            )
             if node == .managedBroken {
                 try FileManager.default.moveItem(at: canonicalURL, to: container.appendingPathComponent("preserved-target"))
             }
@@ -1568,46 +1560,11 @@ private final class RelationExecutionFixture: @unchecked Sendable {
         let initial = try inspector.inspect(
             linkURL: linkURL,
             relation: relation,
-            canonicalTargetPath: canonicalURL.path,
-            evidence: nil
-        )
-        let evidence: ManagedRelationEvidence?
-        if node == .managed || node == .managedBroken {
-            evidence = ManagedRelationEvidence(
-                relation: relation,
-                linkPath: linkURL.path,
-                canonicalTargetPath: canonicalURL.path,
-                profileID: profileID,
-                profileVersion: 1,
-                createdAtGeneration: intent.generation,
-                fileIdentity: try #require(initial.observation.fileIdentity),
-                createdAt: Date(timeIntervalSince1970: 90),
-                creation: creation
-            )
-        } else {
-            evidence = nil
-        }
-        let current = try inspector.inspect(
-            linkURL: linkURL,
-            relation: relation,
-            canonicalTargetPath: canonicalURL.path,
-            evidence: evidence
-        )
-        observation = current.observation
-        ownership = current.classification
-        try localStateStore.save(
-            SkillsHubLocalState(
-                ignoredFindingFingerprints: ["sentinel"],
-                targetObservations: [current.observation]
-            ),
-            to: rootURL
-        )
-        if let evidence {
-            let currentSnapshot = try metadataStore.loadCurrentSnapshot(from: rootURL)
-            _ = try metadataStore.commit(at: rootURL, expected: currentSnapshot) { metadata in
-                metadata.managedRelationEvidence = [evidence]
-            }
-        }
+            canonicalTargetPath: canonicalURL.path)
+        observation = initial.observation
+        ownership = initial.classification
+        try localStateStore.save(SkillsHubLocalState(ignoredFindingFingerprints: ["sentinel"],
+            targetObservations: [initial.observation]), to: rootURL)
         snapshot = try metadataStore.loadCurrentSnapshot(from: rootURL)
     }
 
@@ -1683,9 +1640,7 @@ private final class RelationExecutionFixture: @unchecked Sendable {
         return try RelationOwnershipInspector().inspect(
             linkURL: linkURL,
             relation: relation,
-            canonicalTargetPath: canonicalURL.path,
-            evidence: metadata.managedRelationEvidence.first { $0.relation == relation }
-        )
+            canonicalTargetPath: canonicalURL.path)
     }
 
     // Primitive fault matrix shares the production record seam, without committing enablement.

@@ -64,7 +64,6 @@ extension SkillsHubLibraryController {
         presentationIntents = Dictionary((rootSnapshot?.metadata.enablementIntents ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         presentationObservations = Dictionary(localState.targetObservations.map { ($0.relation.id, $0) }, uniquingKeysWith: { first, _ in first })
         presentationVerifications = Dictionary(localState.verificationRecords.map { ($0.relation.id, $0) }, uniquingKeysWith: { first, _ in first })
-        presentationEvidence = Dictionary((rootSnapshot?.metadata.managedRelationEvidence ?? []).map { ($0.relation.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     func requestPresentationObservation() {
@@ -116,7 +115,7 @@ extension SkillsHubLibraryController {
                     root: authorizedRoot, items: items, descriptors: descriptors,
                     targets: targets, detections: detections, authorizations: authorizations,
                     fileManager: self.fileManager, iconPaths: iconPaths, resolvedRootPath: self.resolvedRootPath,
-                    observations: self.localState.targetObservations, evidence: self.presentationEvidence,
+                    observations: self.localState.targetObservations,
                     assets: Dictionary(self.installedSkills.map { ($0.assetID, $0) }, uniquingKeysWith: { first, _ in first })
                 )
                 guard contextIsCurrent() else { return }
@@ -152,7 +151,7 @@ extension SkillsHubLibraryController {
         targets: [String: URL], detections: Set<String>,
         authorizations: [String: StartupAccessBookmarkResolution], fileManager: FileManager,
         iconPaths: Set<String>, resolvedRootPath: String? = nil,
-        observations: [TargetObservation], evidence: [String: ManagedRelationEvidence], assets: [UUID: InstalledSkill]
+        observations: [TargetObservation], assets: [UUID: InstalledSkill]
     ) async throws -> (qualifications: [String: AgentTargetQualification], content: [String: TargetObservation], icons: [String: Data], ownership: [String: RelationOwnershipClassification]) {
         var qualifications: [String: AgentTargetQualification] = [:]
         for descriptor in descriptors {
@@ -181,8 +180,7 @@ extension SkillsHubLibraryController {
                 content[item.id] = try RelationOwnershipInspector().inspect(
                     linkURL: url,
                     relation: AgentRelationIdentity(assetID: identity, agentID: "content", scope: .global),
-                    canonicalTargetPath: url.path, evidence: nil
-                ).observation
+                    canonicalTargetPath: url.path).observation
             }
         }
         var icons: [String: Data] = [:]
@@ -193,10 +191,12 @@ extension SkillsHubLibraryController {
         var ownership: [String: RelationOwnershipClassification] = [:]
         for observation in observations {
             try Task.checkCancellation()
-            guard let asset = assets[observation.relation.assetID] else { continue }
+            guard let asset = assets[observation.relation.assetID],
+                  let target = targets[observation.relation.agentID] else { continue }
+            let linkName = asset.stableLinkName ?? asset.name.trimmingCharacters(in: .whitespacesAndNewlines)
             ownership[observation.relation.id] = RelationOwnershipInspector.classify(
-                observation: observation, canonicalTargetPath: asset.installedPath,
-                evidence: evidence[observation.relation.id])
+                observation: observation, expectedLinkPath: target.appendingPathComponent(linkName).path,
+                canonicalTargetPath: asset.installedPath)
         }
         return (qualifications, content, icons, ownership)
 

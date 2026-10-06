@@ -261,7 +261,6 @@ nonisolated struct SkillsHubLocalState: Codable, Hashable {
     var agentPathOverrides: [AgentKind: String]
     var operationFailureFindings: [AgentDirectoryFinding]?
     var targetObservations: [TargetObservation]
-    var managedRelationEvidence: [ManagedRelationEvidence]
     var verificationRecords: [VerificationRecord]
 
     init(
@@ -275,7 +274,6 @@ nonisolated struct SkillsHubLocalState: Codable, Hashable {
         agentPathOverrides: [AgentKind: String] = [:],
         operationFailureFindings: [AgentDirectoryFinding]? = nil,
         targetObservations: [TargetObservation] = [],
-        managedRelationEvidence: [ManagedRelationEvidence] = [],
         verificationRecords: [VerificationRecord] = []
     ) {
         self.schemaVersion = schemaVersion
@@ -288,7 +286,6 @@ nonisolated struct SkillsHubLocalState: Codable, Hashable {
         self.agentPathOverrides = agentPathOverrides
         self.operationFailureFindings = operationFailureFindings
         self.targetObservations = targetObservations
-        self.managedRelationEvidence = managedRelationEvidence
         self.verificationRecords = verificationRecords
     }
 
@@ -301,7 +298,6 @@ nonisolated struct SkillsHubLocalState: Codable, Hashable {
         case activeAgentLinks
         case operationFailureFindings
         case targetObservations
-        case managedRelationEvidence
         case verificationRecords
     }
 
@@ -326,10 +322,6 @@ nonisolated struct SkillsHubLocalState: Codable, Hashable {
             forKey: .operationFailureFindings
         )
         targetObservations = try container.decodeIfPresent([TargetObservation].self, forKey: .targetObservations) ?? []
-        managedRelationEvidence = try container.decodeIfPresent(
-            [ManagedRelationEvidence].self,
-            forKey: .managedRelationEvidence
-        ) ?? []
         verificationRecords = try container.decodeIfPresent([VerificationRecord].self, forKey: .verificationRecords) ?? []
     }
 }
@@ -619,9 +611,7 @@ nonisolated final class AgentDirectoryAuditService {
         ignoredFingerprints: Set<String>,
         localState: SkillsHubLocalState
     ) -> [AgentDirectoryFinding] {
-        let recorded = localState.managedRelationEvidence.contains {
-            $0.relation.agentID == descriptor.agentID && pathsMatch($0.linkPath, entry.path)
-        } || localState.activeAgentLinks.contains {
+        let recorded = localState.activeAgentLinks.contains {
             $0.agentID == descriptor.agentID && pathsMatch($0.linkPath, entry.path)
         }
         guard let inspection = inspectEntry(entry, requiresEntry: recorded) else { return [] }
@@ -792,15 +782,14 @@ nonisolated final class AgentDirectoryAuditService {
         installedSkills: [InstalledSkill],
         localState: SkillsHubLocalState
     ) -> Bool {
-        localState.managedRelationEvidence.contains { evidence in
-            guard evidence.relation.agentID == descriptor.agentID,
-                  normalizedPath(URL(fileURLWithPath: evidence.linkPath)) == normalizedPath(entry),
-                  let skill = installedSkills.first(where: { $0.assetID == evidence.relation.assetID }),
+        localState.activeAgentLinks.contains { link in
+            guard link.agentID == descriptor.agentID,
+                  normalizedPath(URL(fileURLWithPath: link.linkPath)) == normalizedPath(entry),
+                  let skill = installedSkills.first(where: { $0.id == link.hubSkillID }),
                   let inspection = try? RelationOwnershipInspector().inspect(
                       linkURL: entry,
-                      relation: evidence.relation,
-                      canonicalTargetPath: skill.installedPath,
-                      evidence: evidence
+                      relation: AgentRelationIdentity(assetID: skill.assetID, agentID: descriptor.agentID, scope: .global),
+                      canonicalTargetPath: skill.installedPath
                   )
             else { return false }
             return inspection.classification == .exactManagedLink

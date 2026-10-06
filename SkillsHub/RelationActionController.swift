@@ -143,13 +143,10 @@ nonisolated final class RelationActionControllerRuntime: @unchecked Sendable {
         targetAccess: AgentTargetAccess,
         linkURL: URL
     ) throws -> RelationActionToken {
-        let evidence = snapshot.metadata.managedRelationEvidence.first { $0.relation == relation }
         let inspection = try inspector.inspect(
             linkURL: linkURL,
             relation: relation,
-            canonicalTargetPath: asset.installedPath,
-            evidence: evidence
-        )
+            canonicalTargetPath: asset.installedPath)
         return try tokenBuilder.build(
             actionID: actionID,
             desiredEnabled: desiredEnabled,
@@ -178,13 +175,10 @@ nonisolated final class RelationActionControllerRuntime: @unchecked Sendable {
         }) else {
             throw SkillsHubLibraryFailure.missingSkill(relation.assetID.uuidString)
         }
-        let evidence = snapshot.metadata.managedRelationEvidence.first { $0.relation == relation }
         let inspection = try inspector.inspect(
             linkURL: linkURL,
             relation: relation,
-            canonicalTargetPath: asset.installedPath,
-            evidence: evidence
-        )
+            canonicalTargetPath: asset.installedPath)
         return try tokenBuilder.facts(
             relation: relation,
             rootURL: rootURL,
@@ -301,13 +295,10 @@ nonisolated final class RelationActionControllerRuntime: @unchecked Sendable {
             throw SkillsHubLibraryFailure.invalidSource("Relation intent is missing.")
         }
         let localState = try localStateStore.load(from: rootURL)
-        let evidence = snapshot.metadata.managedRelationEvidence.first { $0.relation == relation }
         let inspection = try inspector.inspect(
             linkURL: linkURL,
             relation: relation,
-            canonicalTargetPath: asset.installedPath,
-            evidence: evidence
-        )
+            canonicalTargetPath: asset.installedPath)
         let facts = try tokenBuilder.facts(
             relation: relation,
             rootURL: rootURL,
@@ -324,13 +315,11 @@ nonisolated final class RelationActionControllerRuntime: @unchecked Sendable {
             rootGeneration: snapshot.generation,
             intent: intent,
             observation: inspection.observation,
-            evidence: evidence,
             limitations: []
         )
         let next = localState.replacingRelationState(
             relation,
             observation: inspection.observation,
-            evidence: evidence,
             verification: verification
         )
         try localStateStore.save(next, to: rootURL)

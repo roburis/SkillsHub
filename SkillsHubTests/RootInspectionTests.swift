@@ -36,7 +36,6 @@ struct RootInspectionTests {
         #expect(snapshot.metadata.rootConfig.id != before.rootConfig.id)
         #expect(Set(controller.installedSkills.map { URL(fileURLWithPath: $0.installedPath).resolvingSymlinksInPath().path }) == Set([skill, repository].map { $0.resolvingSymlinksInPath().path }))
         #expect(snapshot.metadata.enablementIntents.isEmpty)
-        #expect(controller.agentAuditLocalState.managedRelationEvidence.isEmpty)
         #expect(controller.errorMessage == nil)
         #expect(try Data(contentsOf: skill.appendingPathComponent("SKILL.md")) == content)
         try await controller.reloadFromDisk()
@@ -283,10 +282,6 @@ struct RootInspectionTests {
 
     /// The first-run establish entry must reach the same pre-check as Settings, with
     /// no initialize-over shortcut for a directory that already holds metadata.
-
-
-
-
 
     @Test func rootSessionStartFailurePreservesPreviousSessionAndReleasesNewInspection() async throws {
         let firstRoot = try initializedRoot(generation: 2)

@@ -83,7 +83,6 @@ struct Phase1OperationTests {
         #expect(snapshot.metadata.availableSkills.count == 2)
         #expect(snapshot.metadata.installedSkills.map(\.sourceKind) == [.githubRepository, .githubRepository])
         #expect(snapshot.metadata.enablementIntents.isEmpty)
-        #expect(snapshot.metadata.managedRelationEvidence.isEmpty)
         #expect(try ContentManifestBuilder().build(for: target, authorizedRoot: target).digest == manifest.digest)
 
         let recovered = try #require(
@@ -140,7 +139,6 @@ struct Phase1OperationTests {
         #expect(snapshot.metadata.availableSkills.count == 2)
         #expect(snapshot.metadata.installedSkills.count == 2)
         #expect(snapshot.metadata.enablementIntents.isEmpty)
-        #expect(snapshot.metadata.managedRelationEvidence.isEmpty)
         #expect(FileManager.default.fileExists(atPath: fixture.managedDirectory.appendingPathComponent(".shared/config.json").path))
         #expect(FileManager.default.fileExists(atPath: fixture.managedDirectory.appendingPathComponent("empty").path))
 
