@@ -303,7 +303,46 @@ struct AgentDirectoryAuditTests {
         #expect(finding.recommendedAction == .deleteBrokenLink)
     }
 
-    @Test func linkIntoManagedRootWithoutCreationEvidenceRemainsExternal() throws {
+    @Test(arguments: [false, true])
+    func auditUsesAssetIdentityWithSameNamedExistingAndMissingSkills(_ reverse: Bool) throws {
+        let home = try temporaryDirectory()
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home); try? FileManager.default.removeItem(at: root) }
+        let target = home.appendingPathComponent(".codex/skills")
+        let actual = root.appendingPathComponent("local/bundle/skills/review")
+        let sibling = root.appendingPathComponent("local/other/review")
+        for directory in [actual, sibling] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try localSkillText(name: "Review", description: "Review fixture.")
+                .write(to: directory.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        }
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let link = target.appendingPathComponent("review")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: actual)
+        let skill = installedSkill(id: "review", name: "Review", path: actual)
+        var skills = [installedSkill(id: "review", name: "Review", path: root.appendingPathComponent("local/bundle/.tmp/before")),
+            installedSkill(id: "review", name: "Review", path: sibling), skill]
+        if reverse { skills.reverse() }
+        var state = SkillsHubLocalState()
+        state.activeAgentLinks = [AgentManagedLinkRecord(agentID: "codex", agent: .codex, alias: "review",
+            linkPath: link.path, targetPath: actual.path, hubSkillID: "review", hubRelativePath: "",
+            rootAtCreation: root.path, assetID: skill.assetID)]
+        let service = AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation)
+        let result = try service.fullAudit(agentID: "codex", rootURL: root, homeDirectory: home,
+            overrides: [:], localState: state, installedSkills: skills)
+        #expect(!result.findings.contains { $0.entryName == "review" })
+        // Candidate identities must remain distinct when matching the same name/content.
+        try FileManager.default.createDirectory(at: target.appendingPathComponent("copy"), withIntermediateDirectories: true)
+        try localSkillText(name: "Review", description: "Review fixture.")
+            .write(to: target.appendingPathComponent("copy/SKILL.md"), atomically: true, encoding: .utf8)
+        let matching = try service.fullAudit(agentID: "codex", rootURL: root, homeDirectory: home,
+            overrides: [:], localState: state, installedSkills: skills)
+        let candidates = try #require(matching.findings.first { $0.entryName == "copy" }).matchCandidates
+        #expect(Set(candidates.map(\.id)).count == candidates.count)
+        #expect(Set(candidates.compactMap(\.assetID)) == Set(skills.map(\.assetID)))
+    }
+
+    @Test func linkIntoManagedRootWithoutEnablementRemainsUnverified() throws {
         let home = try temporaryDirectory()
         let root = try temporaryDirectory()
         let codexSkills = home.appendingPathComponent(".codex/skills", isDirectory: true)
@@ -327,6 +366,7 @@ struct AgentDirectoryAuditTests {
         let finding = try #require(result.findings.first { $0.entryName == "review" })
         #expect(finding.type == .externalSymlinkNotManaged)
         #expect(finding.entryKind == .externalSymlink)
+        #expect(finding.presentationMessage == "Agent link does not match a verified managed relationship.")
         #expect(finding.skillFileHash != nil)
         #expect(finding.evidence.contains { $0.contains("SKILL.md hash") })
     }

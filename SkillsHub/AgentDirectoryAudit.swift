@@ -127,8 +127,9 @@ nonisolated struct HubSkillMatchCandidate: Codable, Hashable, Identifiable {
     var hubRelativePath: String
     var matchStrength: MatchStrength
     var evidence: [MatchEvidence]
+    var assetID: UUID? = nil
 
-    var id: String { hubSkillID }
+    var id: String { assetID?.uuidString ?? hubRelativePath }
 }
 
 nonisolated struct AgentDetectionSnapshot: Codable, Hashable, Identifiable {
@@ -179,6 +180,7 @@ nonisolated struct AgentManagedLinkRecord: Codable, Hashable, Identifiable {
     var rootAtCreation: String
     var createdAt: Date
     var lastVerifiedAt: Date?
+    var assetID: UUID?
 
     init(
         id: UUID = UUID(),
@@ -191,7 +193,8 @@ nonisolated struct AgentManagedLinkRecord: Codable, Hashable, Identifiable {
         hubRelativePath: String,
         rootAtCreation: String,
         createdAt: Date = Date(),
-        lastVerifiedAt: Date? = nil
+        lastVerifiedAt: Date? = nil,
+        assetID: UUID? = nil
     ) {
         self.id = id
         self.agentID = agentID
@@ -204,6 +207,7 @@ nonisolated struct AgentManagedLinkRecord: Codable, Hashable, Identifiable {
         self.rootAtCreation = rootAtCreation
         self.createdAt = createdAt
         self.lastVerifiedAt = lastVerifiedAt
+        self.assetID = assetID
     }
 }
 
@@ -625,7 +629,11 @@ nonisolated final class AgentDirectoryAuditService {
         case .localDirectoryNotManaged:
             summary = "Local directory is not governed by Skills Hub."
         case .externalSymlinkNotManaged:
-            summary = "Agent entry points outside the Management Directory."
+            summary = inspection.targetPath.map {
+                access.isDescendant(URL(fileURLWithPath: $0), of: rootURL, resolvingSymlinks: true)
+            } == true
+                ? "Agent link does not match a verified managed relationship."
+                : "Agent entry points outside the Management Directory."
         case .brokenSymlink:
             summary = "Agent entry is a broken symlink."
         case .duplicateWithHub:
@@ -776,7 +784,8 @@ nonisolated final class AgentDirectoryAuditService {
         localState.activeAgentLinks.contains { link in
             guard link.agentID == descriptor.agentID,
                   normalizedPath(URL(fileURLWithPath: link.linkPath)) == normalizedPath(entry),
-                  let skill = installedSkills.first(where: { $0.id == link.hubSkillID }),
+                  let assetID = link.assetID,
+                  let skill = installedSkills.first(where: { $0.assetID == assetID }),
                   let inspection = try? RelationOwnershipInspector().inspect(
                       linkURL: entry,
                       relation: AgentRelationIdentity(assetID: skill.assetID, agentID: descriptor.agentID, scope: .global),
@@ -827,7 +836,8 @@ nonisolated final class AgentDirectoryAuditService {
                 displayName: skill.name,
                 hubRelativePath: relativePath(of: hubURL, to: rootURL),
                 matchStrength: strength,
-                evidence: evidence
+                evidence: evidence,
+                assetID: skill.assetID
             )
         }
         .sorted { lhs, rhs in
@@ -855,7 +865,7 @@ nonisolated final class AgentDirectoryAuditService {
         evidence: [String],
         ignoredFingerprints: Set<String>
     ) -> AgentDirectoryFinding {
-        let matchedID = matchCandidates.first?.hubSkillID
+        let matchedID = matchCandidates.first?.id
         let fingerprint = [
             agentID,
             sourcePath ?? "",

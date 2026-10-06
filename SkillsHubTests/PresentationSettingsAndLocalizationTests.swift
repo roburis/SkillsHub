@@ -242,6 +242,8 @@ struct PresentationSettingsAndLocalizationTests {
             "Agent configuration is unavailable; no cleanup was authorized.",
             "The current node is not managed by Skills Hub; the object remains unchanged.",
             "The current link points outside the Management Directory; the object remains unchanged.",
+            "The current link does not match the expected managed target; the object remains unchanged.",
+            "Agent link does not match a verified managed relationship.",
             "The current link is broken; the object remains unchanged.",
             "Current ownership could not be verified; the object remains unchanged.",
             "Remove GitHub Source", "Remove Local Source", "Update Applied", "Update Needs Attention",

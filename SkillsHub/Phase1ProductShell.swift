@@ -415,12 +415,13 @@ struct Phase1ProductShell: View {
             }
             if matches.count == 1, let managed = matches.first {
                 selectedSkillID = managed.assetID.uuidString
-            } else if let candidate = library.availableSkills.first(where: { $0.id == objectID || $0.candidateID == objectID }) {
-                selectedSkillID = candidate.candidateID
             } else {
-                selectedSkillID = nil
-                library.clearError()
-                library.setStatus("The original object is no longer available. Immutable task evidence remains read-only; browse current Skills to recover navigation.")
+                let candidates = library.availableSkills.filter { $0.id == objectID || $0.candidateID == objectID }
+                selectedSkillID = candidates.count == 1 ? candidates.first?.candidateID : nil
+                if selectedSkillID == nil {
+                    library.clearError()
+                    library.setStatus("The original object is no longer available. Immutable task evidence remains read-only; browse current Skills to recover navigation.")
+                }
             }
             library.searchText = ""
             skillFilter = .all

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 extension SkillsHubLibraryController {
@@ -512,6 +513,7 @@ extension SkillsHubLibraryController {
         guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
               libraryReadGeneration == generation, rootSnapshot == result.snapshot else { throw CancellationError() }
         if refreshAgents { await refreshAgentLightScan() }
+        if refreshAgents { try await runtimeLocalDiscovery() }
     }
 
     private func applyLibraryRead(
@@ -587,8 +589,8 @@ let resolvedRootPath: String?
 
     /// Re-enumerates current Root content directories at runtime and registers only the
     /// candidates at new exact locations. Nested entries are independent skills.
-    /// Existing identities and missing registrations are retained; observations only
-    /// refresh content facts and never transfer relationships after a move.
+    /// Missing registrations are pruned only after a complete scan and settlement of
+    /// their relationships. Observations never transfer relationships after a move.
     @discardableResult
     func runtimeLocalDiscovery(
         observedAt: Date = Date(),
@@ -636,7 +638,9 @@ let resolvedRootPath: String?
         }
         // Observe unsettled content without adopting a partially committed operation's locations.
         if !phase1Tasks.contains(where: { $0.phase != .completed && $0.recoveryEvidence != nil }) {
-            guard try await registerDiscoveredLocalSkills(newSkills, rootURL: rootURL, expected: expected) else { return 0 }
+            let canPrune = inFlightRelationActionIDs.isEmpty && !phase1Tasks.contains { $0.phase != .completed }
+            guard try await registerDiscoveredLocalSkills(newSkills, rootURL: rootURL, expected: expected,
+                pruningDiscovery: canPrune ? discovery : nil) else { return 0 }
         }
         guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
               expectedGeneration.map({ $0 == recheckGeneration }) ?? true else { return 0 }
@@ -697,11 +701,13 @@ let resolvedRootPath: String?
         _ discovered: [InstalledSkill],
         rootURL: URL,
         expected: RootSnapshot,
-        sourceID: UUID? = nil
+        sourceID: UUID? = nil,
+        pruningDiscovery: RootContentDiscovery? = nil
     ) async throws -> Bool {
         let sessionID = rootSessionLease?.id
         let snapshot = try await Self.registerDiscoveredSkills(discovered, rootURL: rootURL,
-            expected: expected, sourceID: sourceID, metadataStore: metadataStore)
+            expected: expected, sourceID: sourceID, pruningDiscovery: pruningDiscovery,
+            metadataStore: metadataStore, fileManager: fileManager)
         guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
               rootSnapshot == expected else { return false }
         if snapshot != expected { applyDiscoverySnapshot(snapshot) }
@@ -710,7 +716,8 @@ let resolvedRootPath: String?
 
     @concurrent nonisolated private static func registerDiscoveredSkills(
         _ discovered: [InstalledSkill], rootURL: URL, expected: RootSnapshot,
-        sourceID: UUID?, metadataStore: SkillsHubMetadataStore
+        sourceID: UUID?, pruningDiscovery: RootContentDiscovery?,
+        metadataStore: SkillsHubMetadataStore, fileManager: FileManager
     ) async throws -> RootSnapshot {
         func associations(in metadata: SkillsHubMetadata) -> [UUID: AvailableSkill] {
             var result: [UUID: AvailableSkill] = [:]
@@ -727,12 +734,39 @@ let resolvedRootPath: String?
             }
             return result
         }
-        guard !discovered.isEmpty || !associations(in: expected.metadata).isEmpty else {
+        let removed = try pruningDiscovery.map {
+            try missingSkillAssetIDs(in: expected.metadata, rootURL: rootURL, discovery: $0, fileManager: fileManager)
+        } ?? []
+        guard !discovered.isEmpty || !associations(in: expected.metadata).isEmpty || !removed.isEmpty else {
             return expected
         }
         return try await RootMutationOwner.shared.perform(at: rootURL) {
             try Task.checkCancellation()
-            return try metadataStore.commit(at: rootURL, expected: expected) { metadata in
+            return try metadataStore.commit(at: rootURL, expected: expected, beforePublication: {
+                if let pruningDiscovery, !removed.isEmpty {
+                    guard try missingSkillAssetIDs(in: expected.metadata, rootURL: rootURL,
+                        discovery: pruningDiscovery, fileManager: fileManager) == removed else {
+                        throw Phase1OperationError.candidateUnavailable
+                    }
+                }
+            }) { metadata in
+                if let pruningDiscovery, !removed.isEmpty {
+                    guard try missingSkillAssetIDs(in: metadata, rootURL: rootURL,
+                        discovery: pruningDiscovery, fileManager: fileManager) == removed else {
+                        throw Phase1OperationError.candidateUnavailable
+                    }
+                    let removedSkills = metadata.installedSkills.filter { removed.contains($0.assetID) }
+                    metadata.installedSkills.removeAll { removed.contains($0.assetID) }
+                    metadata.enablementIntents.removeAll { removed.contains($0.assetID) }
+                    let retainedIDs = Set(metadata.installedSkills.map(\.id))
+                    for id in Set(removedSkills.map(\.id)).subtracting(retainedIDs) {
+                        metadata.purposeMetadata[id] = nil
+                        metadata.validationCache[id] = nil
+                    }
+                    let retainedCandidates = Set(metadata.installedSkills.compactMap(\.candidateID))
+                    let removedCandidates = Set(removedSkills.compactMap(\.candidateID)).subtracting(retainedCandidates)
+                    metadata.availableSkills.removeAll { removedCandidates.contains($0.candidateID) }
+                }
                 let candidates = associations(in: metadata)
                 for index in metadata.installedSkills.indices {
                     if let candidate = candidates[metadata.installedSkills[index].assetID] {
@@ -747,6 +781,90 @@ let resolvedRootPath: String?
                 }
             }
         }
+    }
+
+    nonisolated private static func missingSkillAssetIDs(
+        in metadata: SkillsHubMetadata, rootURL: URL, discovery: RootContentDiscovery,
+        fileManager: FileManager
+    ) throws -> Set<UUID> {
+        try Task.checkCancellation()
+        // A complete scan's directory identities must still hold; aliases/replacements are not deletion.
+        guard discovery.directoryIdentities.allSatisfy({ path, identity in
+            identity.kind == S_IFDIR && (try? LinkNodeIdentity.read(at: URL(fileURLWithPath: path))) == identity
+        }) else { throw Phase1OperationError.candidateUnavailable }
+        let enabled = Set(metadata.enablementIntents.filter(\.isEnabled).map(\.assetID))
+        let observed = Set(discovery.installedSkills.map(Self.standardizedInstalledPath))
+        let root = rootURL.standardizedFileURL
+        // Resolve only the existing Root alias; never resolve a missing/replaced descendant.
+        guard let resolved = Darwin.realpath(root.path, nil) else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let resolvedRoot = String(cString: resolved)
+        free(resolved)
+        let containers = Set(discovery.directoryIdentities.keys.filter {
+            $0 == root.appendingPathComponent("local").path || $0 == root.appendingPathComponent("github").path
+        })
+        var removed: Set<UUID> = []
+        for skill in metadata.installedSkills where !enabled.contains(skill.assetID) {
+            try Task.checkCancellation()
+            let registeredPath = standardizedInstalledPath(for: skill)
+            guard !observed.contains(registeredPath) else { continue }
+            let path = registeredPath.hasPrefix(resolvedRoot + "/")
+                ? root.path + registeredPath.dropFirst(resolvedRoot.count) : registeredPath
+            guard let container = containers.first(where: { path.hasPrefix($0 + "/") }) else { continue }
+            var parent = URL(fileURLWithPath: container)
+            var parents: [URL: LinkNodeIdentity] = [:]
+            for component in path.dropFirst(container.count + 1).split(separator: "/") {
+                let identity = try LinkNodeIdentity.read(at: parent)
+                guard identity.kind == S_IFDIR, Darwin.access(parent.path, R_OK | X_OK) == 0 else { break }
+                parents[parent] = identity
+                let child = parent.appendingPathComponent(String(component))
+                var node = stat()
+                if Darwin.lstat(child.path, &node) != 0 {
+                    // Only ENOENT under a readable, unchanged real parent proves absence.
+                    if errno == ENOENT, parents.allSatisfy({ (try? LinkNodeIdentity.read(at: $0.key)) == $0.value }) {
+                        removed.insert(skill.assetID)
+                    }
+                    break
+                }
+                guard node.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { break }
+                parent = child
+            }
+        }
+        guard !removed.isEmpty else { return [] }
+        guard try Phase1OperationJournal(rootURL: rootURL, fileManager: fileManager).recoverTasks()
+            .allSatisfy({ $0.phase == .completed }) else { return [] }
+        guard try metadataStoreOperationsAreSettled(rootURL: rootURL, fileManager: fileManager) else { return [] }
+        return removed
+    }
+
+    nonisolated private static func metadataStoreOperationsAreSettled(rootURL: URL, fileManager: FileManager) throws -> Bool {
+        let directory = rootURL.appendingPathComponent(".skillshub-operations")
+        var node = stat()
+        guard Darwin.lstat(directory.path, &node) == 0 else {
+            if errno == ENOENT { return true }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard node.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { return false }
+        let relationStore = RelationActionOperationRecordStore(fileManager: fileManager)
+        let removal = SourceRemovalService(fileManager: fileManager)
+        let update = SourceUpdateService(fileManager: fileManager)
+        let journalIDs = Set(try Phase1OperationJournal(rootURL: rootURL, fileManager: fileManager).recoverTasks().map(\.id))
+        for entry in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            guard let id = UUID(uuidString: entry.lastPathComponent),
+                  try LinkNodeIdentity.read(at: entry).kind == S_IFDIR else { return false }
+            if fileManager.fileExists(atPath: entry.appendingPathComponent("record.json").path) {
+                switch try relationStore.loadRecoveryRecord(operationID: id, rootURL: rootURL) {
+                case .relation(let record): if record.completedAt == nil { return false }
+                case .brokenLink(let record): if record.completedAt == nil { return false }
+                }
+            } else if fileManager.fileExists(atPath: entry.appendingPathComponent("source-removal.json").path) {
+                if try removal.loadRecord(operationID: id, rootURL: rootURL).stage != .completed { return false }
+            } else if fileManager.fileExists(atPath: entry.appendingPathComponent("source-update.json").path) {
+                if try update.loadRecord(operationID: id, rootURL: rootURL).stage != .completed { return false }
+            } else if !journalIDs.contains(id) { return false }
+        }
+        return true
     }
 
     nonisolated private static func standardizedInstalledPath(for skill: InstalledSkill) -> String {
@@ -768,6 +886,12 @@ let resolvedRootPath: String?
             if let validation = validations[skill.assetID] { skill.validation = validation }
             return skill
         }
+        let retainedAssets = Set(installedSkills.map(\.assetID))
+        var state = localState
+        state.targetObservations.removeAll { !retainedAssets.contains($0.relation.assetID) }
+        state.verificationRecords.removeAll { !retainedAssets.contains($0.relation.assetID) }
+        state.activeAgentLinks.removeAll { $0.assetID.map { !retainedAssets.contains($0) } ?? true }
+        localState = state
         agentLinks = []
         tags = snapshot.metadata.tags
         scannedSkillCount = installedSkills.count

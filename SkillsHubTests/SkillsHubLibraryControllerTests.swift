@@ -215,23 +215,19 @@ struct SkillsHubLibraryControllerTests {
         // T-006: the manual directory was discovered and registered on connect.
         #expect(controller.installedSkills.map(\.id) == ["manual-review"])
         let metadataFile = SkillsHubMetadataStore().rootLayout(for: root).skillshubMetadataFile
-        // Capture the authoritative metadata AFTER registration; reload must not write
-        // again and must not prune the deleted directory's registration.
+        // Capture authority after registration; confirmed missing records are pruned.
         let metadataAfterRegistration = try Data(contentsOf: metadataFile)
 
         try FileManager.default.removeItem(at: manual)
         try await controller.reloadFromDisk()
 
-        // The registration and its missing record are preserved (Q-002/REQ-018); the
-        // deleted directory is marked invalid, not pruned, and no JSON is rewritten.
-        #expect(controller.installedSkills.map(\.id) == ["manual-review"])
-        #expect(controller.installedSkills.first?.validation.status == .invalid)
+        #expect(controller.installedSkills.isEmpty)
         #expect(controller.scanStatusMessage?.isEmpty == false)
         #expect(!FileManager.default.fileExists(atPath: manual.path))
 
-        #expect(try Data(contentsOf: metadataFile) == metadataAfterRegistration)
+        #expect(try Data(contentsOf: metadataFile) != metadataAfterRegistration)
         let metadata = try SkillsHubMetadataStore().load(from: root)
-        #expect(metadata.installedSkills.map(\.id) == ["manual-review"])
+        #expect(metadata.installedSkills.isEmpty)
     }
 
     @Test func reloadFailureKeepsPreviousInstalledState() async throws {
