@@ -4,6 +4,36 @@ import Testing
 @testable import SkillsHub
 
 struct RelationActionExecutionTests {
+    @Test(arguments: ["directory-identity", "metadata-digest"])
+    func recoveryPreservesRelationshipRecordFailureInsteadOfTryingAnotherKind(_ failure: String) throws {
+        let fixture = try RelationExecutionFixture(node: .vacant, intentEnabled: false)
+        let authorization = fixture.authorization(desiredEnabled: true)
+        let store = RelationActionOperationRecordStore()
+        _ = try store.prepare(authorization: authorization,
+            snapshot: fixture.metadataStore.loadCurrentSnapshot(from: fixture.rootURL), rootURL: fixture.rootURL)
+        let directory = fixture.metadataStore.rootLayout(for: fixture.rootURL).operationRecoveryDirectory
+            .appendingPathComponent(authorization.actionID.uuidString)
+        let file = directory.appendingPathComponent(RelationActionOperationRecordStore.recordFileName)
+        if failure == "directory-identity" {
+            var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+            var identity = try #require(json["operationDirectoryIdentity"] as? [String: Any])
+            identity["volumeNumber"] = (try #require(identity["volumeNumber"] as? UInt64)) + 1
+            json["operationDirectoryIdentity"] = identity
+            try JSONSerialization.data(withJSONObject: json).write(to: file)
+        } else {
+            try Data("changed".utf8).write(to: directory.appendingPathComponent(RelationActionOperationRecordStore.originalMetadataFileName))
+        }
+        let before = try Data(contentsOf: file)
+        let metadata = try fixture.metadataStore.loadCurrentSnapshot(from: fixture.rootURL)
+        #expect(throws: failure == "directory-identity"
+            ? RelationActionOperationRecordError.operationDirectoryIdentityChanged : .invalidRecord) {
+            try store.loadRecoveryRecord(operationID: authorization.actionID, rootURL: fixture.rootURL)
+        }
+        #expect(try Data(contentsOf: file) == before)
+        #expect(try fixture.metadataStore.loadCurrentSnapshot(from: fixture.rootURL) == metadata)
+        #expect(try fixture.currentInspection().classification == .vacant)
+    }
+
     @MainActor
     @Test func brokenRelationCanDeleteNodeThenCancelOnlyItsRecord() async throws {
         let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])

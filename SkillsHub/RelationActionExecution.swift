@@ -183,6 +183,7 @@ nonisolated struct UnfinishedAgentOperation: Hashable, Sendable {
 nonisolated enum RelationActionOperationRecordError: Error, Equatable {
     case invalidRoot
     case invalidRecord
+    case operationDirectoryIdentityChanged
     case recordAlreadyExists
     case recordUnavailable
     case readbackFailed
@@ -229,10 +230,12 @@ nonisolated final class RelationActionOperationRecordStore: @unchecked Sendable 
               (try? LinkNodeIdentity.read(at: directory.appendingPathComponent(Self.recordFileName)).kind) == S_IFREG else {
             throw RelationActionOperationRecordError.recordUnavailable
         }
-        if let record = try? load(operationID: operationID, rootURL: rootURL) {
-            return .relation(record)
+        struct RecordKind: Decodable { let operationKind: BrokenLinkDeletionAuthorization.Kind? }
+        let kind = try decoder.decode(RecordKind.self, from: Data(contentsOf: directory.appendingPathComponent(Self.recordFileName)))
+        if kind.operationKind != nil {
+            return .brokenLink(try loadBrokenLinkDeletion(operationID: operationID, rootURL: rootURL))
         }
-        return .brokenLink(try loadBrokenLinkDeletion(operationID: operationID, rootURL: rootURL))
+        return .relation(try load(operationID: operationID, rootURL: rootURL))
     }
 
     func unfinishedOperationBlockers(
@@ -554,7 +557,7 @@ nonisolated final class RelationActionOperationRecordStore: @unchecked Sendable 
         _ = try requiredIdentity(of: operations, kind: S_IFDIR)
         let directory = operations.appendingPathComponent(record.operationID.uuidString, isDirectory: true)
         guard try requiredIdentity(of: directory, kind: S_IFDIR) == record.operationDirectoryIdentity else {
-            throw RelationActionOperationRecordError.invalidRecord
+            throw RelationActionOperationRecordError.operationDirectoryIdentityChanged
         }
         return directory
     }
@@ -568,7 +571,7 @@ nonisolated final class RelationActionOperationRecordStore: @unchecked Sendable 
         _ = try requiredIdentity(of: operations, kind: S_IFDIR)
         let directory = operations.appendingPathComponent(record.operationID.uuidString, isDirectory: true)
         guard try requiredIdentity(of: directory, kind: S_IFDIR) == record.operationDirectoryIdentity else {
-            throw RelationActionOperationRecordError.invalidRecord
+            throw RelationActionOperationRecordError.operationDirectoryIdentityChanged
         }
         return directory
     }
