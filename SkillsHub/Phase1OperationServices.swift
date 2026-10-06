@@ -145,6 +145,7 @@ nonisolated struct RootContentDiscovery: Equatable {
     var installedSkills: [InstalledSkill]
     var availableSkills: [AvailableSkill]
     var localSourceNames: Set<String>
+    var directoryIdentities: [String: LinkNodeIdentity] = [:]
 
     static func observe(
         rootURL: URL,
@@ -154,6 +155,7 @@ nonisolated struct RootContentDiscovery: Equatable {
         localOnly: Bool = false
     ) throws -> RootContentDiscovery {
         let layout = SkillsHubMetadataStore(fileManager: fileManager).rootLayout(for: rootURL)
+        var identities = [rootURL.standardizedFileURL.path: try LinkNodeIdentity.read(at: rootURL)]
         func directories(in container: URL) throws -> [URL] {
             let access = FileAccessService(fileManager: fileManager)
             guard !access.isSymlink(container) else {
@@ -164,6 +166,7 @@ nonisolated struct RootContentDiscovery: Equatable {
                 if errno == ENOENT { return [] }
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
+            identities[container.standardizedFileURL.path] = try LinkNodeIdentity.read(at: container)
             return try fileManager.contentsOfDirectory(
                 at: container, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
             ).filter { child in
@@ -186,6 +189,7 @@ nonisolated struct RootContentDiscovery: Equatable {
         var installedSkills: [InstalledSkill] = []
         var availableSkills: [AvailableSkill] = []
         for child in children {
+            identities[child.standardizedFileURL.path] = try LinkNodeIdentity.read(at: child)
             let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard values.isDirectory == true, values.isSymbolicLink != true else { continue }
             let sourceID = sources.first {
@@ -226,7 +230,8 @@ nonisolated struct RootContentDiscovery: Equatable {
         return RootContentDiscovery(
             installedSkills: installedSkills.sorted { $0.installedPath < $1.installedPath },
             availableSkills: availableSkills,
-            localSourceNames: Set(localChildren.map(\.lastPathComponent))
+            localSourceNames: Set(localChildren.map(\.lastPathComponent)),
+            directoryIdentities: identities
         )
     }
 }

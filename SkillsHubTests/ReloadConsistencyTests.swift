@@ -117,6 +117,27 @@ struct ReloadConsistencyTests {
         #expect(controller.localSourcesForPresentation.contains { $0.id == sourceID })
     }
 
+    @Test func missingAssetIsPrunedAfterEnabledRelationshipIsSettled() async throws {
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
+        let controller = fixture.controller
+        await controller.waitForPendingRechecks()
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        let skill = try #require(controller.installedSkills.first { $0.assetID == fixture.assetID })
+        let link = try #require(fixture.targets[.codex]).appendingPathComponent(controller.relationLinkName(asset: skill))
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: skill.installedPath))
+        _ = try await controller.runtimeLocalDiscovery()
+        #expect(controller.installedSkills.contains { $0.assetID == fixture.assetID })
+        #expect(FileAccessService().isSymlink(link))
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: false)
+        #expect(!FileAccessService().isSymlink(link))
+        _ = try await controller.runtimeLocalDiscovery()
+        let metadata = try SkillsHubMetadataStore().load(from: fixture.root)
+        #expect(!metadata.installedSkills.contains { $0.assetID == fixture.assetID })
+        #expect(!metadata.enablementIntents.contains { $0.assetID == fixture.assetID })
+        #expect(!controller.localState.targetObservations.contains { $0.relation.assetID == fixture.assetID })
+        #expect(!controller.localState.verificationRecords.contains { $0.relation.assetID == fixture.assetID })
+    }
+
     @Test func incompleteLocalRefreshPreservesLastCollectionAndReplacementIsNotDeletion() async throws {
         let root = try reloadTemporaryDirectory().standardizedFileURL
         let home = try reloadTemporaryDirectory()
@@ -229,13 +250,16 @@ struct ReloadConsistencyTests {
         let moved = parent.appendingPathComponent("moved")
         try FileManager.default.moveItem(at: nested, to: moved)
         #expect(try await controller.runtimeLocalDiscovery() == 1)
-        #expect(items(controller).count == 3)
-        #expect(items(controller).first { $0.managed?.assetID == nestedAsset.assetID }?.needsAttention == true)
+        #expect(items(controller).count == 2)
+        #expect(!controller.installedSkills.contains { $0.assetID == nestedAsset.assetID })
+        let movedAsset = try #require(controller.installedSkills.first { $0.installedPath.hasSuffix("/moved") })
+        #expect(movedAsset.assetID != nestedAsset.assetID)
+        #expect(controller.rootSnapshot?.metadata.enablementIntents.contains { $0.assetID == movedAsset.assetID } == false)
         let restarted = SkillsHubLibraryController(agentHomeDirectory: home, agentEnvironment: [:])
         try await connectInitializedTestRoot(restarted, at: root)
         await restarted.waitForPendingRechecks()
         #expect(Set(items(restarted).map(\.id)) == Set(items(controller).map(\.id)))
-        #expect(Set(original.map(\.assetID)).isSubset(of: Set(restarted.installedSkills.map(\.assetID))))
+        #expect(Set(restarted.installedSkills.map(\.assetID)) == Set(controller.installedSkills.map(\.assetID)))
     }
 
     @Test func rootSwitchAndMetadataRebuildPreserveAppLanguageAndSkillBytes() async throws {
@@ -360,67 +384,76 @@ struct ReloadConsistencyTests {
         #expect(try Data(contentsOf: recordFile) == recordBefore)
     }
 
-    @Test func deletingAndRestoringFixturePreservesMetadataWithoutWrites() async throws {
-        let root = try reloadTemporaryDirectory()
-        let fakeHome = try reloadTemporaryDirectory()
-        let bundle = root.appendingPathComponent("local/bundle", isDirectory: true)
-        let alpha = bundle.appendingPathComponent("alpha", isDirectory: true)
-        let beta = bundle.appendingPathComponent("beta", isDirectory: true)
-        try writeReloadSkill(bundle, name: "Bundle")
-        try writeReloadSkill(alpha, name: "Alpha")
-        try writeReloadSkill(beta, name: "Beta")
-
-        let installed = InstalledSkill(
-            id: "bundle",
-            sourceID: nil,
-            name: "Bundle",
-            description: "Bundle fixture.",
-            installedPath: bundle.path,
-            sourceKind: .localDirectory,
-            validation: .valid,
-            purpose: nil,
-            tagIDs: ["review"],
-            installedAt: .distantPast
-        )
-        let store = SkillsHubMetadataStore()
-        try store.save(
-            SkillsHubMetadata(
-                rootConfig: RootConfig(rootPath: root.path),
-                installedSkills: [installed],
-                tags: [TagRecord(id: "review", displayName: "Review")]
-            ),
-            to: root
-        )
-
-        let controller = SkillsHubLibraryController(agentHomeDirectory: fakeHome, agentEnvironment: [:])
+    @Test(arguments: ["missing", "enabled", "unsettled", "unreadable", "entry-missing", "restored", "write-failure", "conflict", "local-only"])
+    func missingRecordPruningRespectsResponsibilitiesAndCurrentFacts(_ sample: String) async throws {
+        let root = try reloadTemporaryDirectory().standardizedFileURL
+        let home = try reloadTemporaryDirectory().standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: home) }
+        let actual = root.appendingPathComponent("local/bundle/skills/review")
+        let old = root.appendingPathComponent("local/bundle/.tmp/before/review")
+        let github = root.appendingPathComponent("github/owner/repo/review")
+        for directory in [actual, old, github] { try writeReloadSkill(directory, name: "Review") }
+        let marker = home.appendingPathComponent("inject")
+        let store = SkillsHubMetadataStore(writeCheckpoint: { phase, _ in
+            guard phase == .replacement, FileManager.default.fileExists(atPath: marker.path) else { return }
+            if sample == "restored" {
+                try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+            } else if sample == "write-failure" { throw CocoaError(.fileWriteOutOfSpace) }
+        })
+        let assets = [actual, old, github].map { directory in
+            InstalledSkill(id: "review", sourceID: nil, name: "Review", description: "Fixture",
+                installedPath: directory.path, sourceKind: .manualFilesystem, validation: .valid,
+                purpose: nil, tagIDs: [], installedAt: .distantPast)
+        }
+        let intent = EnablementIntent(assetID: assets[1].assetID, agentID: "codex", scope: .global,
+            isEnabled: sample == "enabled", generation: 0)
+        try store.save(SkillsHubMetadata(rootConfig: RootConfig(rootPath: root.path), installedSkills: assets,
+            validationCache: ["review": .valid], enablementIntents: [intent]), to: root)
+        let controller = SkillsHubLibraryController(metadataStore: store, agentHomeDirectory: home,
+            agentEnvironment: [:], filesystemEventStreamFactory: { FakeFilesystemEventStream() })
         try await connectInitializedTestRoot(controller, at: root)
+        let before = try #require(controller.rootSnapshot)
         let metadataFile = store.rootLayout(for: root).skillshubMetadataFile
-        let metadataBefore = try Data(contentsOf: metadataFile)
-
-        try FileManager.default.removeItem(at: beta)
-        let registeredAssets = controller.installedSkills.map(\.assetID)
-        try await controller.reloadFromDisk()
-
-        #expect(try Data(contentsOf: metadataFile) == metadataBefore)
-
-        try writeReloadSkill(beta, name: "Beta")
-        try await controller.reloadFromDisk()
-
-        #expect(try Data(contentsOf: metadataFile) == metadataBefore)
-
-        try FileManager.default.removeItem(at: bundle)
-        try await controller.reloadFromDisk()
-
-        #expect(controller.installedSkills.map(\.assetID) == registeredAssets)
-        #expect(controller.installedSkills.allSatisfy { $0.validation.status == .invalid })
-        #expect(try Data(contentsOf: metadataFile) == metadataBefore)
-
-        try writeReloadSkill(bundle, name: "Bundle")
-        try writeReloadSkill(alpha, name: "Alpha")
-        try writeReloadSkill(beta, name: "Beta")
-        try await controller.reloadFromDisk()
-
-        #expect(try Data(contentsOf: metadataFile) == metadataBefore)
+        let beforeBytes = try Data(contentsOf: metadataFile)
+        if sample == "entry-missing" {
+            try FileManager.default.removeItem(at: old.appendingPathComponent("SKILL.md"))
+        } else { try FileManager.default.removeItem(at: old) }
+        try FileManager.default.removeItem(at: github)
+        if sample == "unreadable" {
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: old.deletingLastPathComponent().path)
+        }
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: old.deletingLastPathComponent().path) }
+        if sample == "unsettled" {
+            let operation = root.appendingPathComponent(".skillshub-operations/\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
+            try Data("corrupt".utf8).write(to: operation.appendingPathComponent("record.json"))
+        }
+        if sample == "restored" || sample == "write-failure" { try Data().write(to: marker) }
+        if sample == "conflict" {
+            _ = try store.commit(at: root, expected: before) { $0.uiState["external"] = "changed" }
+        }
+        if ["unreadable", "unsettled", "restored", "write-failure", "conflict"].contains(sample) {
+            await #expect(throws: (any Error).self) { try await controller.runtimeLocalDiscovery() }
+            #expect(controller.rootSnapshot == before)
+            if sample != "conflict" { #expect(try Data(contentsOf: metadataFile) == beforeBytes) }
+            #expect(controller.installedSkills.contains { $0.assetID == assets[1].assetID })
+        } else {
+            _ = try await controller.runtimeLocalDiscovery(localOnly: sample == "local-only")
+            let after = try store.loadCurrentSnapshot(from: root)
+            let retainOld = sample == "enabled" || sample == "entry-missing"
+            #expect(after.metadata.installedSkills.contains { $0.assetID == assets[1].assetID } == retainOld)
+            #expect(after.metadata.installedSkills.contains { $0.assetID == assets[2].assetID } == (sample == "local-only"))
+            #expect(after.metadata.installedSkills.contains { $0.assetID == assets[0].assetID })
+            #expect(after.metadata.validationCache["review"] == .valid)
+            #expect(after.metadata.enablementIntents.contains { $0.assetID == assets[1].assetID } == retainOld)
+            let afterBytes = try Data(contentsOf: metadataFile)
+            _ = try await controller.runtimeLocalDiscovery(localOnly: sample == "local-only")
+            #expect(try Data(contentsOf: metadataFile) == afterBytes)
+            let restarted = SkillsHubLibraryController(agentHomeDirectory: home, agentEnvironment: [:],
+                filesystemEventStreamFactory: { FakeFilesystemEventStream() })
+            try await connectInitializedTestRoot(restarted, at: root)
+            #expect(restarted.installedSkills.contains { $0.assetID == assets[1].assetID } == retainOld)
+        }
     }
 
     @Test func runtimeLocalDiscoveryRegistersNewDirectoryWithoutEnabling() async throws {
@@ -462,8 +495,8 @@ struct ReloadConsistencyTests {
         #expect(controller.rootSnapshot?.generation == generationAfterRegister)
     }
 
-    @Test func runtimeLocalDiscoveryPreservesDeletedRegistrationWithoutWrite() async throws {
-        let root = try reloadTemporaryDirectory()
+    @Test func runtimeLocalDiscoveryPrunesDeletedRegistrationOnce() async throws {
+        let root = try reloadTemporaryDirectory().standardizedFileURL
         let fakeHome = try reloadTemporaryDirectory()
         let review = root.appendingPathComponent("local/review", isDirectory: true)
         try writeReloadSkill(review, name: "Review")
@@ -477,19 +510,23 @@ struct ReloadConsistencyTests {
         let metadataFile = store.rootLayout(for: root).skillshubMetadataFile
         let metadataBefore = try Data(contentsOf: metadataFile)
 
-        // The directory is deleted at runtime; discovery must not prune the registration.
+        // A confirmed missing directory without relationships is removed from authority.
         try FileManager.default.removeItem(at: review)
         let registered = try await controller.runtimeLocalDiscovery()
 
         #expect(registered == 0)
-        #expect(controller.installedSkills.map(\.id) == ["review"])
-        #expect(try Data(contentsOf: metadataFile) == metadataBefore)
+        #expect(controller.installedSkills.isEmpty)
+        #expect(try Data(contentsOf: metadataFile) != metadataBefore)
+        let metadataAfter = try Data(contentsOf: metadataFile)
 
-        // A reload keeps the missing record and marks it invalid (Q-002/REQ-018).
+        // Reload/restart cannot resurrect the registration or perform a no-op write.
         try await controller.reloadFromDisk()
-        #expect(controller.installedSkills.map(\.id) == ["review"])
-        #expect(controller.installedSkills.first?.validation.status == .invalid)
-        #expect(try Data(contentsOf: metadataFile) == metadataBefore)
+        #expect(controller.installedSkills.isEmpty)
+        #expect(try Data(contentsOf: metadataFile) == metadataAfter)
+        let restarted = SkillsHubLibraryController(agentHomeDirectory: fakeHome, agentEnvironment: [:])
+        try await connectInitializedTestRoot(restarted, at: root)
+        #expect(restarted.installedSkills.isEmpty)
+        #expect(try Data(contentsOf: metadataFile) == metadataAfter)
     }
 
     @Test func runtimeLocalDiscoveryDoesNotReRegisterImportedSourceDirectory() async throws {

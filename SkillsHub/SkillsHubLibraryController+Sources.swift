@@ -662,7 +662,8 @@ extension SkillsHubLibraryController {
                 metadata.installedSkills.removeAll { $0.sourceID == source.id }
                 metadata.installedSkills.append(contentsOf: installed)
                 let removedSkillIDs = Set(oldSkills.filter { removedAssetIDs.contains($0.assetID) }.map(\.id))
-                for id in removedSkillIDs {
+                let remainingSkillIDs = Set(metadata.installedSkills.map(\.id))
+                for id in removedSkillIDs.subtracting(remainingSkillIDs) {
                     metadata.purposeMetadata[id] = nil
                     metadata.validationCache[id] = nil
                 }

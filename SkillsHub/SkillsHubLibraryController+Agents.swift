@@ -1398,7 +1398,7 @@ extension SkillsHubLibraryController {
                 linkPath: target.appendingPathComponent(relationLinkName(asset: skill)).path,
                 targetPath: skill.installedPath, hubSkillID: skill.id,
                 hubRelativePath: "", rootAtCreation: rootURL?.path ?? "",
-                createdAt: .distantPast)
+                createdAt: .distantPast, assetID: skill.assetID)
         }
         return state
     }

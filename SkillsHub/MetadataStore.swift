@@ -290,6 +290,7 @@ nonisolated final class SkillsHubMetadataStore {
     func commit(
         at rootURL: URL,
         expected snapshot: RootSnapshot,
+        beforePublication: (() throws -> Void)? = nil,
         applying mutation: (inout SkillsHubMetadata) throws -> Void
     ) throws -> RootSnapshot {
         Self.mutationLock.lock()
@@ -337,7 +338,8 @@ nonisolated final class SkillsHubMetadataStore {
             to: file,
             originalData: original.data,
             expectedFileIdentity: expectedFileIdentity,
-            expectedParentIdentity: expectedParentIdentity
+            expectedParentIdentity: expectedParentIdentity,
+            beforePublication: beforePublication
         )
     }
 
@@ -436,7 +438,8 @@ nonisolated final class SkillsHubMetadataStore {
         to file: URL,
         originalData: Data?,
         expectedFileIdentity: TargetFileIdentity? = nil,
-        expectedParentIdentity: TargetFileIdentity? = nil
+        expectedParentIdentity: TargetFileIdentity? = nil,
+        beforePublication: (() throws -> Void)? = nil
     ) throws -> RootSnapshot {
         try writeCheckpoint?(.encoding, file)
         let encoded = try encoder.encode(metadata)
@@ -478,6 +481,7 @@ nonisolated final class SkillsHubMetadataStore {
             guard try optionalFileIdentity(of: staging) == stagingIdentity else {
                 throw MetadataCommitError.metadataIdentityChanged
             }
+            try beforePublication?()
             if let originalData {
                 guard try optionalFileIdentity(of: file) == initialFileIdentity else {
                     throw MetadataCommitError.metadataIdentityChanged

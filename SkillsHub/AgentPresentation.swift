@@ -6,7 +6,7 @@ nonisolated extension RelationOwnershipClassification {
         case .exactManagedLink: "Remove the verified Skills Hub-managed link and disable this relationship."
         case .vacant: "Disable this relationship; no link node is currently present."
         case .unmanagedNode: "The current node is not managed by Skills Hub; the object remains unchanged."
-        case .externalLink: "The current link points outside the Management Directory; the object remains unchanged."
+        case .externalLink: "The current link does not match the expected managed target; the object remains unchanged."
         case .brokenLink: "The current link is broken; the object remains unchanged."
         case .unreadable: "Current ownership could not be verified; the object remains unchanged."
         }
@@ -21,7 +21,7 @@ nonisolated extension AgentFindingType {
         case .permissionDenied: "Agent skills directory is not readable or writable."
         case .directoryEnumerationFailed: "The Agent directory could not be completely checked."
         case .localDirectoryNotManaged: "Local directory is not governed by Skills Hub."
-        case .externalSymlinkNotManaged: "Agent entry points outside the Management Directory."
+        case .externalSymlinkNotManaged: "Agent link does not match a verified managed relationship."
         case .brokenSymlink: "Agent entry is a broken symlink."
         case .duplicateWithHub: "Agent entry may duplicate a Hub skill."
         case .aliasConflict: "The Agent entry conflicts with a recorded link name."
@@ -36,7 +36,13 @@ nonisolated extension AgentFindingType {
 }
 
 nonisolated extension AgentDirectoryFinding {
-    var presentationMessage: LocalizedMessage { type.presentationMessage }
+    var presentationMessage: LocalizedMessage {
+        if type == .externalSymlinkNotManaged,
+           summary == "Agent entry points outside the Management Directory." {
+            return "Agent entry points outside the Management Directory."
+        }
+        return type.presentationMessage
+    }
 }
 
 extension AgentKind {
