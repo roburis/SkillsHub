@@ -187,7 +187,7 @@ extension SkillsHubLibraryController {
         let authorizations = try await startupAccessStore.resolvePresentationAccess(to: Array(targets.values))
         let result = try await Self.observePresentation(root: nil, items: [], descriptors: [descriptor],
             targets: targets, detections: Set(agentDetections.filter(\.detected).map(\.agentID)),
-            authorizations: authorizations, fileManager: fileManager, iconPaths: [])
+            authorizations: authorizations, fileManager: fileManager, iconPaths: [], observations: [], evidence: [:], assets: [:])
         guard let qualification = result.qualifications[descriptor.id] else { throw CancellationError() }
         return capabilityPresentation(for: descriptor, qualification: qualification)
     }
@@ -254,7 +254,8 @@ extension SkillsHubLibraryController {
                 safeNextStep: safeNextStep,
                 linkPath: currentObservation?.linkPath,
                 linkText: currentObservation?.linkText,
-                resolvedTargetPath: currentObservation?.resolvedTargetPath
+                resolvedTargetPath: currentObservation?.resolvedTargetPath,
+                ownership: currentObservation == nil ? .unreadable : relationOwnershipSnapshot[relation.id] ?? .unreadable
             )
         }
     }
@@ -981,7 +982,8 @@ extension SkillsHubLibraryController {
     func setGlobalAgentEnablement(
         agentID: String,
         assetID: UUID,
-        enabled: Bool
+        enabled: Bool,
+        recordOnly: Bool = false
     ) async throws -> ControllerRelationActionResult {
         guard let descriptor = visibleInstalledAgentDescriptors.first(where: { $0.id == agentID }) else {
             throw ControllerRelationActionError.unsupportedAgent(agentID)
@@ -1043,6 +1045,11 @@ extension SkillsHubLibraryController {
                 targetAccess: targetAccess,
                 linkURL: linkURL
             )
+            // A record-only confirmation must never authorize removing a filesystem node.
+            if recordOnly, enabled || token.facts.nodeKind != .vacant {
+                throw SkillsHubLibraryFailure.invalidSource(
+                    "The link is no longer absent. Recheck before cancelling the enablement record.")
+            }
         } catch {
             _ = targetAccess.endByOwningAction()
             upsertTask(failedRelationTask(relationTask, error: error, agentID: agentID, agentDisplayName: descriptor.displayName, asset: asset, desiredEnabled: enabled))

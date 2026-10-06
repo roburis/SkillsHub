@@ -446,6 +446,7 @@ extension RelationActionOutcome: Equatable where Success: Equatable {}
 nonisolated struct RelationActionCoordinationResult<Success: Sendable>: Sendable {
     let outcome: RelationActionOutcome<Success>
     let leaseRelease: SecurityScopedAccessEndResult
+    var failureMessage: LocalizedMessage? = nil
 }
 
 actor RelationActionCoordinator {
@@ -509,38 +510,38 @@ actor RelationActionCoordinator {
         currentFacts: @Sendable () async throws -> BrokenLinkDeletionFacts,
         perform: @Sendable (BrokenLinkDeletionAuthorization) async throws -> Success
     ) async -> RelationActionCoordinationResult<Success> {
-        let outcome: RelationActionOutcome<Success>
+        let result: (RelationActionOutcome<Success>, LocalizedMessage?)
         if consumedActionIDs.insert(token.plan.actionID).inserted == false {
-            outcome = .replayed
+            result = (.replayed, nil)
         } else if targetAccess.owner.identity != token.targetLeaseOwnerIdentity {
-            outcome = .blocked(.targetLeaseOwnerMismatch)
+            result = (.blocked(.targetLeaseOwnerMismatch), nil)
         } else if rootURL.standardizedFileURL.path != token.plan.facts.rootPath {
-            outcome = .stale(.rootSessionInvalidated)
+            result = (.stale(.rootSessionInvalidated), nil)
         } else {
-            outcome = await rootMutationOwner.perform(at: rootURL) {
+            result = await rootMutationOwner.perform(at: rootURL) {
                 do {
                     try Task.checkCancellation()
                     let current = try await currentFacts()
                     guard current == token.plan.facts,
                           BrokenLinkDeletionTokenBuilder().digest(of: current) == token.plan.factsDigest else {
-                        return .stale(.factsChanged)
+                        return (.stale(.factsChanged), nil)
                     }
-                    return .completed(try await perform(BrokenLinkDeletionAuthorization(
+                    return (.completed(try await perform(BrokenLinkDeletionAuthorization(
                         kind: .confirmedBrokenLink,
                         actionID: token.plan.actionID,
                         facts: current,
                         factsDigest: token.plan.factsDigest
-                    )))
+                    ))), nil)
                 } catch is CancellationError {
-                    return .cancelled
+                    return (.cancelled, nil)
                 } catch {
-                    return .failed
+                    return (.failed, SkillsHubLocalization.errorPresentation(for: error))
                 }
             }
         }
         return RelationActionCoordinationResult(
-            outcome: outcome,
-            leaseRelease: targetAccess.endByOwningAction()
+            outcome: result.0,
+            leaseRelease: targetAccess.endByOwningAction(), failureMessage: result.1
         )
     }
 

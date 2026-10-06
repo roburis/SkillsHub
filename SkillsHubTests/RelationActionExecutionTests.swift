@@ -4,6 +4,88 @@ import Testing
 @testable import SkillsHub
 
 struct RelationActionExecutionTests {
+    @MainActor
+    @Test func unverifiedBrokenRelationCanDeleteNodeThenCancelOnlyItsRecord() async throws {
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode])
+        let controller = fixture.controller
+        for agent in ["codex", "claudeCode"] {
+            _ = try await controller.setGlobalAgentEnablement(agentID: agent, assetID: fixture.assetID, enabled: true)
+        }
+        let asset = try #require(controller.installedSkills.first)
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: asset.installedPath))
+        let snapshot = try #require(controller.rootSnapshot)
+        controller.rootSnapshot = try SkillsHubMetadataStore().commit(at: fixture.root, expected: snapshot) { metadata in
+            let index = metadata.managedRelationEvidence.firstIndex { $0.relation.agentID == "codex" }!
+            metadata.managedRelationEvidence[index].creation = nil
+        }
+        try await controller.reloadFromDisk()
+        try await controller.auditAgentDirectory(agentID: "codex")
+        let relation = try #require(controller.relationPresentations(for: asset).first { $0.relation.agentID == "codex" })
+        #expect(relation.observation == .brokenSymbolicLink)
+        #expect(relation.ownership == .brokenLink)
+        let before = try #require(controller.rootSnapshot)
+        let plan = try controller.prepareBrokenLinkDeletion(relation: relation.relation)
+        let result = try await controller.deleteBrokenLink(using: plan)
+        guard case .completed(let execution) = result.outcome else { Issue.record("Deletion did not execute"); return }
+        #expect(execution.status == .succeeded)
+        #expect(try SkillsHubMetadataStore().loadCurrentSnapshot(from: fixture.root).metadata == before.metadata)
+        let vacant = try #require(controller.relationPresentations(for: asset).first { $0.relation == relation.relation })
+        #expect(vacant.observation == .vacant)
+        #expect(vacant.intendedEnabled == true)
+        let cancelled = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID,
+            enabled: false, recordOnly: true)
+        #expect(cancelled.execution?.status == .succeeded)
+        #expect(cancelled.execution?.fileEvents.isEmpty == true)
+        #expect(controller.rootSnapshot?.metadata.enablementIntents.first { $0.agentID == "codex" }?.isEnabled == false)
+        #expect(controller.rootSnapshot?.metadata.enablementIntents.first { $0.agentID == "claudeCode" }?.isEnabled == true)
+        #expect(controller.rootSnapshot?.metadata.managedRelationEvidence.contains { $0.relation.agentID == "codex" } == false)
+        #expect(controller.relationPresentations(for: asset).first { $0.relation == relation.relation }?.verification == .verifiedConsistent)
+        try await controller.reloadFromDisk()
+        #expect(controller.rootSnapshot?.metadata.enablementIntents.first { $0.agentID == "codex" }?.isEnabled == false)
+        // Proven ownership still allows normal disable of a broken managed link.
+        let disabled = try await controller.setGlobalAgentEnablement(agentID: "claudeCode", assetID: fixture.assetID, enabled: false)
+        #expect(disabled.execution?.status == .succeeded)
+    }
+
+    @MainActor
+    @Test func restoredTargetReportsReasonThroughControllerWithoutDeletingLink() async throws {
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
+        let controller = fixture.controller
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        let asset = try #require(controller.installedSkills.first)
+        let target = URL(fileURLWithPath: asset.installedPath)
+        try FileManager.default.removeItem(at: target)
+        try await controller.auditAgentDirectory(agentID: "codex")
+        let relation = try #require(controller.relationPresentations(for: asset).first { $0.relation.agentID == "codex" })
+        let plan = try controller.prepareBrokenLinkDeletion(relation: relation.relation)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let before = try #require(controller.rootSnapshot)
+        let result = try await controller.deleteBrokenLink(using: plan)
+        #expect(result.outcome == .failed)
+        #expect(result.failureMessage == "The target is available again. The link was not deleted.")
+        #expect(controller.errorMessage == result.failureMessage)
+        #expect(try LinkNodeIdentity.read(at: URL(fileURLWithPath: plan.facts.linkPath)) == plan.facts.nodeIdentity)
+        #expect(try SkillsHubMetadataStore().loadCurrentSnapshot(from: fixture.root).metadata == before.metadata)
+    }
+
+    @MainActor
+    @Test func recordCancellationRejectsPresentNodeWithoutChangingIt() async throws {
+        let fixture = try await makeControllerRelationFixture(agents: [.codex])
+        let controller = fixture.controller
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        let asset = try #require(controller.installedSkills.first)
+        let relation = try #require(controller.relationPresentations(for: asset).first { $0.relation.agentID == "codex" })
+        let path = try #require(relation.linkPath)
+        let identity = try LinkNodeIdentity.read(at: URL(fileURLWithPath: path))
+        let before = try #require(controller.rootSnapshot)
+        await #expect(throws: (any Error).self) {
+            try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID,
+                enabled: false, recordOnly: true)
+        }
+        #expect(try LinkNodeIdentity.read(at: URL(fileURLWithPath: path)) == identity)
+        #expect(try SkillsHubMetadataStore().loadCurrentSnapshot(from: fixture.root).metadata == before.metadata)
+    }
+
     @Test func confirmedBrokenRelativeLinkDeletesOnlyTheNodeAndKeepsMetadata() throws {
         let fixture = try BrokenLinkDeletionFixture(
             rawTarget: "../target-alias",
@@ -26,6 +108,7 @@ struct RelationActionExecutionTests {
         let result = fixture.execute()
 
         #expect(result.status == .blocked)
+        #expect(result.failureMessage == "The target is available again. The link was not deleted.")
         #expect((try? LinkNodeIdentity.read(at: fixture.linkURL)) == fixture.authorization.facts.nodeIdentity)
         #expect(FileManager.default.fileExists(atPath: fixture.resolvedTarget.path))
     }

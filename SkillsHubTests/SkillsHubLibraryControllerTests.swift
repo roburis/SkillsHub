@@ -622,6 +622,18 @@ struct SkillsHubLibraryControllerTests {
         #expect(cleared.items.first?.outcome == .succeeded)
         #expect((try? LinkNodeIdentity.read(at: fixture.targets[.codex]!.appendingPathComponent("Writer"))) == nil)
         #expect(try LinkNodeIdentity.read(at: fixture.targets[.claudeCode]!.appendingPathComponent("Writer")).kind == S_IFLNK)
+        // Cancelling an absent link's record uses the selected asset, never its shared name.
+        _ = try await fixture.controller.setGlobalAgentEnablement(agentID: "codex", assetID: other.assetID, enabled: true)
+        let otherLink = fixture.targets[.codex]!.appendingPathComponent("Writer")
+        try FileManager.default.removeItem(at: otherLink)
+        let recordCancelled = try await fixture.controller.setGlobalAgentEnablement(agentID: "codex",
+            assetID: other.assetID, enabled: false, recordOnly: true)
+        #expect(recordCancelled.outcome == .succeeded)
+        #expect(recordCancelled.execution?.fileEvents.isEmpty == true)
+        #expect(fixture.controller.rootSnapshot?.metadata.enablementIntents.first {
+            $0.assetID == fixture.assetID && $0.agentID == "claudeCode"
+        }?.isEnabled == true)
+        #expect(try LinkNodeIdentity.read(at: fixture.targets[.claudeCode]!.appendingPathComponent("Writer")).kind == S_IFLNK)
         await #expect(throws: SkillsHubLibraryFailure.self) {
             try await fixture.controller.setGlobalAgentEnablement(agentID: AgentKind.codex.rawValue, assetID: UUID(), enabled: true)
         }

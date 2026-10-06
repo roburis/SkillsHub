@@ -45,6 +45,8 @@ final class SkillsHubLibraryController {
                 catalogItemsBySource = [:]
                 localSourcesInspectionSnapshot = []
                 agentFindings = []
+                missingCatalogItemIDs = []
+                relationOwnershipSnapshot = [:]
                 observedLocalSourceNames = nil
                 isRefreshingLocalSources = false
                 resolvedRootPath = nil
@@ -62,6 +64,8 @@ final class SkillsHubLibraryController {
     var sources: [SkillSource] {
         didSet { if oldValue != sources { rebuildCatalogPresentation(); requestPresentationObservation() } }
     }
+    // Observation only; persistent identities remain available to Agents and recovery.
+    var missingCatalogItemIDs: Set<String> = []
     var catalogItems: [Phase1SkillPresentation] = []
     var catalogItemsByID: [String: Phase1SkillPresentation] = [:]
     var catalogItemsBySource: [UUID: [Phase1SkillPresentation]] = [:]
@@ -92,7 +96,10 @@ final class SkillsHubLibraryController {
         didSet { if oldValue != agentPathOverrides { agentCapabilitySnapshot = [:]; agentPathSettingsSnapshot = []; requestPresentationObservation() } }
     }
     var localState: SkillsHubLocalState {
-        didSet { rebuildRelationPresentationIndexes() }
+        didSet {
+            rebuildRelationPresentationIndexes()
+            if oldValue.targetObservations != localState.targetObservations { requestPresentationObservation() }
+        }
     }
     var agentDetections: [AgentDetectionSnapshot] {
         didSet {
@@ -122,6 +129,7 @@ final class SkillsHubLibraryController {
     var agentPathSettingsSnapshot: [AgentPathSettingRecord] = []
     var agentCapabilitySnapshot: [String: AgentCapabilityPresentation] = [:]
     var contentObservationSnapshot: [String: TargetObservation] = [:]
+    var relationOwnershipSnapshot: [String: RelationOwnershipClassification] = [:]
     var desktopIconSnapshot: [String: NSImage] = [:]
     @ObservationIgnored var observedDesktopIconPaths: Set<String> = []
     var isRefreshingPresentation = false
