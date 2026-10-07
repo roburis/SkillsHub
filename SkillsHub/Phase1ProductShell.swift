@@ -1672,6 +1672,10 @@ private struct Phase1AgentWorkspace: View {
         descriptor.flatMap { library.agentDirectoryAuditFailures[$0.id] } != nil
     }
 
+    private var isChecking: Bool {
+        descriptor.map { library.auditingAgentIDs.contains($0.id) } ?? false
+    }
+
     private var relations: [AgentRelationPresentation] {
         guard let agentID = descriptor?.id else { return [] }
         return library.installedSkills.flatMap(library.relationPresentations).filter {
@@ -1778,6 +1782,7 @@ private struct Phase1AgentWorkspace: View {
             .listStyle(.plain).scrollContentBackground(.hidden).background(Color(nsColor: .windowBackgroundColor))
             .focused($listFocused)
             .onChange(of: selectedID) { _, value in if value != nil { listFocused = true } }
+            .accessibilityIdentifier("agent-skill-list")
             .overlay {
                 if visibleIDs.isEmpty && descriptor.flatMap({ library.agentDirectoryAuditFailures[$0.id] }) == nil {
                     ContentUnavailableView(localized("No matching Skills"), systemImage: "square.stack.3d.up")
@@ -1818,8 +1823,12 @@ private struct Phase1AgentWorkspace: View {
                 Button {
                     guard let id = descriptor?.id else { return }
                     Task { do { try await library.auditAgentDirectory(agentID: id) } catch { library.handle(error) } }
-                } label: { Image(systemName: "arrow.clockwise") }
-                .accessibilityLabel(localized("Recheck Agent directory"))
+                } label: {
+                    if isChecking { ProgressView().controlSize(.small) }
+                    else { Image(systemName: "arrow.clockwise") }
+                }
+                .disabled(isChecking || !library.hasRoot)
+                .accessibilityLabel(localized(isChecking ? "Checking…" : "Recheck Agent directory"))
                 .help(localized("Recheck Agent directory"))
                 .accessibilityIdentifier("recheck-agent-directory-\(descriptor?.id ?? "")")
                 Picker(localized("Ownership"), selection: $ownership) {

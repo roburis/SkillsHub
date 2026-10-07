@@ -2,12 +2,28 @@ import Foundation
 
 extension SkillsHubLibraryController {
     func refreshAgentLightScan(checkInstallation: Bool = false) async {
-        guard let rootURL else {
-            return
+        guard let rootURL, !Task.isCancelled else { return }
+        // ponytail: serialize scans sharing one generation; use per-Agent generations if parallel scans are needed.
+        let sessionID = rootSessionLease?.id
+        let id = UUID()
+        let pendingLightScan = agentLightScanTask?.task
+        let pendingAudits = Array(agentDirectoryAuditTasks.values)
+        let task = Task {
+            await pendingLightScan?.value
+            for job in pendingAudits { _ = await job.task.result }
+            guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID else { return }
+            await performAgentLightScan(checkInstallation: checkInstallation)
         }
+        agentLightScanTask = (id, task)
+        defer { if agentLightScanTask?.id == id { agentLightScanTask = nil } }
+        await task.value
+    }
+
+    private func performAgentLightScan(checkInstallation: Bool) async {
+        guard let rootURL else { return }
+        let sessionID = rootSessionLease?.id
         agentObservationGeneration &+= 1
         let generation = agentObservationGeneration
-        let sessionID = rootSessionLease?.id
         let snapshot = rootSnapshot
         let auditState = agentAuditLocalState
         let overrides = agentPathOverrides
@@ -113,6 +129,31 @@ extension SkillsHubLibraryController {
     }
 
     func auditAgentDirectory(agentID: String) async throws {
+        if let job = agentDirectoryAuditTasks[agentID] { return try await job.task.value }
+        let id = UUID()
+        let root = rootURL
+        let session = rootSessionLease?.id
+        let pendingLightScan = agentLightScanTask?.task
+        let pendingAudits = Array(agentDirectoryAuditTasks.values)
+        let task = Task {
+            await pendingLightScan?.value
+            for job in pendingAudits { _ = await job.task.result }
+            try Task.checkCancellation()
+            guard rootURL == root, rootSessionLease?.id == session else { throw CancellationError() }
+            try await runAgentDirectoryAudit(agentID: agentID)
+        }
+        agentDirectoryAuditTasks[agentID] = (id, task)
+        auditingAgentIDs.insert(agentID)
+        defer {
+            if agentDirectoryAuditTasks[agentID]?.id == id {
+                agentDirectoryAuditTasks.removeValue(forKey: agentID)
+                auditingAgentIDs.remove(agentID)
+            }
+        }
+        try await task.value
+    }
+
+    private func runAgentDirectoryAudit(agentID: String) async throws {
         do {
             try await performAgentDirectoryAudit(agentID: agentID)
             agentDirectoryAuditFailures.removeValue(forKey: agentID)
@@ -295,13 +336,21 @@ extension SkillsHubLibraryController {
     }
 
     private func mergeAgentAuditResult(_ result: AgentDirectoryAuditResult, agentID: String? = nil) async {
-        agentDetections = agentDetections.filter { agentID != nil && $0.agentID != agentID }
-            + result.detections
+        let root = rootSnapshot
+        let session = rootSessionLease?.id
+        let generation = agentObservationGeneration
+        await refreshRelationObservations(for: result.detections)
+        guard !Task.isCancelled, rootSnapshot == root, rootSessionLease?.id == session,
+              agentObservationGeneration == generation else { return }
+        // Keep other Agents in their existing order during a scoped audit.
+        let replacements = Dictionary(result.detections.map { ($0.agentID, $0) }, uniquingKeysWith: { first, _ in first })
+        agentDetections = agentID == nil ? result.detections
+            : agentDetections.map { replacements[$0.agentID] ?? $0 }
+                + result.detections.filter { candidate in !agentDetections.contains { $0.agentID == candidate.agentID } }
         agentFindings = agentFindings.filter { agentID != nil && $0.agentID != agentID }
             + result.findings.filter { agentID == nil || $0.agentID == agentID }
         localState.detectedAgentsSnapshot = agentDetections
         localState.agentAuditSnapshots = result.auditSnapshots
-        await refreshRelationObservations(for: result.detections)
     }
 
     func refreshRelationObservations(for detections: [AgentDetectionSnapshot], assetIDs: Set<UUID>? = nil) async {
@@ -309,11 +358,14 @@ extension SkillsHubLibraryController {
         let sessionID = rootSessionLease?.id
         let expected = rootSnapshot
         let generation = agentObservationGeneration
+        let previousState = localState
+        var updates: [(observation: TargetObservation, verification: VerificationRecord?)] = []
+        var capabilities: [String: AgentCapabilityPresentation] = [:]
         let targetURLs = installedAgentDescriptors.compactMap { $0.skillsDirectory.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL } }
         let authorizations = (try? await startupAccessStore.resolvePresentationAccess(to: targetURLs)) ?? [:]
         guard !Task.isCancelled, rootURL == root, rootSessionLease?.id == sessionID,
               rootSnapshot == expected, generation == agentObservationGeneration else { return }
-        for previous in localState.targetObservations where assetIDs?.contains(previous.relation.assetID) ?? true {
+        for previous in previousState.targetObservations where assetIDs?.contains(previous.relation.assetID) ?? true {
             let relation = previous.relation
             guard relation.scope == .global,
                   detections.contains(where: { $0.agentID == relation.agentID }),
@@ -348,23 +400,50 @@ extension SkillsHubLibraryController {
                 )
             }
 
-            localState.targetObservations.removeAll { $0.relation == relation }
-            localState.targetObservations.append(observation)
             let capability: AgentCapabilityPresentation
-            do { capability = try await inspectAgentCapabilityPresentation(descriptor) }
-            catch { continue }
+            do {
+                if let cached = capabilities[descriptor.id] { capability = cached }
+                else {
+                    capability = try await inspectAgentCapabilityPresentation(descriptor)
+                    capabilities[descriptor.id] = capability
+                }
+            } catch {
+                updates.append((observation, nil))
+                continue
+            }
             guard !Task.isCancelled, rootURL == root, rootSessionLease?.id == sessionID,
                   rootSnapshot == expected, generation == agentObservationGeneration else { return }
             let intent = rootSnapshot?.metadata.enablementIntents.first { $0.id == relation.id }
-            if let input = currentRelationVerificationInput(
+            let input = currentRelationVerificationInput(
                 relation: relation, skill: skill, intent: intent, observation: observation,
                 capability: capability
-            ) {
-                localState = localState.replacingRelationState(
-                    relation, observation: observation,                     verification: RelationVerifier.verify(input)
-                )
-            }
+            )
+            updates.append((observation, input.map(RelationVerifier.verify)))
         }
+        guard !Task.isCancelled, rootURL == root, rootSessionLease?.id == sessionID,
+              rootSnapshot == expected, generation == agentObservationGeneration else { return }
+        // Merge into the latest state; an intervening relation action owns its newer result.
+        var next = localState
+        for update in updates {
+            let relation = update.observation.relation
+            guard next.targetObservations.first(where: { $0.relation == relation })
+                    == previousState.targetObservations.first(where: { $0.relation == relation }),
+                  next.verificationRecords.first(where: { $0.relation == relation })
+                    == previousState.verificationRecords.first(where: { $0.relation == relation }) else { continue }
+            next.targetObservations.removeAll { $0.relation == relation }
+            next.targetObservations.append(update.observation)
+            next.verificationRecords.removeAll { $0.relation == relation }
+            if let verification = update.verification { next.verificationRecords.append(verification) }
+            if let skill = installedSkills.first(where: { $0.assetID == relation.assetID }),
+               let target = capabilities[relation.agentID]?.targetPath {
+                relationOwnershipSnapshot[relation.id] = RelationOwnershipInspector.classify(
+                    observation: update.observation,
+                    expectedLinkPath: URL(fileURLWithPath: target).appendingPathComponent(relationLinkName(asset: skill)).path,
+                    canonicalTargetPath: skill.installedPath)
+            } else { relationOwnershipSnapshot.removeValue(forKey: relation.id) }
+        }
+        agentCapabilitySnapshot.merge(capabilities, uniquingKeysWith: { _, current in current })
+        localState = next
     }
 
     @concurrent nonisolated private static func inspectRelationNode(

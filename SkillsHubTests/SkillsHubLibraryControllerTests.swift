@@ -1329,7 +1329,8 @@ private func skillText(name: String, description: String) -> String {
 
 @MainActor
 func makeControllerRelationFixture(
-    agents: [AgentKind], linkService: AgentLinkService = AgentLinkService()
+    agents: [AgentKind], linkService: AgentLinkService = AgentLinkService(),
+    startupAccessStore: (any StartupAccessStoring)? = nil
 ) async throws -> (
     controller: SkillsHubLibraryController,
     root: URL,
@@ -1374,7 +1375,7 @@ func makeControllerRelationFixture(
         agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation),
         agentHomeDirectory: home,
         agentEnvironment: [:],
-        startupAccessStore: accessStore
+        startupAccessStore: startupAccessStore ?? accessStore
     )
     try await connectInitializedTestRoot(controller, at: root)
     await controller.refreshAgentLightScan(checkInstallation: true)
