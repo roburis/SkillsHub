@@ -913,6 +913,110 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testAgentRefreshPreservesRowsSelectionAndScroll() throws {
+        let fixture = try makeFixture()
+        var app = try launch(fixture: fixture)
+        app.terminate()
+        activeApp = nil
+        var metadata = try metadataObject(at: fixture.metadata)
+        var assets = try XCTUnwrap(metadata["installedSkills"] as? [[String: Any]])
+        let template = try XCTUnwrap(assets.first)
+        var intents = try XCTUnwrap(metadata["enablementIntents"] as? [[String: Any]])
+        var observations: [[String: Any]] = []
+        for index in 0..<24 {
+            let name = String(format: "Steady %02d", index)
+            let folder = fixture.root.appending(path: "local/fixture-source/steady-\(index)")
+            try writeObservedSkill(at: folder, name: name)
+            let assetID = UUID().uuidString
+            var asset = template
+            asset["id"] = "steady-\(index)"
+            asset["assetID"] = assetID
+            asset["name"] = name
+            asset["installedPath"] = folder.path
+            asset["canonicalPathComponent"] = "steady-\(index)"
+            asset["stableLinkName"] = name
+            asset.removeValue(forKey: "candidateID")
+            asset.removeValue(forKey: "manifestDigest")
+            assets.append(asset)
+            for (agentID, path) in [("codex", ".codex/skills"), ("claudeCode", ".claude/skills")] {
+                let target = fixture.home.appending(path: path)
+                try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+                try FileManager.default.createSymbolicLink(at: target.appending(path: name), withDestinationURL: folder)
+                intents.append(["assetID": assetID, "agentID": agentID, "scope": "global", "isEnabled": true, "generation": 0])
+                observations.append([
+                    "relation": ["assetID": assetID, "agentID": agentID, "scope": "global"],
+                    "linkPath": target.appending(path: name).path, "nodeKind": "unreadable",
+                    "isReadable": false, "isWritable": false, "observedAt": "2000-01-01T00:00:00Z"
+                ])
+            }
+        }
+        metadata["installedSkills"] = assets
+        metadata["enablementIntents"] = intents
+        try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]).write(to: fixture.metadata, options: .atomic)
+        try JSONSerialization.data(withJSONObject: ["targetObservations": observations]).write(
+            to: fixture.root.appending(path: ".skillshub.local.json"), options: .atomic)
+        app = try launch(fixture: fixture, windowWidth: 1040,
+            additionalArguments: ["--skillshub-ui-creation-material-fixture"])
+        for agentID in ["codex", "claudeCode"] {
+            selectNavigation("agent-\(agentID)", in: app)
+            let refresh = app.buttons["recheck-agent-directory-\(agentID)"]
+            XCTAssertTrue(refresh.waitForExistence(timeout: 5))
+            let ready = { () -> XCTNSPredicateExpectation in
+                XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in refresh.isEnabled }, object: nil)
+            }
+            XCTAssertEqual(XCTWaiter.wait(for: [ready()], timeout: 10), .completed)
+            refresh.click()
+            XCTAssertEqual(XCTWaiter.wait(for: [ready()], timeout: 10), .completed)
+            let query = app.searchFields["agent-workspace-search"]
+            query.click()
+            query.typeText("Steady")
+            query.typeKey(.return, modifierFlags: [])
+            let list = app.descendants(matching: .any)["agent-skill-list"]
+            let rows = list.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "agent-row-"))
+            XCTAssertTrue(list.staticTexts["Steady 00"].waitForExistence(timeout: 5))
+            XCTAssertTrue(list.staticTexts["Verified consistent"].firstMatch.waitForExistence(timeout: 5))
+            let order = rows.allElementsBoundByIndex.map(\.identifier)
+            XCTAssertGreaterThanOrEqual(order.count, 24)
+            for _ in 0..<5 { list.swipeUp() }
+            let anchor = try XCTUnwrap(rows.allElementsBoundByIndex.first {
+                $0.isHittable && list.frame.insetBy(dx: 0, dy: 12).contains($0.frame)
+            })
+            let anchorID = anchor.identifier
+            anchor.click()
+            let y = anchor.frame.minY
+            let detail = app.descendants(matching: .any)["skill-detail"]
+            XCTAssertTrue(detail.waitForExistence(timeout: 3))
+            let title = app.staticTexts["skill-detail-title"]
+            let selectedTitle = title.value as? String ?? title.label
+            let verification = detail.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "relation-verification-\(agentID)-")).firstMatch
+            XCTAssertEqual(verification.value as? String, "Verified consistent")
+            for _ in 0..<3 {
+                refresh.click()
+                XCTAssertEqual(XCTWaiter.wait(for: [ready()], timeout: 10), .completed)
+                XCTAssertEqual(rows.allElementsBoundByIndex.map(\.identifier), order)
+                XCTAssertEqual(app.descendants(matching: .any)[anchorID].frame.minY, y, accuracy: 3)
+                XCTAssertTrue(detail.exists)
+                XCTAssertEqual(title.value as? String ?? title.label, selectedTitle)
+                XCTAssertEqual(verification.value as? String, "Verified consistent")
+                XCTAssertEqual(query.value as? String, "Steady")
+            }
+            let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+            shot.name = "Stable \(agentID) list after three refreshes"
+            shot.lifetime = .keepAlways
+            add(shot)
+            selectNavigation("all-skills", in: app)
+            selectNavigation("agent-\(agentID)", in: app)
+            let restored = app.descendants(matching: .any)[anchorID]
+            let visibleAgain = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: restored)
+            XCTAssertEqual(XCTWaiter.wait(for: [visibleAgain], timeout: 5), .completed)
+            XCTAssertEqual(restored.frame.minY, y, accuracy: 3)
+            XCTAssertTrue(detail.exists)
+            XCTAssertEqual(title.value as? String ?? title.label, selectedTitle)
+            XCTAssertEqual(query.value as? String, "Steady")
+        }
+    }
+
+    @MainActor
     func testUnifiedSkillLibraryContainsCandidateManagedAndAttentionStates() throws {
         for (language, appearance, neutralLabel, attentionLabel) in [
             ("en", "Light", "Not connected to an Agent", "Needs Attention"),

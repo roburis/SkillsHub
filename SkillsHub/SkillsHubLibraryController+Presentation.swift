@@ -70,8 +70,7 @@ extension SkillsHubLibraryController {
         presentationObservationGeneration &+= 1
         let generation = presentationObservationGeneration
         presentationObservationTask?.cancel()
-        contentObservationSnapshot = [:]
-        relationOwnershipSnapshot = [:]
+        // Keep the last complete display while checking; actions requalify current access.
         isRefreshingPresentation = true
         presentationObservationTask = Task { [weak self] in
             await Task.yield()
@@ -115,7 +114,7 @@ extension SkillsHubLibraryController {
                     root: authorizedRoot, items: items, descriptors: descriptors,
                     targets: targets, detections: detections, authorizations: authorizations,
                     fileManager: self.fileManager, iconPaths: iconPaths, resolvedRootPath: self.resolvedRootPath,
-                    observations: self.localState.targetObservations,
+                    observations: authorizedRoot == nil ? [] : self.localState.targetObservations,
                     assets: Dictionary(self.installedSkills.map { ($0.assetID, $0) }, uniquingKeysWith: { first, _ in first })
                 )
                 guard contextIsCurrent() else { return }
@@ -134,6 +133,9 @@ extension SkillsHubLibraryController {
                 self.observedDesktopIconPaths.formUnion(iconPaths)
             } catch {
                 guard contextIsCurrent() else { return }
+                self.agentCapabilitySnapshot = [:]
+                self.contentObservationSnapshot = [:]
+                self.relationOwnershipSnapshot = [:]
                 self.handle(error)
             }
             guard contextIsCurrent() else { return }

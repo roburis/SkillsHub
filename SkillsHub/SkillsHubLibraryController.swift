@@ -39,6 +39,11 @@ final class SkillsHubLibraryController {
             defaultAgentDirectoryRefresh = [:]
             agentDirectoryAuditFailures = [:]
             if oldValue?.standardizedFileURL != rootURL?.standardizedFileURL {
+                for job in agentDirectoryAuditTasks.values { job.task.cancel() }
+                agentDirectoryAuditTasks = [:]
+                agentLightScanTask?.task.cancel()
+                agentLightScanTask = nil
+                auditingAgentIDs = []
                 agentCapabilitySnapshot = [:]
                 catalogItems = []
                 catalogItemsByID = [:]
@@ -47,6 +52,7 @@ final class SkillsHubLibraryController {
                 agentFindings = []
                 missingCatalogItemIDs = []
                 relationOwnershipSnapshot = [:]
+                contentObservationSnapshot = [:]
                 observedLocalSourceNames = nil
                 isRefreshingLocalSources = false
                 resolvedRootPath = nil
@@ -107,12 +113,15 @@ final class SkillsHubLibraryController {
                 desktopIconSnapshot = [:]
                 observedDesktopIconPaths = []
             }
-            if oldValue != agentDetections { agentCapabilitySnapshot = [:]; rebuildAgentPresentation() }
+            if oldValue != agentDetections { rebuildAgentPresentation() }
         }
     }
     var agentFindings: [AgentDirectoryFinding]
     var defaultAgentDirectoryRefresh: [AgentKind: AgentDefaultDirectoryRefreshStatus] = [:]
     var agentDirectoryAuditFailures: [String: LocalizedMessage] = [:]
+    var auditingAgentIDs: Set<String> = []
+    @ObservationIgnored var agentDirectoryAuditTasks: [String: (id: UUID, task: Task<Void, Error>)] = [:]
+    @ObservationIgnored var agentLightScanTask: (id: UUID, task: Task<Void, Never>)?
     var rootSnapshot: RootSnapshot? {
         didSet {
             rebuildRelationPresentationIndexes()

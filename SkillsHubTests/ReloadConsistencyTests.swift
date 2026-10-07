@@ -4,6 +4,130 @@ import Testing
 
 @MainActor
 struct ReloadConsistencyTests {
+    @Test(.timeLimit(.minutes(1)), arguments: ["unchanged", "removed", "newer-result", "root-switch", "permission-lost", "presentation-error"])
+    func agentRefreshKeepsObservationAndVerificationTogether(_ scenario: String) async throws {
+        let access = PausingAgentAccessStore()
+        let fixture = try await makeControllerRelationFixture(agents: [.codex], startupAccessStore: access)
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            if let target = fixture.targets[.codex] {
+                try? FileManager.default.removeItem(at: target.deletingLastPathComponent().deletingLastPathComponent())
+            }
+        }
+        let controller = fixture.controller
+        await controller.waitForPendingRechecks()
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        await controller.waitForPresentationObservation()
+        let skill = try #require(controller.installedSkills.first)
+        let relation = AgentRelationIdentity(assetID: fixture.assetID, agentID: "codex", scope: .global)
+        var observation = try #require(controller.presentationObservations[relation.id])
+        observation.observedAt = .distantPast
+        let descriptor = try #require(controller.visibleInstalledAgentDescriptors.first { $0.id == "codex" })
+        let input = try #require(controller.currentRelationVerificationInput(relation: relation, skill: skill,
+            intent: controller.presentationIntents[relation.id], observation: observation,
+            capability: controller.agentCapabilityPresentation(descriptor)))
+        controller.localState = controller.localState.replacingRelationState(relation,
+            observation: observation, verification: RelationVerifier.verify(input))
+        await controller.waitForPresentationObservation()
+        #expect(controller.relationPresentations(for: skill).first { $0.id == relation.id }?.verification == .verifiedConsistent)
+
+        if scenario == "presentation-error" {
+            access.failure = CocoaError(.fileReadNoPermission)
+            controller.requestPresentationObservation()
+            #expect(controller.relationPresentations(for: skill).first { $0.id == relation.id }?.verification == .verifiedConsistent)
+            await controller.waitForPresentationObservation()
+            #expect(controller.relationOwnershipSnapshot.isEmpty)
+            #expect(controller.contentObservationSnapshot.isEmpty)
+            #expect(controller.relationPresentations(for: skill).first { $0.id == relation.id }?.verification == .currentlyUnverifiable)
+            #expect(controller.errorMessage != nil)
+            return
+        }
+        if scenario == "removed" { try FileManager.default.removeItem(atPath: observation.linkPath) }
+        access.pauseNextQualification = true
+        let refresh = Task { await controller.refreshRelationObservations(for: controller.agentDetections) }
+        await access.waitUntilPaused()
+        #expect(controller.presentationObservations[relation.id] == observation)
+        #expect(controller.relationPresentations(for: skill).first { $0.id == relation.id }?.verification == .verifiedConsistent)
+        var newer: TargetObservation?
+        if scenario == "newer-result" {
+            var value = observation
+            value.nodeKind = .unreadable
+            value.limitation = "newer action result"
+            newer = value
+            let newInput = try #require(controller.currentRelationVerificationInput(relation: relation, skill: skill,
+                intent: controller.presentationIntents[relation.id], observation: value,
+                capability: controller.agentCapabilityPresentation(descriptor)))
+            controller.localState = controller.localState.replacingRelationState(relation,
+                observation: value, verification: RelationVerifier.verify(newInput))
+        } else if scenario == "root-switch" {
+            controller.rootURL = nil
+            controller.rootSnapshot = nil
+        } else if scenario == "permission-lost" { access.denied = true }
+        access.resume()
+        await refresh.value
+        await controller.waitForPresentationObservation()
+        if scenario == "root-switch" {
+            #expect(controller.presentationObservations[relation.id] == observation)
+            #expect(controller.relationOwnershipSnapshot.isEmpty)
+        } else if let newer {
+            #expect(controller.presentationObservations[relation.id] == newer)
+        } else {
+            #expect(controller.presentationObservations[relation.id]?.observedAt != observation.observedAt)
+            let expected: VerificationConclusion = scenario == "removed" ? .drifted
+                : scenario == "permission-lost" ? .currentlyUnverifiable : .verifiedConsistent
+            #expect(controller.relationPresentations(for: skill).first { $0.id == relation.id }?.verification == expected)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: ["duplicate", "root-switch", "another-agent"])
+    func duplicateAgentAuditsShareOneTaskAndLightScanWaits(_ scenario: String) async throws {
+        let access = PausingAgentAccessStore()
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode], startupAccessStore: access)
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            if let target = fixture.targets[.codex] {
+                try? FileManager.default.removeItem(at: target.deletingLastPathComponent().deletingLastPathComponent())
+            }
+        }
+        let controller = fixture.controller
+        await controller.waitForPendingRechecks()
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        await controller.waitForPresentationObservation()
+        let generation = controller.agentObservationGeneration
+        let lastLightScan = controller.localState.lastAgentLightScanAt
+        access.pauseNextQualification = true
+        let first = Task { try await controller.auditAgentDirectory(agentID: "codex") }
+        await access.waitUntilPaused()
+        let job = try #require(controller.agentDirectoryAuditTasks["codex"]?.id)
+        let second = Task { try await controller.auditAgentDirectory(agentID: "codex") }
+        let light = Task { await controller.refreshAgentLightScan() }
+        await Task.yield()
+        #expect(controller.agentDirectoryAuditTasks["codex"]?.id == job)
+        #expect(controller.auditingAgentIDs == ["codex"])
+        #expect(controller.agentObservationGeneration == generation + 1)
+        let other = scenario == "another-agent" ? Task { try await controller.auditAgentDirectory(agentID: "claudeCode") } : nil
+        if scenario == "root-switch" {
+            controller.rootURL = nil
+            controller.rootSnapshot = nil
+        }
+        access.resume()
+        if scenario == "root-switch" {
+            await #expect(throws: CancellationError.self) { try await first.value }
+            await #expect(throws: CancellationError.self) { try await second.value }
+        } else {
+            try await first.value
+            try await second.value
+        }
+        await light.value
+        try await other?.value
+        #expect(controller.agentObservationGeneration == generation + (scenario == "root-switch" ? 1 : scenario == "another-agent" ? 3 : 2))
+        if scenario != "root-switch" {
+            #expect(controller.localState.lastAgentLightScanAt != lastLightScan)
+        }
+        #expect(controller.agentDirectoryAuditTasks.isEmpty)
+        #expect(controller.auditingAgentIDs.isEmpty)
+    }
+
     @Test func presentationSelectionUsesIndexesAndOnlyFactsInvalidateSnapshots() async throws {
         let fixture = try await makeControllerRelationFixture(agents: [.codex])
         let controller = fixture.controller
@@ -859,6 +983,38 @@ private func writeReloadSkill(_ directory: URL, name: String) throws {
     Body.
     """
     try text.write(to: directory.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+}
+
+@MainActor
+private final class PausingAgentAccessStore: StartupAccessStoring {
+    var pauseNextQualification = false
+    var denied = false
+    var failure: Error?
+    private var response: CheckedContinuation<Void, Never>?
+    private var waiter: CheckedContinuation<Void, Never>?
+    func resolveAccess(to url: URL) throws -> StartupAccessBookmarkResolution? {
+        denied ? nil : StartupAccessBookmarkResolution(url: url.standardizedFileURL, isStale: false)
+    }
+    func saveAccess(to url: URL) throws {}
+    func resolvePresentationAccess(to urls: [URL]) async throws -> [String: StartupAccessBookmarkResolution] {
+        if let failure { throw failure }
+        if pauseNextQualification && urls.count == 1 {
+            pauseNextQualification = false
+            await withCheckedContinuation { continuation in
+                response = continuation
+                waiter?.resume()
+                waiter = nil
+            }
+        }
+        if denied { return [:] }
+        return Dictionary(uniqueKeysWithValues: Set(urls.map(\.standardizedFileURL)).map {
+            ($0.path, StartupAccessBookmarkResolution(url: $0, isStale: false))
+        })
+    }
+    func waitUntilPaused() async {
+        if response == nil { await withCheckedContinuation { waiter = $0 } }
+    }
+    func resume() { response?.resume(); response = nil }
 }
 
 @MainActor
