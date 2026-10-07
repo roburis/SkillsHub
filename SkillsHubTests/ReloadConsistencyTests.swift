@@ -384,7 +384,7 @@ struct ReloadConsistencyTests {
         #expect(try Data(contentsOf: recordFile) == recordBefore)
     }
 
-    @Test(arguments: ["missing", "enabled", "unsettled", "unreadable", "entry-missing", "restored", "write-failure", "conflict", "local-only"])
+    @Test(arguments: ["missing", "enabled", "unsettled", "referenced", "journal-reference", "journal-corrupt", "journal-root-container", "source-reference", "source-resolved-reference", "late-reference", "snapshot-conflict", "unreadable", "entry-missing", "restored", "write-failure", "conflict", "local-only"])
     func missingRecordPruningRespectsResponsibilitiesAndCurrentFacts(_ sample: String) async throws {
         let root = try reloadTemporaryDirectory().standardizedFileURL
         let home = try reloadTemporaryDirectory().standardizedFileURL
@@ -394,11 +394,16 @@ struct ReloadConsistencyTests {
         let github = root.appendingPathComponent("github/owner/repo/review")
         for directory in [actual, old, github] { try writeReloadSkill(directory, name: "Review") }
         let marker = home.appendingPathComponent("inject")
+        let lateRecord = root.appendingPathComponent(".skillshub-operations/\(UUID().uuidString)/record.json")
         let store = SkillsHubMetadataStore(writeCheckpoint: { phase, _ in
             guard phase == .replacement, FileManager.default.fileExists(atPath: marker.path) else { return }
             if sample == "restored" {
                 try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
             } else if sample == "write-failure" { throw CocoaError(.fileWriteOutOfSpace) }
+            else if sample == "late-reference" {
+                try FileManager.default.createDirectory(at: lateRecord.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(contentsOf: marker).write(to: lateRecord)
+            }
         })
         let assets = [actual, old, github].map { directory in
             InstalledSkill(id: "review", sourceID: nil, name: "Review", description: "Fixture",
@@ -423,16 +428,39 @@ struct ReloadConsistencyTests {
             try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: old.deletingLastPathComponent().path)
         }
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: old.deletingLastPathComponent().path) }
-        if sample == "unsettled" {
+        var recoveryFile: URL?
+        var recoveryBytes: Data?
+        if ["unsettled", "referenced", "source-reference", "source-resolved-reference"].contains(sample) {
             let operation = root.appendingPathComponent(".skillshub-operations/\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: operation, withIntermediateDirectories: true)
-            try Data("corrupt".utf8).write(to: operation.appendingPathComponent("record.json"))
+            let name = sample.hasPrefix("source-") ? "source-removal.json" : "record.json"
+            recoveryFile = operation.appendingPathComponent(name)
+            recoveryBytes = sample == "unsettled" ? Data("corrupt".utf8)
+                : try JSONSerialization.data(withJSONObject: sample.hasPrefix("source-")
+                    ? ["sourcePath": sample == "source-resolved-reference"
+                        ? old.deletingLastPathComponent().resolvingSymlinksInPath().path : old.deletingLastPathComponent().path]
+                    : ["relation": ["assetID": assets[1].assetID.uuidString]])
+        }
+        if sample.hasPrefix("journal-") {
+            recoveryFile = store.rootLayout(for: root).operationJournalFile
+            recoveryBytes = sample == "journal-corrupt" ? Data("corrupt".utf8)
+                : try JSONSerialization.data(withJSONObject: ["operationPlan": sample == "journal-root-container"
+                    ? ["kind": "initializeRoot", "targetPath": root.path]
+                    : ["assetID": assets[1].assetID.uuidString]])
+        }
+        if let recoveryFile, let recoveryBytes { try recoveryBytes.write(to: recoveryFile) }
+        let backup = root.appendingPathComponent(".skillshub-pruning-\(SHA256Digest.hex(beforeBytes)).json")
+        if sample == "snapshot-conflict" {
+            try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: false)
         }
         if sample == "restored" || sample == "write-failure" { try Data().write(to: marker) }
+        if sample == "late-reference" {
+            try JSONSerialization.data(withJSONObject: ["relation": ["assetID": assets[1].assetID.uuidString]]).write(to: marker)
+        }
         if sample == "conflict" {
             _ = try store.commit(at: root, expected: before) { $0.uiState["external"] = "changed" }
         }
-        if ["unreadable", "unsettled", "restored", "write-failure", "conflict"].contains(sample) {
+        if ["unreadable", "snapshot-conflict", "late-reference", "restored", "write-failure", "conflict"].contains(sample) {
             await #expect(throws: (any Error).self) { try await controller.runtimeLocalDiscovery() }
             #expect(controller.rootSnapshot == before)
             if sample != "conflict" { #expect(try Data(contentsOf: metadataFile) == beforeBytes) }
@@ -440,12 +468,16 @@ struct ReloadConsistencyTests {
         } else {
             _ = try await controller.runtimeLocalDiscovery(localOnly: sample == "local-only")
             let after = try store.loadCurrentSnapshot(from: root)
-            let retainOld = sample == "enabled" || sample == "entry-missing"
+            let retainOld = ["enabled", "entry-missing", "referenced", "journal-reference", "source-reference", "source-resolved-reference"].contains(sample)
             #expect(after.metadata.installedSkills.contains { $0.assetID == assets[1].assetID } == retainOld)
             #expect(after.metadata.installedSkills.contains { $0.assetID == assets[2].assetID } == (sample == "local-only"))
             #expect(after.metadata.installedSkills.contains { $0.assetID == assets[0].assetID })
             #expect(after.metadata.validationCache["review"] == .valid)
             #expect(after.metadata.enablementIntents.contains { $0.assetID == assets[1].assetID } == retainOld)
+            if after.metadata.installedSkills.count < before.metadata.installedSkills.count {
+                #expect(try Data(contentsOf: backup) == beforeBytes)
+            }
+            if let recoveryFile, let recoveryBytes { #expect(try Data(contentsOf: recoveryFile) == recoveryBytes) }
             let afterBytes = try Data(contentsOf: metadataFile)
             _ = try await controller.runtimeLocalDiscovery(localOnly: sample == "local-only")
             #expect(try Data(contentsOf: metadataFile) == afterBytes)

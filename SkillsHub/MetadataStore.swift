@@ -290,6 +290,7 @@ nonisolated final class SkillsHubMetadataStore {
     func commit(
         at rootURL: URL,
         expected snapshot: RootSnapshot,
+        preservingOriginal: Bool = false,
         beforePublication: (() throws -> Void)? = nil,
         applying mutation: (inout SkillsHubMetadata) throws -> Void
     ) throws -> RootSnapshot {
@@ -339,6 +340,7 @@ nonisolated final class SkillsHubMetadataStore {
             originalData: original.data,
             expectedFileIdentity: expectedFileIdentity,
             expectedParentIdentity: expectedParentIdentity,
+            preservingOriginal: preservingOriginal,
             beforePublication: beforePublication
         )
     }
@@ -439,6 +441,7 @@ nonisolated final class SkillsHubMetadataStore {
         originalData: Data?,
         expectedFileIdentity: TargetFileIdentity? = nil,
         expectedParentIdentity: TargetFileIdentity? = nil,
+        preservingOriginal: Bool = false,
         beforePublication: (() throws -> Void)? = nil
     ) throws -> RootSnapshot {
         try writeCheckpoint?(.encoding, file)
@@ -480,6 +483,23 @@ nonisolated final class SkillsHubMetadataStore {
             }
             guard try optionalFileIdentity(of: staging) == stagingIdentity else {
                 throw MetadataCommitError.metadataIdentityChanged
+            }
+            if preservingOriginal, let originalData {
+                // These snapshots are evidence, never an alternative metadata load source.
+                let backup = parent.appendingPathComponent(".skillshub-pruning-\(SHA256Digest.hex(originalData)).json")
+                if try optionalFileIdentity(of: backup) == nil {
+                    try originalData.write(to: backup, options: [.withoutOverwriting])
+                }
+                let saved = try readStableFile(at: backup)
+                guard saved.data == originalData, saved.parentIdentity == initialParentIdentity else {
+                    throw MetadataCommitError.writeVerificationFailed
+                }
+                try synchronizeFile(at: backup, phase: .stagingFileSync)
+                try synchronizeDirectory(at: parent, phase: .stagingDirectorySync)
+                guard try fileIdentity(of: backup) == saved.fileIdentity,
+                      try Data(contentsOf: backup) == originalData else {
+                    throw MetadataCommitError.writeVerificationFailed
+                }
             }
             try beforePublication?()
             if let originalData {
