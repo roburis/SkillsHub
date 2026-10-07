@@ -636,12 +636,14 @@ let resolvedRootPath: String?
            expectedGeneration != recheckGeneration {
             return 0
         }
-        // Observe unsettled content without adopting a partially committed operation's locations.
-        if !phase1Tasks.contains(where: { $0.phase != .completed && $0.recoveryEvidence != nil }) {
-            let canPrune = inFlightRelationActionIDs.isEmpty && !phase1Tasks.contains { $0.phase != .completed }
-            guard try await registerDiscoveredLocalSkills(newSkills, rootURL: rootURL, expected: expected,
-                pruningDiscovery: canPrune ? discovery : nil) else { return 0 }
+        // Historical recovery blocks adopting partial content, not independently checked metadata pruning.
+        let canRegister = !phase1Tasks.contains { $0.phase != .completed && $0.recoveryEvidence != nil }
+        let canPrune = inFlightRelationActionIDs.isEmpty && !phase1Tasks.contains {
+            [.preparing, .waitingConfirmation, .executing, .observing, .verifying].contains($0.phase)
         }
+        guard try await registerDiscoveredLocalSkills(canRegister ? newSkills : [], rootURL: rootURL,
+            expected: expected, pruningDiscovery: canPrune ? discovery : nil,
+            registering: canRegister) else { return 0 }
         guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
               expectedGeneration.map({ $0 == recheckGeneration }) ?? true else { return 0 }
         let previous = availableSkills
@@ -702,11 +704,12 @@ let resolvedRootPath: String?
         rootURL: URL,
         expected: RootSnapshot,
         sourceID: UUID? = nil,
-        pruningDiscovery: RootContentDiscovery? = nil
+        pruningDiscovery: RootContentDiscovery? = nil,
+        registering: Bool = true
     ) async throws -> Bool {
         let sessionID = rootSessionLease?.id
         let snapshot = try await Self.registerDiscoveredSkills(discovered, rootURL: rootURL,
-            expected: expected, sourceID: sourceID, pruningDiscovery: pruningDiscovery,
+            expected: expected, sourceID: sourceID, pruningDiscovery: pruningDiscovery, registering: registering,
             metadataStore: metadataStore, fileManager: fileManager)
         guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
               rootSnapshot == expected else { return false }
@@ -716,10 +719,11 @@ let resolvedRootPath: String?
 
     @concurrent nonisolated private static func registerDiscoveredSkills(
         _ discovered: [InstalledSkill], rootURL: URL, expected: RootSnapshot,
-        sourceID: UUID?, pruningDiscovery: RootContentDiscovery?,
+        sourceID: UUID?, pruningDiscovery: RootContentDiscovery?, registering: Bool,
         metadataStore: SkillsHubMetadataStore, fileManager: FileManager
     ) async throws -> RootSnapshot {
         func associations(in metadata: SkillsHubMetadata) -> [UUID: AvailableSkill] {
+            guard registering else { return [:] }
             var result: [UUID: AvailableSkill] = [:]
             for skill in metadata.installedSkills where skill.candidateID == nil && skill.sourceID != nil {
                 if let sourceID, skill.sourceID != sourceID { continue }
@@ -742,7 +746,7 @@ let resolvedRootPath: String?
         }
         return try await RootMutationOwner.shared.perform(at: rootURL) {
             try Task.checkCancellation()
-            return try metadataStore.commit(at: rootURL, expected: expected, beforePublication: {
+            return try metadataStore.commit(at: rootURL, expected: expected, preservingOriginal: !removed.isEmpty, beforePublication: {
                 if let pruningDiscovery, !removed.isEmpty {
                     guard try missingSkillAssetIDs(in: expected.metadata, rootURL: rootURL,
                         discovery: pruningDiscovery, fileManager: fileManager) == removed else {
@@ -832,39 +836,84 @@ let resolvedRootPath: String?
             }
         }
         guard !removed.isEmpty else { return [] }
-        guard try Phase1OperationJournal(rootURL: rootURL, fileManager: fileManager).recoverTasks()
-            .allSatisfy({ $0.phase == .completed }) else { return [] }
-        guard try metadataStoreOperationsAreSettled(rootURL: rootURL, fileManager: fileManager) else { return [] }
-        return removed
+        return removed.subtracting(recoveryReferencedAssetIDs(metadata: metadata, rootURL: rootURL, fileManager: fileManager))
     }
 
-    nonisolated private static func metadataStoreOperationsAreSettled(rootURL: URL, fileManager: FileManager) throws -> Bool {
-        let directory = rootURL.appendingPathComponent(".skillshub-operations")
-        var node = stat()
-        guard Darwin.lstat(directory.path, &node) == 0 else {
-            if errno == ENOENT { return true }
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    nonisolated private static func recoveryReferencedAssetIDs(
+        metadata: SkillsHubMetadata, rootURL: URL, fileManager: FileManager
+    ) -> Set<UUID> {
+        var protected: Set<UUID> = []
+        let root = rootURL.standardizedFileURL
+        let resolvedRoot = root.resolvingSymlinksInPath()
+        func normalizedPath(_ path: String) -> String {
+            let path = URL(fileURLWithPath: path).standardizedFileURL.path
+            return path == root.path ? resolvedRoot.path : path.hasPrefix(root.path + "/")
+                ? resolvedRoot.path + path.dropFirst(root.path.count) : path
         }
-        guard node.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { return false }
+        let containers = Set([resolvedRoot, resolvedRoot.appendingPathComponent("local"), resolvedRoot.appendingPathComponent("github")]
+            .map { $0.standardizedFileURL.path })
+        func include(_ object: [String: Any]) {
+            let relation = object["relation"] as? [String: Any]
+            let source = object["source"] as? [String: Any]
+            let facts = object["facts"] as? [String: Any]
+            for value in [object["assetID"], relation?["assetID"]] {
+                if let text = value as? String, let id = UUID(uuidString: text) { protected.insert(id) }
+            }
+            for value in object["skillAssetIDs"] as? [String] ?? [] {
+                if let id = UUID(uuidString: value) { protected.insert(id) }
+            }
+            let sourceID = (object["sourceID"] as? String ?? source?["id"] as? String).flatMap(UUID.init(uuidString:))
+            let paths = [object["sourcePath"], object["targetPath"], source?["localPath"], facts?["resolvedTargetPath"]]
+                .compactMap { $0 as? String }.filter { $0.hasPrefix("/") }
+                .map(normalizedPath)
+                .filter { $0.hasPrefix(resolvedRoot.path + "/") && !containers.contains($0) }
+            for skill in metadata.installedSkills {
+                let path = normalizedPath(skill.installedPath)
+                if (sourceID != nil && skill.sourceID == sourceID) || paths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+                    protected.insert(skill.assetID)
+                }
+            }
+        }
+        // Extract only recognizable responsibility. Unreadable history stays unknown and untouched;
+        // pruning saves the complete original metadata instead of granting any recovery permission.
+        let journal = rootURL.appendingPathComponent(".skillshub.operations.jsonl")
+        let completed = Set(((try? Phase1OperationJournal(rootURL: rootURL, fileManager: fileManager).recoverTasks()) ?? [])
+            .filter { $0.phase == .completed }.map(\.id))
+        if (try? LinkNodeIdentity.read(at: journal).kind) == S_IFREG, let data = try? Data(contentsOf: journal) {
+            for line in data.split(separator: 0x0a) {
+                guard let object = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                      let plan = object["operationPlan"] as? [String: Any] else { continue }
+                if let text = object["operationID"] as? String, let id = UUID(uuidString: text), completed.contains(id) { continue }
+                include(plan)
+            }
+        }
+        let directory = rootURL.appendingPathComponent(".skillshub-operations")
+        guard (try? LinkNodeIdentity.read(at: directory).kind) == S_IFDIR,
+              let entries = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return protected }
         let relationStore = RelationActionOperationRecordStore(fileManager: fileManager)
         let removal = SourceRemovalService(fileManager: fileManager)
         let update = SourceUpdateService(fileManager: fileManager)
-        let journalIDs = Set(try Phase1OperationJournal(rootURL: rootURL, fileManager: fileManager).recoverTasks().map(\.id))
-        for entry in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
-            guard let id = UUID(uuidString: entry.lastPathComponent),
-                  try LinkNodeIdentity.read(at: entry).kind == S_IFDIR else { return false }
-            if fileManager.fileExists(atPath: entry.appendingPathComponent("record.json").path) {
-                switch try relationStore.loadRecoveryRecord(operationID: id, rootURL: rootURL) {
-                case .relation(let record): if record.completedAt == nil { return false }
-                case .brokenLink(let record): if record.completedAt == nil { return false }
+        for entry in entries {
+            guard (try? LinkNodeIdentity.read(at: entry).kind) == S_IFDIR else { continue }
+            for name in ["record.json", "source-removal.json", "source-update.json"] {
+                let file = entry.appendingPathComponent(name)
+                guard (try? LinkNodeIdentity.read(at: file).kind) == S_IFREG,
+                      let data = try? Data(contentsOf: file),
+                      let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+                if let id = UUID(uuidString: entry.lastPathComponent) {
+                    if name == "record.json", let record = try? relationStore.loadRecoveryRecord(operationID: id, rootURL: rootURL) {
+                        switch record {
+                        case .relation(let value): if value.completedAt != nil { continue }
+                        case .brokenLink(let value): if value.completedAt != nil { continue }
+                        }
+                    }
+                    if name == "source-removal.json", (try? removal.loadRecord(operationID: id, rootURL: rootURL).stage) == .completed { continue }
+                    if name == "source-update.json", (try? update.loadRecord(operationID: id, rootURL: rootURL).stage) == .completed { continue }
                 }
-            } else if fileManager.fileExists(atPath: entry.appendingPathComponent("source-removal.json").path) {
-                if try removal.loadRecord(operationID: id, rootURL: rootURL).stage != .completed { return false }
-            } else if fileManager.fileExists(atPath: entry.appendingPathComponent("source-update.json").path) {
-                if try update.loadRecord(operationID: id, rootURL: rootURL).stage != .completed { return false }
-            } else if !journalIDs.contains(id) { return false }
+                include(object)
+            }
         }
-        return true
+        return protected
     }
 
     nonisolated private static func standardizedInstalledPath(for skill: InstalledSkill) -> String {
