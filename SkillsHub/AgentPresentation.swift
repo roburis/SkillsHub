@@ -1,5 +1,29 @@
 import Foundation
 
+enum AgentDirectoryAccessFailure: Equatable {
+    case authorizationRequired
+    case accessFailed(LocalizedMessage)
+
+    var message: LocalizedMessage {
+        switch self {
+        case .authorizationRequired: "Authorize this Agent’s skills directory to check its relationships."
+        case .accessFailed(let reason): reason
+        }
+    }
+}
+
+@MainActor
+struct AgentDirectoryAuthorizationRequest: Identifiable {
+    let id = UUID()
+    let agentID: String
+    let displayName: String
+    let directory: URL
+    let root: RootSnapshot?
+    let sessionID: UUID?
+    let observations: [TargetObservation]
+    var retry: (@MainActor () async throws -> Void)?
+}
+
 nonisolated extension RelationOwnershipClassification {
     var clearMessage: LocalizedMessage {
         switch self {
@@ -136,6 +160,8 @@ nonisolated struct AgentRelationPresentation: Identifiable, Equatable {
     var linkText: String? = nil
     var resolvedTargetPath: String? = nil
     var ownership: RelationOwnershipClassification = .unreadable
+    var lastObservation: TargetObservation? = nil
+    var checkFailure: LocalizedMessage? = nil
 
     var id: String { relation.id }
     var desiredEnabled: Bool { !(intendedEnabled ?? false) }

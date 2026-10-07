@@ -51,7 +51,7 @@ nonisolated final class SecurityScopedAccessLease {
     ) {
         self.id = id
         self.owner = owner
-        self.url = url.standardizedFileURL
+        self.url = url
         self.adapter = adapter
     }
 
@@ -104,14 +104,14 @@ nonisolated struct SecurityScopedAccessProvider {
     }
 
     func acquire(url: URL, owner: SecurityScopedAccessOwner) throws -> SecurityScopedAccessLease {
-        let normalizedURL = url.standardizedFileURL
-        guard adapter.startAccessing(normalizedURL, owner: owner) else {
+        // Keep the security scope carried by the selected or bookmark-resolved URL.
+        guard adapter.startAccessing(url, owner: owner) else {
             throw SecurityScopedAccessError.startDenied(
-                path: normalizedURL.path,
+                path: url.standardizedFileURL.path,
                 ownerIdentity: owner.identity
             )
         }
-        return SecurityScopedAccessLease(owner: owner, url: normalizedURL, adapter: adapter)
+        return SecurityScopedAccessLease(owner: owner, url: url, adapter: adapter)
     }
 }
 

@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var gitHubSourceInput = ""
     @State private var isAddingGitHubSource = false
     @State private var gitHubSourceTask: Task<Void, Never>?
+    @State private var agentAuthorizationPanel: NSOpenPanel?
 
     init(library: SkillsHubLibraryController? = nil) {
         if let library {
@@ -144,6 +145,10 @@ struct ContentView: View {
             .interactiveDismissDisabled(isAddingGitHubSource)
         }
         .environment(\.appLanguage, library.language)
+        .onChange(of: library.agentDirectoryAuthorizationRequest?.id) { _, id in
+            guard id != nil else { return }
+            showAgentDirectoryAuthorization()
+        }
     }
 
     /// UI fixtures keep language and layout preferences out of the user's domain.
@@ -306,6 +311,34 @@ struct ContentView: View {
             defaultDirectoryURL: agent.map(library.resolvedAgentSkillsDirectory),
             action: selected
         )
+    }
+
+    private func showAgentDirectoryAuthorization() {
+        guard agentAuthorizationPanel == nil, let request = library.agentDirectoryAuthorizationRequest else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.directoryURL = request.directory
+        panel.prompt = library.localized("Authorize directory")
+        panel.message = library.localized(LocalizedMessage(
+            "Allow Skills Hub to access the entire %@ skills directory to check and manage its skill links.",
+            arguments: [request.displayName]
+        )) + "\n" + request.directory.path
+        agentAuthorizationPanel = panel
+        NSApp.activate(ignoringOtherApps: true)
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            agentAuthorizationPanel = nil
+            Task {
+                await library.completeAgentDirectoryAuthorization(
+                    requestID: request.id, directory: response == .OK ? panel.url : nil
+                )
+            }
+        }
+        if let window = NSApp.mainWindow ?? NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else { completion(panel.runModal()) }
     }
 
     private func chooseExactAgentTarget(

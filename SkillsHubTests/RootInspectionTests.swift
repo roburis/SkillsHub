@@ -259,7 +259,8 @@ struct RootInspectionTests {
         #expect(controller.hasRoot == false)
         #expect(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
         #expect(adapter.startRecords.count == 1)
-        #expect(adapter.stoppedURLs == [link.standardizedFileURL])
+        #expect(adapter.startRecords.first?.url == link)
+        #expect(adapter.stoppedURLs == [link])
     }
 
     /// The first-run establish entry must reach the same pre-check as Settings, with

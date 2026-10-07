@@ -1651,6 +1651,41 @@ private struct Phase1SourceRemovalSheet: View {
     }
 }
 
+private struct Phase1AgentDirectoryAccessNotice: View {
+    @Bindable var library: SkillsHubLibraryController
+    var agentID: String
+
+    var body: some View {
+        if let failure = library.agentDirectoryFailure(agentID) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(library.localized(library.agentDirectoryNeedsAuthorization(agentID)
+                        ? "Directory authorization required" : "Agent directory has not been verified."), systemImage: "exclamationmark.triangle")
+                        .font(.headline)
+                    Text(library.localized(failure))
+                    if let path = library.visibleInstalledAgentDescriptors.first(where: { $0.id == agentID })?.skillsDirectory {
+                        Text(path).font(.caption)
+                    }
+                }
+                Spacer()
+                if library.agentDirectoryAccessFailures[agentID] != nil {
+                    Button(library.localized("Authorize directory…")) {
+                        library.requestAgentDirectoryAuthorization(agentID: agentID)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(library.agentDirectoryAuthorizationRequest != nil || library.auditingAgentIDs.contains(agentID))
+                    .accessibilityIdentifier("authorize-agent-directory-\(agentID)")
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("agent-directory-access-\(agentID)")
+        }
+    }
+}
+
 private struct Phase1AgentWorkspace: View {
     @FocusState private var listFocused: Bool
     @Bindable var library: SkillsHubLibraryController
@@ -1669,7 +1704,7 @@ private struct Phase1AgentWorkspace: View {
     }
 
     private var auditFailed: Bool {
-        descriptor.flatMap { library.agentDirectoryAuditFailures[$0.id] } != nil
+        descriptor.flatMap { library.agentDirectoryFailure($0.id) } != nil
     }
 
     private var isChecking: Bool {
@@ -1736,15 +1771,10 @@ private struct Phase1AgentWorkspace: View {
     }
     private var visibleIDs: [String] { shownRelations.map { "relation:" + $0.id } + shownFindings.map { "finding:" + $0.id } }
     var body: some View {
+        VStack(spacing: 0) {
+            if let id = descriptor?.id { Phase1AgentDirectoryAccessNotice(library: library, agentID: id) }
         NativeWorkspaceSplit(preferenceKey: "SkillsHub.skills-list.width", stateKey: "\(library.rootURL?.path ?? "")/agent/\(descriptor?.id ?? "")", language: library.language) {
             List(selection: $selectedID) {
-                if let failure = descriptor.flatMap({ library.agentDirectoryAuditFailures[$0.id] }) {
-                    Text(failure == "Agent directory has not been verified."
-                        ? library.localized(failure)
-                        : localized("Agent directory has not been verified.") + " " + library.localized(failure))
-                        .foregroundStyle(.orange)
-                        .listRowInsets(.horizontal, 16)
-                }
                 ForEach(shownRelations) { relation in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -1752,7 +1782,7 @@ private struct Phase1AgentWorkspace: View {
                             if relation.hasPresentationIssue { Image(systemName: "exclamationmark.triangle") }
                         }
                         Text(localized(!auditFailed && relation.verification == .verifiedConsistent ? "Managed by Skills Hub" : "Ownership needs verification")).font(.caption)
-                        Text(localized(auditFailed ? "Type unverified" : relation.observation?.presentationLabel ?? "Type unverified"))
+                        Text(localized(auditFailed ? "Directory inaccessible; relationship not checked." : relation.observation?.presentationLabel ?? "Type unverified"))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(localized(auditFailed ? "Currently unverifiable" : relation.verification.presentationLabel)).font(.caption).foregroundStyle(.secondary)
                     }
@@ -1784,14 +1814,12 @@ private struct Phase1AgentWorkspace: View {
             .onChange(of: selectedID) { _, value in if value != nil { listFocused = true } }
             .accessibilityIdentifier("agent-skill-list")
             .overlay {
-                if visibleIDs.isEmpty && descriptor.flatMap({ library.agentDirectoryAuditFailures[$0.id] }) == nil {
+                if visibleIDs.isEmpty && !auditFailed {
                     ContentUnavailableView(localized("No matching Skills"), systemImage: "square.stack.3d.up")
                 }
             }
         } right: {
-            if auditFailed {
-                ContentUnavailableView(localized("Agent directory has not been verified."), systemImage: "exclamationmark.triangle")
-            } else if let relation = shownRelations.first(where: { "relation:" + $0.id == selectedID }),
+            if let relation = shownRelations.first(where: { "relation:" + $0.id == selectedID }),
                let skill = library.installedSkills.first(where: { $0.assetID == relation.relation.assetID }),
                let item = library.catalogItemsByID[skill.assetID.uuidString] {
                 Phase1SkillDetail(library: library, item: item, openSource: { openSource(item) }, currentAgentID: descriptor?.id)
@@ -1818,11 +1846,12 @@ private struct Phase1AgentWorkspace: View {
                 ContentUnavailableView(localized("Select a Skill"), systemImage: "square.stack.3d.up", description: Text(localized("Select an item to view its details.")))
             }
         }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     guard let id = descriptor?.id else { return }
-                    Task { do { try await library.auditAgentDirectory(agentID: id) } catch { library.handle(error) } }
+                    Task { await library.performUserAgentAction(agentID: id) { try await library.auditAgentDirectory(agentID: id) } }
                 } label: {
                     if isChecking { ProgressView().controlSize(.small) }
                     else { Image(systemName: "arrow.clockwise") }
@@ -2477,6 +2506,14 @@ private struct Phase1RelationDetail: View {
                 .accessibilityLabel(localized("Intent"))
                 .accessibilityValue(localized(relation.intendedEnabled.map { $0 ? "Enabled" : "Disabled" } ?? "Not set"))
                 .accessibilityIdentifier("relation-intent-\(relation.relation.agentID)-\(relation.skillID)")
+            Phase1AgentDirectoryAccessNotice(library: library, agentID: relation.relation.agentID)
+            if let previous = relation.lastObservation {
+                Text(library.localized(LocalizedMessage("Previous observation: %@ · %@ (out of date)", arguments: [
+                    localized(previous.nodeKind.presentationLabel), previous.observedAt.formatted(date: .abbreviated, time: .standard)
+                ])))
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("relation-previous-observation-\(relation.id)")
+            }
             Text("\(localized("Observed")): \(localized(relation.observation?.presentationLabel ?? "Type unverified"))")
                 .accessibilityLabel(localized("Observed"))
                 .accessibilityValue(localized(relation.observation?.presentationLabel ?? "Type unverified"))
@@ -2500,6 +2537,9 @@ private struct Phase1RelationDetail: View {
                 Label(localized(reason), systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
             }
+            if library.agentDirectoryFailure(relation.relation.agentID) == nil, let failure = relation.checkFailure {
+                Text(library.localized(failure)).foregroundStyle(.orange).textSelection(.enabled)
+            }
             if relation.ownership != .exactManagedLink, relation.observation == .brokenSymbolicLink {
                 Text(localized("Ownership could not be verified. Delete this broken link only after confirming its exact path."))
                     .foregroundStyle(.secondary)
@@ -2508,9 +2548,10 @@ private struct Phase1RelationDetail: View {
                 Text(localized("The link is absent; its enablement record is still enabled. Cancel the record explicitly."))
                     .foregroundStyle(.secondary)
             }
-            Text("\(localized("Safe next")): \(localized(relation.safeNextStep))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if relation.checkFailure == nil {
+                Text("\(localized("Safe next")): \(localized(relation.safeNextStep))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(library.localized(LocalizedMessage("%@ relationship for %@", arguments: [relation.agentDisplayName, relation.skillName])))
@@ -2573,11 +2614,14 @@ private struct Phase1RelationDetail: View {
                 }
             } else {
                 Phase1RelationActionButton(library: library, relation: relation)
-                    .disabled(relation.observation != nil && relation.observation != .vacant && relation.ownership != .exactManagedLink)
+                    .disabled(!library.agentDirectoryNeedsAuthorization(relation.relation.agentID)
+                        && relation.observation != nil && relation.observation != .vacant && relation.ownership != .exactManagedLink)
             }
             if relation.verification != .verifiedConsistent || relation.unavailableReason != nil {
                 Button(localized("Re-check")) {
-                    Task { do { try await library.auditAgentDirectory(agentID: relation.relation.agentID) } catch { library.handle(error) } }
+                    Task { await library.performUserAgentAction(agentID: relation.relation.agentID) {
+                        try await library.auditAgentDirectory(agentID: relation.relation.agentID)
+                    } }
                 }
                 .disabled(relation.isInFlight)
                 .accessibilityIdentifier("relation-recheck-\(relation.id)")
@@ -2604,14 +2648,12 @@ private struct Phase1RelationActionButton: View {
             let assetID = relation.relation.assetID
             let enabled = reestablish ? true : relation.desiredEnabled
             Task {
-                do {
+                await library.performUserAgentAction(agentID: agentID) {
                     _ = try await library.setGlobalAgentEnablement(
                         agentID: agentID,
                         assetID: assetID,
                         enabled: enabled
                     )
-                } catch {
-                    library.handle(error)
                 }
             }
         } label: {
@@ -2622,7 +2664,8 @@ private struct Phase1RelationActionButton: View {
             }
         }
         .buttonStyle(.bordered)
-        .disabled(!relation.canPerformAction || relation.isInFlight)
+        .disabled((!relation.canPerformAction && !library.agentDirectoryNeedsAuthorization(relation.relation.agentID))
+            || relation.isInFlight || library.agentDirectoryAuthorizationRequest != nil)
         .help(relation.unavailableReason.map(localized) ?? localized("Changes only this Agent relationship."))
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(localized(relation.isInFlight ? "Action in progress" : relation.verification.presentationLabel))
