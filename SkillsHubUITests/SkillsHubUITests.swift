@@ -1593,7 +1593,7 @@ final class SkillsHubUITests: XCTestCase {
         let sourceRow = app.descendants(matching: .any)[Phase1UITestFixture.sourceRowIdentifier]
         XCTAssertTrue(sourceRow.waitForExistence(timeout: 2))
         sourceRow.click()
-        app.buttons["check-source-update"].click()
+        // Preview is available before a remote/source check has produced a badge.
         XCTAssertTrue(app.buttons["preview-source-update"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.descendants(matching: .any)["source-update-preview"].exists)
         app.buttons["preview-source-update"].click()
@@ -1609,6 +1609,34 @@ final class SkillsHubUITests: XCTestCase {
 
         XCTAssertEqual(try treeSnapshot(of: managed), managedBefore)
         XCTAssertEqual(try Data(contentsOf: fixture.metadata), metadataBefore)
+        XCTAssertTrue(app.staticTexts["Source Update Available"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Last successful update check"].exists)
+        app.buttons["refresh-local-sources"].click()
+        let refreshed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.buttons["refresh-local-sources"].isEnabled
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [refreshed], timeout: 5), .completed)
+        XCTAssertTrue(app.staticTexts["Source Update Available"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["preview-source-update"].isEnabled)
+        let retained = XCTAttachment(screenshot: app.screenshot())
+        retained.name = "Source update available after cancellation and local refresh"
+        retained.lifetime = .keepAlways
+        add(retained)
+
+        let external = fixture.source.appending(path: "review-fixture")
+        try FileManager.default.removeItem(at: external)
+        app.buttons["check-source-update"].click()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value BEGINSWITH %@", "Update check failed:")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Source Update Available"].exists)
+        XCTAssertTrue(app.staticTexts["Last successful update check"].exists)
+
+        try FileManager.default.copyItem(at: managed, to: external)
+        app.buttons["preview-source-update"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["source-update-preview"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Update Entire Source"].exists)
+        app.buttons["Done"].click()
+        XCTAssertFalse(app.staticTexts["Source Update Available"].exists)
+        XCTAssertTrue(app.buttons["preview-source-update"].isEnabled)
         app.staticTexts["trash-fixture"].firstMatch.click()
         XCTAssertTrue(app.descendants(matching: .any)["source-detail"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["check-source-update"].exists)
