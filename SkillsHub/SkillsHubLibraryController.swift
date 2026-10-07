@@ -41,6 +41,11 @@ final class SkillsHubLibraryController {
             agentDirectoryAccessFailures = [:]
             agentDirectoryAuthorizationRequest = nil
             if oldValue?.standardizedFileURL != rootURL?.standardizedFileURL {
+                invalidateSourceUpdatePreviews()
+                sourceUpdateChecks.removeAll()
+                sourceUpdateCheckDates.removeAll()
+                sourceUpdateFailures.removeAll()
+                updateCheckSummary = nil
                 for job in agentDirectoryAuditTasks.values { job.task.cancel() }
                 agentDirectoryAuditTasks = [:]
                 agentLightScanTask?.task.cancel()
@@ -70,7 +75,13 @@ final class SkillsHubLibraryController {
         didSet { if oldValue != installedSkills { rebuildCatalogPresentation(); requestPresentationObservation() } }
     }
     var sources: [SkillSource] {
-        didSet { if oldValue != sources { rebuildCatalogPresentation(); requestPresentationObservation() } }
+        didSet {
+            if oldValue != sources {
+                reconcileSourceUpdateChecks(previousSources: oldValue)
+                rebuildCatalogPresentation()
+                requestPresentationObservation()
+            }
+        }
     }
     // Observation only; persistent identities remain available to Agents and recovery.
     var missingCatalogItemIDs: Set<String> = []

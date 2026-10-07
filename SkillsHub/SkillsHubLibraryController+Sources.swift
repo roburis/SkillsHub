@@ -226,6 +226,7 @@ extension SkillsHubLibraryController {
     }
 
     func prepareSourceUpdate(sourceID: UUID, presentPreview: Bool = true) async throws {
+        let sessionID = rootSessionLease?.id
         guard let snapshot = rootSnapshot,
               let source = snapshot.metadata.sources.first(where: { $0.id == sourceID }),
               source.kind == .localDirectory || source.kind == .githubRepository,
@@ -328,7 +329,8 @@ extension SkillsHubLibraryController {
 
         var retainedForPreview = false
         defer { if !retainedForPreview { discardPreparedSource(at: prepared.path.path) } }
-        guard rootSnapshot?.generation == snapshot.generation,
+        guard rootSessionLease?.id == sessionID,
+              rootSnapshot?.generation == snapshot.generation,
               rootSnapshot?.metadata.rootConfig.rootPath == snapshot.metadata.rootConfig.rootPath else {
             throw SourceUpdateError.sourceChangedDuringPreparation
         }
@@ -383,15 +385,16 @@ extension SkillsHubLibraryController {
         defer { checkingSourceIDs.removeAll() }
         updateCheckSummary = "Checking updates…"
         let checkedRoot = rootURL
+        let checkedSession = rootSessionLease?.id
         var updates = 0
         var failures = 0
         for id in sourceIDs {
-            guard rootURL == checkedRoot else { updateCheckSummary = nil; return }
+            guard rootURL == checkedRoot, rootSessionLease?.id == checkedSession else { return }
             do {
                 try await prepareSourceUpdate(sourceID: id, presentPreview: false)
                 if sourceUpdateChecks[id] == true { updates += 1 }
             } catch {
-                guard rootURL == checkedRoot else { updateCheckSummary = nil; return }
+                guard rootURL == checkedRoot, rootSessionLease?.id == checkedSession else { return }
                 failures += 1
                 recordSourceUpdateFailure(sourceID: id, error: error)
             }
@@ -411,18 +414,35 @@ extension SkillsHubLibraryController {
     }
 
     func sourceHasPreparedUpdate(_ sourceID: UUID) -> Bool {
-        sourceUpdateChecks[sourceID] == true || (sourceUpdatePreview?.source.id == sourceID && sourceUpdatePreview?.hasIncomingChanges == true)
+        sourceUpdateChecks[sourceID] == true
     }
 
     func recordSourceUpdateFailure(sourceID: UUID, error: Error) {
         sourceUpdateFailures[sourceID] = errorPresentation(for: error)
+    }
+
+    func reconcileSourceUpdateChecks(previousSources: [SkillSource]) {
+        let current = Dictionary(sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for previous in previousSources {
+            let next = current[previous.id]
+            if next == nil || next?.kind != previous.kind || next?.urlString != previous.urlString
+                || next?.githubRepositoryID != previous.githubRepositoryID || next?.ref != previous.ref
+                || next?.localPath != previous.localPath || next?.externalLocalPath != previous.externalLocalPath
+                || next?.directoryIdentity != previous.directoryIdentity
+                || next?.resolvedVersion != previous.resolvedVersion
+                || next?.baselineManifest?.digest != previous.baselineManifest?.digest {
+                clearSourceUpdateCheck(previous.id)
+            }
+        }
+    }
+
+    private func clearSourceUpdateCheck(_ sourceID: UUID) {
         sourceUpdateChecks[sourceID] = nil
-        sourceUpdateCheckDates[sourceID] = Date()
+        sourceUpdateCheckDates[sourceID] = nil
+        sourceUpdateFailures[sourceID] = nil
     }
 
     func invalidateSourceUpdatePreviews() {
-        sourceUpdateChecks.removeAll()
-        sourceUpdateCheckDates.removeAll()
         discardSourceUpdatePreview(sourceUpdatePreview)
         sourceUpdatePreview = nil
         sourceUpdateResult = nil
@@ -507,6 +527,7 @@ extension SkillsHubLibraryController {
         do {
             let snapshot = try await commitSourceUpdate(preview, rootURL: rootURL)
             applySourceRemovalSnapshot(snapshot)
+            clearSourceUpdateCheck(preview.source.id)
             record.stage = .metadataCommitted
             record.metadataGeneration = snapshot.generation
             record.detail = "Content, relationships, metadata, revision, and success baseline were verified."

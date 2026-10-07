@@ -1008,11 +1008,7 @@ private struct Phase1SkillDetail: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(library.localized(item.sourceName)).foregroundStyle(.secondary)
                         if let sourceID = item.source?.id {
-                            if let failure = library.sourceUpdateFailures[sourceID] {
-                                Label(library.localized(LocalizedMessage("Update check failed: %@", arguments: [library.localized(failure)])), systemImage: "exclamationmark.triangle")
-                            } else if let available = library.sourceUpdateChecks[sourceID] {
-                                Text(localized(available ? "Source Update Available" : "No source update was found. Managed content and its success baseline are unchanged."))
-                            }
+                            Phase1SourceUpdateStatus(library: library, sourceID: sourceID)
                         }
                         if item.source != nil {
                             Button(localized("View Source…"), action: openSource)
@@ -1374,18 +1370,20 @@ private struct Phase1SourcesWorkspace: View {
                         }
                         .disabled(!library.checkingSourceIDs.isEmpty || isPreparingPreview)
                         .accessibilityIdentifier("check-source-update")
-                        if library.sourceHasPreparedUpdate(source.id) {
                         Button(localized(isPreparingPreview ? "Preparing…" : "Preview Update…")) {
                             isPreparingPreview = true
+                            let sessionID = library.rootSessionLease?.id
                             Task {
                                 defer { isPreparingPreview = false }
                                 do { try await library.prepareSourceUpdate(sourceID: source.id) }
-                                catch { library.recordSourceUpdateFailure(sourceID: source.id, error: error) }
+                                catch {
+                                    guard library.rootSessionLease?.id == sessionID else { return }
+                                    library.recordSourceUpdateFailure(sourceID: source.id, error: error)
+                                }
                             }
                         }
                         .disabled(!library.checkingSourceIDs.isEmpty || isPreparingPreview)
                         .accessibilityIdentifier("preview-source-update")
-                        }
                     }
                     Menu(localized("More")) {
                         Button(localized("Remove Source…"), role: .destructive) {
@@ -1396,12 +1394,7 @@ private struct Phase1SourcesWorkspace: View {
                     }
                     .fixedSize().accessibilityIdentifier("source-more")
                 }
-                if let error = library.sourceUpdateFailures[source.id] {
-                    Label(library.localized(LocalizedMessage("Update check failed: %@", arguments: [library.localized(error)])), systemImage: "exclamationmark.triangle")
-                } else if let available = library.sourceUpdateChecks[source.id] {
-                    Text(localized(available ? "Source Update Available" : "No source update was found. Managed content and its success baseline are unchanged."))
-                }
-                if let date = library.sourceUpdateCheckDates[source.id] { Text(date, style: .time).font(.caption).foregroundStyle(.secondary) }
+                Phase1SourceUpdateStatus(library: library, sourceID: source.id)
                 if let removalError { Text(library.localized(removalError)).foregroundStyle(.red) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1411,6 +1404,28 @@ private struct Phase1SourcesWorkspace: View {
     }
     private func skills(in source: SkillSource) -> [Phase1SkillPresentation] {
         library.catalogItemsBySource[source.id] ?? []
+    }
+}
+
+private struct Phase1SourceUpdateStatus: View {
+    @Bindable var library: SkillsHubLibraryController
+    let sourceID: UUID
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let error = library.sourceUpdateFailures[sourceID] {
+                Label(library.localized(LocalizedMessage("Update check failed: %@", arguments: [library.localized(error)])), systemImage: "exclamationmark.triangle")
+            }
+            if let available = library.sourceUpdateChecks[sourceID] {
+                Text(library.localized("Last successful update check"))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(library.localized(available ? "Source Update Available" : "No source update was found. Managed content and its success baseline are unchanged."))
+                if let date = library.sourceUpdateCheckDates[sourceID] {
+                    Text(date, format: .dateTime.year().month().day().hour().minute().second())
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
 

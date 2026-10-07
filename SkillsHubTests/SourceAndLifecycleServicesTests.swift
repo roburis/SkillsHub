@@ -1432,6 +1432,7 @@ struct SourceAndLifecycleServicesTests {
 
         #expect(controller.sourceUpdatePreview == nil)
         #expect(!FileManager.default.fileExists(atPath: preparedPath))
+        #expect(controller.sourceHasPreparedUpdate(source.id))
         #expect(controller.sources.first?.baselineManifest?.digest == baseline.digest)
         #expect(try Data(contentsOf: metadataURL) == metadataBefore)
     }
@@ -1465,6 +1466,115 @@ struct SourceAndLifecycleServicesTests {
         let staging = fixture.appSupport.appendingPathComponent("SourceUpdateStaging")
         let remaining = try FileManager.default.fileExists(atPath: staging.path) ? FileManager.default.contentsOfDirectory(atPath: staging.path) : []
         #expect(remaining.isEmpty)
+    }
+
+    @MainActor
+    @Test(arguments: ["agent", "managed-root", "full-scan"])
+    func fileRechecksPreserveUpdateCheckAndUnchangedPreview(_ scope: String) async throws {
+        let fixture = try sourceUpdateFixture()
+        defer { fixture.remove() }
+        let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        await controller.checkSourceUpdates([fixture.sourceID])
+        let checkedAt = try #require(controller.sourceUpdateCheckDates[fixture.sourceID])
+        try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
+        let preview = try #require(controller.sourceUpdatePreview)
+        let previewCheckedAt = try #require(controller.sourceUpdateCheckDates[fixture.sourceID])
+        #expect(previewCheckedAt >= checkedAt)
+
+        controller.handleObservedDirty(FilesystemEventBatch(
+            scopes: scope == "agent" ? [.agentDirectory(agentID: "codex")] : [.managedRoot],
+            needsFullScan: scope == "full-scan", rootChanged: false))
+        await controller.waitForPendingRechecks()
+
+        #expect(controller.sourceHasPreparedUpdate(fixture.sourceID))
+        #expect(controller.sourceUpdateCheckDates[fixture.sourceID] == previewCheckedAt)
+        #expect(controller.sourceUpdatePreview == preview)
+        #expect(FileManager.default.fileExists(atPath: try #require(preview.preparedPath)))
+        controller.cancelSourceUpdatePreview(preview)
+        #expect(controller.sourceHasPreparedUpdate(fixture.sourceID))
+    }
+
+    @MainActor
+    @Test func failedCheckRetainsLastSuccessAndSuccessfulRetryReplacesIt() async throws {
+        let fixture = try sourceUpdateFixture()
+        defer { fixture.remove() }
+        let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        await controller.checkSourceUpdates([fixture.sourceID])
+        let checkedAt = try #require(controller.sourceUpdateCheckDates[fixture.sourceID])
+        try FileManager.default.removeItem(at: fixture.external)
+        await controller.checkSourceUpdates([fixture.sourceID])
+        #expect(controller.sourceUpdateFailures[fixture.sourceID] != nil)
+        #expect(controller.sourceHasPreparedUpdate(fixture.sourceID))
+        #expect(controller.sourceUpdateCheckDates[fixture.sourceID] == checkedAt)
+
+        try FileManager.default.copyItem(at: fixture.managed, to: fixture.external)
+        await controller.checkSourceUpdates([fixture.sourceID])
+        #expect(controller.sourceUpdateChecks[fixture.sourceID] == false)
+        #expect(!controller.sourceHasPreparedUpdate(fixture.sourceID))
+        #expect(controller.sourceUpdateFailures[fixture.sourceID] == nil)
+        #expect(try #require(controller.sourceUpdateCheckDates[fixture.sourceID]) >= checkedAt)
+    }
+
+    @MainActor
+    @Test(arguments: ["display", "repository", "branch", "path", "external", "directory", "revision", "baseline", "removed"])
+    func sourceChangesOnlyClearAffectedUpdateFacts(_ change: String) throws {
+        let controller = SkillsHubLibraryController()
+        let source = SkillSource(kind: .githubRepository, name: "Source", urlString: "https://github.com/owner/repo",
+            githubRepositoryID: 1, ref: "main", resolvedVersion: "old", localPath: "/isolated/root/github/owner/repo")
+        let other = SkillSource(kind: .githubRepository, name: "Other")
+        controller.sources = [source, other]
+        let checkedAt = Date.distantPast
+        for id in [source.id, other.id] {
+            controller.sourceUpdateChecks[id] = true
+            controller.sourceUpdateCheckDates[id] = checkedAt
+            controller.recordSourceUpdateFailure(sourceID: id, error: SourceUpdateError.invalidSource)
+        }
+        var changed = source
+        switch change {
+        case "display": changed.name = "Renamed"; changed.lastCheckedAt = Date()
+        case "repository": changed.githubRepositoryID = 2
+        case "branch": changed.ref = "next"
+        case "path": changed.localPath = "/isolated/root/github/owner/moved"
+        case "external": changed.externalLocalPath = "/isolated/external"
+        case "directory": changed.directoryIdentity = TargetFileIdentity(volumeNumber: 1, fileNumber: 2)
+        case "revision": changed.resolvedVersion = "new"
+        case "baseline": changed.baselineManifest = ContentManifest(entries: [], fileCount: 0, totalByteCount: 0, digest: "new", observedAt: Date())
+        default: break
+        }
+        controller.sources = change == "removed" ? [other] : [changed, other]
+        #expect(controller.sourceHasPreparedUpdate(source.id) == (change == "display"))
+        #expect((controller.sourceUpdateCheckDates[source.id] != nil) == (change == "display"))
+        #expect((controller.sourceUpdateFailures[source.id] != nil) == (change == "display"))
+        #expect(controller.sourceHasPreparedUpdate(other.id))
+        #expect(controller.sourceUpdateCheckDates[other.id] == checkedAt)
+        #expect(controller.sourceUpdateFailures[other.id] != nil)
+    }
+
+    @MainActor
+    @Test func switchingRootsClearsUpdateFactsAndPreparedContent() async throws {
+        let fixture = try sourceUpdateFixture()
+        let next = try sourceUpdateFixture()
+        defer { fixture.remove(); next.remove() }
+        let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
+        let preparedPath = try #require(controller.sourceUpdatePreview?.preparedPath)
+        controller.recordSourceUpdateFailure(sourceID: fixture.sourceID, error: SourceUpdateError.invalidSource)
+        controller.updateCheckSummary = "Checking updates…"
+
+        try await connectInitializedTestRoot(controller, at: next.root)
+
+        #expect(controller.sourceUpdateChecks.isEmpty)
+        #expect(controller.sourceUpdateCheckDates.isEmpty)
+        #expect(controller.sourceUpdateFailures.isEmpty)
+        #expect(controller.updateCheckSummary == nil)
+        #expect(controller.sourceUpdatePreview == nil)
+        #expect(!FileManager.default.fileExists(atPath: preparedPath))
     }
 
     @MainActor
@@ -1514,6 +1624,8 @@ struct SourceAndLifecycleServicesTests {
 
         try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
         let preview = try #require(controller.sourceUpdatePreview)
+        let otherSourceID = UUID()
+        controller.sourceUpdateChecks[otherSourceID] = true
         let before = try fixture.store.loadCurrentSnapshot(from: fixture.root)
         #expect(before.generation == preview.metadataGeneration)
         #expect(before.metadataDigest == preview.metadataDigest)
@@ -1538,6 +1650,9 @@ struct SourceAndLifecycleServicesTests {
         let updatedSource = try #require(snapshot.metadata.sources.first { $0.id == fixture.sourceID })
         let preserved = try #require(snapshot.metadata.installedSkills.first { $0.installedPath == fixture.managed.path })
         #expect(result.updateSucceeded)
+        #expect(!controller.sourceHasPreparedUpdate(fixture.sourceID))
+        #expect(controller.sourceUpdateCheckDates[fixture.sourceID] == nil)
+        #expect(controller.sourceHasPreparedUpdate(otherSourceID))
         #expect(result.oldContentMovedToTrash)
         #expect(updatedSource.baselineManifest?.digest == preview.preparedManifest.digest)
         #expect(preserved.assetID == fixture.assetID)
@@ -1564,6 +1679,9 @@ struct SourceAndLifecycleServicesTests {
         try await controller.prepareSourceUpdate(sourceID: fixture.sourceID)
         let preview = try #require(controller.sourceUpdatePreview)
         try writeSkill(fixture.managed, name: "Stable", description: "Changed after confirmation")
+        controller.handleObservedDirty(FilesystemEventBatch(scopes: [.managedRoot], needsFullScan: false, rootChanged: false))
+        await controller.waitForPendingRechecks()
+        #expect(controller.sourceHasPreparedUpdate(fixture.sourceID))
 
         await #expect(throws: SourceUpdateError.confirmationChanged) {
             _ = try await controller.applySourceUpdate(using: preview)

@@ -344,7 +344,6 @@ extension SkillsHubLibraryController {
         localOnly: Bool = false
     ) {
         guard rootURL != nil else { return }
-        invalidateSourceUpdatePreviews()
         recheckGeneration &+= 1
         pendingManagedRootReload = pendingManagedRootReload || reloadManagedRoot
         pendingLocalOnlyRecheck = pendingLocalOnlyRecheck && localOnly
