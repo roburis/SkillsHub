@@ -76,6 +76,19 @@ nonisolated enum LocalizationKey: String, CaseIterable {
 nonisolated struct SkillsHubLocalization {
     private static let uiStrings: [AppLanguage: [String: String]] = [
         .chinese: [
+            "Authorize directory": "授权目录",
+            "Authorize directory…": "授权目录…",
+            "Directory authorization required": "目录需要授权",
+            "The Agent links changed while authorizing. Review the new check before trying the action again.": "授权期间 Agent 链接已变化，请查看最新检查结果后重新操作。",
+            "Saved directory access could not be activated. Retry checking or authorize this directory again.": "无法启用已保存的目录访问权限，请重试检查或重新授权此目录。",
+            "Authorize this Agent’s skills directory to check its relationships.": "请授权此 Agent 的整个 skills 目录，以核验技能关系。",
+            "Directory inaccessible; relationship not checked.": "目录不可访问，关系尚未核验。",
+            "Previous observation: %@ · %@ (out of date)": "上次观察：%@ · %@（已过期）",
+            "Allow Skills Hub to access the entire %@ skills directory to check and manage its skill links.": "请允许 Skills Hub 访问 %@ 的整个 skills 目录，以检查和管理其中的技能链接。",
+            "Choose the Agent’s currently configured skills directory.": "请选择此 Agent 当前配置的 skills 目录。",
+            "The Agent configuration changed. Recheck before authorizing again.": "Agent 配置已变化，请重新检查后再授权。",
+            "Checked %@: %@ relationships could not be verified.": "已检查 %@，其中 %@ 条关系未能核验。",
+            "Checked Agent directories: %@ relationships could not be verified.": "已检查 Agent 目录，其中 %@ 条关系未能核验。",
             "All": "全部",
             "All Sources": "全部来源",
             "Enabled": "已启用",
@@ -610,6 +623,19 @@ nonisolated struct SkillsHubLocalization {
             "The last re-check failed. Managed facts are unknown until the next successful re-check.": "上次重检失败。在下次成功重检前，受管事实状态未知。"
         ],
         .japanese: [
+            "Authorize directory": "フォルダを許可",
+            "Authorize directory…": "フォルダを許可…",
+            "Directory authorization required": "フォルダへの許可が必要です",
+            "The Agent links changed while authorizing. Review the new check before trying the action again.": "許可中に Agent のリンクが変更されました。最新の確認結果を確認してから、もう一度操作してください。",
+            "Saved directory access could not be activated. Retry checking or authorize this directory again.": "保存済みのフォルダアクセスを開始できません。再確認するか、このフォルダを再度許可してください。",
+            "Authorize this Agent’s skills directory to check its relationships.": "関係を確認するため、この Agent の skills フォルダ全体へのアクセスを許可してください。",
+            "Directory inaccessible; relationship not checked.": "フォルダにアクセスできないため、関係は未検証です。",
+            "Previous observation: %@ · %@ (out of date)": "前回の観察：%@ · %@（期限切れ）",
+            "Allow Skills Hub to access the entire %@ skills directory to check and manage its skill links.": "%@ の skills フォルダ全体へのアクセスを許可して、スキルのリンクを確認・管理できるようにしてください。",
+            "Choose the Agent’s currently configured skills directory.": "この Agent に現在設定されている skills フォルダを選択してください。",
+            "The Agent configuration changed. Recheck before authorizing again.": "Agent の設定が変更されました。再確認してから許可してください。",
+            "Checked %@: %@ relationships could not be verified.": "%@ を確認しました。%@ 件の関係を検証できませんでした。",
+            "Checked Agent directories: %@ relationships could not be verified.": "Agent フォルダを確認しました。%@ 件の関係を検証できませんでした。",
             "All": "すべて",
             "All Sources": "すべてのソース",
             "Enabled": "有効",
@@ -2439,8 +2465,15 @@ nonisolated struct SkillsHubLocalization {
             }
         case is ManagedRelationClearError:
             return "The Skill or Agent scope changed after confirmation. Review a new preview before clearing."
-        case is AgentTargetAccessError:
-            return "Agent directory access could not be verified. Diagnostic (original): \(error)"
+        case let failure as AgentTargetAccessError:
+            switch failure {
+            case .leaseUnavailable:
+                return "Saved directory access could not be activated. Retry checking or authorize this directory again."
+            case .qualificationFailed(.targetMissing): return "The Agent skills target is missing."
+            case .qualificationFailed(.permissionRequired), .qualificationFailed(.bookmarkStale):
+                return "Authorize this Agent’s skills directory to check its relationships."
+            default: return "Agent directory access could not be verified. Diagnostic (original): \(error)"
+            }
         case is MetadataCommitError:
             return "Metadata could not be committed. Diagnostic (original): \(error)"
         case is ContentManifestFailure:

@@ -97,12 +97,21 @@ extension SkillsHubLibraryController {
             do {
                 var authorizations = try await self.startupAccessStore.resolvePresentationAccess(to: Array(targets.values))
                 guard contextIsCurrent() else { return }
-                for target in targets.values {
+                for target in Set(targets.values) {
                     if let authorization = authorizations[target.path], !authorization.isStale,
                        authorization.url.standardizedFileURL == target {
                         do {
                             leases.append(try self.securityScopedAccessProvider.acquire(url: authorization.url, owner: .inspection(UUID())))
-                        } catch { authorizations.removeValue(forKey: target.path) }
+                        } catch {
+                            authorizations.removeValue(forKey: target.path)
+                            for (id, url) in targets where url == target {
+                                self.agentDirectoryAccessFailures[id] = .accessFailed(self.errorPresentation(for: error))
+                            }
+                        }
+                    } else if self.fileManager.fileExists(atPath: target.path) {
+                        for (id, url) in targets where url == target {
+                            self.agentDirectoryAccessFailures[id] = .authorizationRequired
+                        }
                     }
                 }
                 var authorizedRoot: URL?

@@ -1458,6 +1458,50 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testAgentWorkspaceRequestsWholeDirectoryAuthorizationAndRechecks() throws {
+        for language in ["en", "zh-Hans", "ja"] {
+            let fixture = try makeFixture()
+            let app = try launch(fixture: fixture, language: language,
+                additionalArguments: ["--skillshub-ui-agent-authorization-fixture"])
+            selectNavigation("agent-codex", in: app)
+            let recheck = app.buttons["recheck-agent-directory-codex"]
+            XCTAssertTrue(recheck.waitForExistence(timeout: 3))
+            XCTAssertFalse(app.sheets.firstMatch.exists) // Background checks never interrupt the user.
+            recheck.click()
+            let panel = app.sheets["open-panel"]
+            XCTAssertTrue(panel.waitForExistence(timeout: 3))
+            let cancelled = XCTAttachment(screenshot: app.screenshot())
+            cancelled.name = "Whole Agent directory authorization \(language)"
+            cancelled.lifetime = .keepAlways
+            add(cancelled)
+            panel.typeKey(.escape, modifierFlags: [])
+            XCTAssertTrue(panel.waitForNonExistence(timeout: 3))
+            let authorize = app.buttons["authorize-agent-directory-codex"].firstMatch
+            XCTAssertTrue(authorize.waitForExistence(timeout: 3))
+            XCTAssertEqual(authorize.label, ["en": "Authorize directory…", "zh-Hans": "授权目录…", "ja": "フォルダを許可…"][language])
+            XCTAssertFalse(panel.exists)
+            app.activate()
+            authorize.click()
+            XCTAssertTrue(panel.waitForExistence(timeout: 3))
+            let confirm = panel.buttons[["en": "Authorize directory", "zh-Hans": "授权目录", "ja": "フォルダを許可"][language]!]
+            XCTAssertTrue(confirm.waitForExistence(timeout: 3))
+            confirm.click() // The panel opens at the Agent’s configured directory.
+            XCTAssertTrue(panel.waitForNonExistence(timeout: 3))
+            XCTAssertTrue(app.staticTexts["agent-owned-review"].waitForExistence(timeout: 5))
+            XCTAssertTrue(authorize.waitForNonExistence(timeout: 3))
+            XCTAssertFalse(panel.exists)
+            let complete = XCTAttachment(screenshot: app.screenshot())
+            complete.name = "Agent directory authorization restored \(language)"
+            complete.lifetime = .keepAlways
+            add(complete)
+            app.terminate()
+            activeApp = nil
+            try fixture.cleanup()
+            activeFixture = nil
+        }
+    }
+
+    @MainActor
     func testDefaultAgentDirectoryAuthorizationCancelAndExactSelection() throws {
         let fixture = try makeFixture()
         let app = try launch(fixture: fixture, additionalArguments: ["--skillshub-ui-agent-authorization-fixture"])

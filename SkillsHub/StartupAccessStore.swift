@@ -75,13 +75,13 @@ final class SecurityScopedStartupAccessStore: StartupAccessStoring {
         guard resolved.path == path else {
             return nil
         }
-        return StartupAccessBookmarkResolution(url: resolved, isStale: isStale)
+        return StartupAccessBookmarkResolution(url: resolvedURL, isStale: isStale)
     }
 
     func saveAccess(to url: URL) throws {
         let normalizedURL = url.standardizedFileURL
         let path = normalizedURL.path
-        let bookmarkData = try normalizedURL.bookmarkData(
+        let bookmarkData = try url.bookmarkData(
             options: [.withSecurityScope],
             includingResourceValuesForKeys: nil,
             relativeTo: nil

@@ -38,6 +38,8 @@ final class SkillsHubLibraryController {
             requestPresentationObservation()
             defaultAgentDirectoryRefresh = [:]
             agentDirectoryAuditFailures = [:]
+            agentDirectoryAccessFailures = [:]
+            agentDirectoryAuthorizationRequest = nil
             if oldValue?.standardizedFileURL != rootURL?.standardizedFileURL {
                 for job in agentDirectoryAuditTasks.values { job.task.cancel() }
                 agentDirectoryAuditTasks = [:]
@@ -119,6 +121,8 @@ final class SkillsHubLibraryController {
     var agentFindings: [AgentDirectoryFinding]
     var defaultAgentDirectoryRefresh: [AgentKind: AgentDefaultDirectoryRefreshStatus] = [:]
     var agentDirectoryAuditFailures: [String: LocalizedMessage] = [:]
+    var agentDirectoryAccessFailures: [String: AgentDirectoryAccessFailure] = [:]
+    var agentDirectoryAuthorizationRequest: AgentDirectoryAuthorizationRequest?
     var auditingAgentIDs: Set<String> = []
     @ObservationIgnored var agentDirectoryAuditTasks: [String: (id: UUID, task: Task<Void, Error>)] = [:]
     @ObservationIgnored var agentLightScanTask: (id: UUID, task: Task<Void, Never>)?
@@ -273,14 +277,14 @@ final class SkillsHubLibraryController {
         let lease: SecurityScopedAccessLease
         do {
             lease = try securityScopedAccessProvider.acquire(
-                url: normalizedURL,
+                url: url,
                 owner: .inspection(UUID())
             )
         } catch SecurityScopedAccessError.startDenied {
             throw SkillsHubLibraryFailure.invalidSource("Folder authorization was not granted.")
         }
         do {
-        try startupAccessStore.saveAccess(to: normalizedURL)
+            try startupAccessStore.saveAccess(to: url)
             requestPresentationObservation()
             pendingInspectionLeases[key] = lease
         } catch {

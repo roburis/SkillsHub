@@ -4,6 +4,138 @@ import Testing
 
 @MainActor
 struct SkillsHubLibraryControllerTests {
+    @Test func relationshipBatchHoldsOneDirectoryAccessAndPreservesFactsWhenAccessFails() async throws {
+        let adapter = RecordingSecurityScopedResourceAccessAdapter()
+        let fixture = try await makeControllerRelationFixture(agents: [.codex],
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: adapter))
+        let controller = fixture.controller
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        await controller.waitForPresentationObservation()
+        let target = try #require(fixture.targets[.codex])
+        let first = try #require(controller.installedSkills.first)
+        var second = first
+        second.assetID = UUID()
+        second.id = "reader"
+        second.name = "Reader"
+        second.stableLinkName = "Reader"
+        var snapshot = try #require(controller.rootSnapshot)
+        snapshot.metadata.installedSkills.append(second)
+        controller.rootSnapshot = snapshot
+        controller.installedSkills.append(second)
+        try FileManager.default.createSymbolicLink(at: target.appendingPathComponent("Reader"),
+            withDestinationURL: URL(fileURLWithPath: first.installedPath))
+        var observation = try #require(controller.localState.targetObservations.first)
+        observation.relation.assetID = second.assetID
+        observation.linkPath = target.appendingPathComponent("Reader").path
+        controller.localState.targetObservations.append(observation)
+        await controller.waitForPresentationObservation()
+        let before = adapter.startRecords.count
+        await controller.refreshRelationObservations(for: controller.agentDetections)
+        #expect(adapter.startRecords.dropFirst(before).filter { $0.url.path == target.path }.count == 1)
+        await controller.waitForPresentationObservation()
+        let successful = controller.localState.targetObservations
+
+        adapter.denyStart = { url, _ in url.path == target.path }
+        await controller.refreshRelationObservations(for: controller.agentDetections)
+        #expect(controller.localState.targetObservations == successful)
+        #expect(controller.agentDirectoryAccessFailures["codex"] != nil)
+        #expect(!controller.agentDirectoryNeedsAuthorization("codex"))
+        #expect(controller.agentDirectoryAuthorizationRequest == nil)
+        let presentation = try #require(controller.relationPresentations(for: first).first { $0.relation.agentID == "codex" })
+        #expect(presentation.verification == .currentlyUnverifiable)
+        #expect(presentation.observation == nil)
+        #expect(presentation.lastObservation != nil)
+        #expect(!presentation.canPerformAction)
+        adapter.denyStart = nil
+        await controller.refreshRelationObservations(for: controller.agentDetections)
+        #expect(controller.agentDirectoryAccessFailures["codex"] == nil)
+    }
+
+    @Test func userDirectoryAuthorizationIsCoalescedExactCancellableAndResumesAfterRecheck() async throws {
+        let store = InMemoryStartupAccessStore()
+        let fixture = try await makeControllerRelationFixture(agents: [.codex], startupAccessStore: store)
+        let controller = fixture.controller
+        let target = try #require(fixture.targets[.codex])
+        var runs = 0
+        await controller.performUserAgentAction(agentID: "codex") { runs += 1 }
+        let cancelled = try #require(controller.agentDirectoryAuthorizationRequest)
+        #expect(cancelled.directory == target.standardizedFileURL)
+        controller.requestAgentDirectoryAuthorization(agentID: "codex")
+        #expect(controller.agentDirectoryAuthorizationRequest?.id == cancelled.id)
+        await controller.completeAgentDirectoryAuthorization(requestID: cancelled.id, directory: nil)
+        #expect(runs == 0)
+        #expect(!store.restorablePaths.contains(target.path))
+        #expect(controller.agentDirectoryAuthorizationRequest == nil)
+
+        controller.requestAgentDirectoryAuthorization(agentID: "codex")
+        let wrong = try #require(controller.agentDirectoryAuthorizationRequest)
+        await controller.completeAgentDirectoryAuthorization(requestID: wrong.id, directory: fixture.root)
+        #expect(!store.restorablePaths.contains(target.path))
+        #expect(controller.errorMessage != nil)
+
+        await controller.performUserAgentAction(agentID: "codex") { runs += 1 }
+        let accepted = try #require(controller.agentDirectoryAuthorizationRequest)
+        await controller.completeAgentDirectoryAuthorization(requestID: accepted.id, directory: target)
+        #expect(store.restorablePaths.contains(target.path))
+        #expect(controller.localState.agentAuditSnapshots.contains { $0.agentID == "codex" })
+        #expect(runs == 1)
+        #expect(controller.agentDirectoryAuthorizationRequest == nil)
+
+        store.restorablePaths.remove(target.path)
+        await controller.performUserAgentAction(agentID: "codex") { runs += 1 }
+        let stale = try #require(controller.agentDirectoryAuthorizationRequest)
+        var changed = try #require(controller.rootSnapshot)
+        changed.metadata.agents[0].displayName = "Changed"
+        controller.rootSnapshot = changed
+        await controller.completeAgentDirectoryAuthorization(requestID: stale.id, directory: target)
+        #expect(runs == 1)
+        #expect(!store.restorablePaths.contains(target.path))
+    }
+
+    @Test func authorizationDoesNotResumeAnActionAgainstAReplacedLink() async throws {
+        let store = InMemoryStartupAccessStore()
+        let fixture = try await makeControllerRelationFixture(agents: [.codex], startupAccessStore: store)
+        let controller = fixture.controller
+        let target = try #require(fixture.targets[.codex])
+        store.restorablePaths.insert(target.path)
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        store.restorablePaths.remove(target.path)
+        var resumed = false
+        await controller.performUserAgentAction(agentID: "codex") { resumed = true }
+        let request = try #require(controller.agentDirectoryAuthorizationRequest)
+        let link = target.appendingPathComponent("Writer")
+        try FileManager.default.moveItem(at: link, to: fixture.root.appendingPathComponent("old-link"))
+        let replacement = Data("External replacement".utf8)
+        try replacement.write(to: link)
+        await controller.completeAgentDirectoryAuthorization(requestID: request.id, directory: target)
+        #expect(!resumed)
+        #expect(try Data(contentsOf: link) == replacement)
+        #expect(controller.errorMessage?.contains("links changed") == true)
+    }
+
+    @Test func staleCustomDirectoryAuthorizationUsesTheConfiguredDirectoryAndMissingDirectoryDoesNotPrompt() async throws {
+        let store = InMemoryStartupAccessStore()
+        let fixture = try await makeControllerRelationFixture(agents: [], startupAccessStore: store)
+        let target = try temporaryDirectory()
+        try fixture.controller.rememberUserSelectedAccess(to: target)
+        let custom = try await fixture.controller.addCustomAgent(displayName: "Custom", iconMonogram: "C", skillsDirectory: target)
+        store.stalePaths.insert(target.path)
+        await fixture.controller.performUserAgentAction(agentID: custom.id) {}
+        let request = try #require(fixture.controller.agentDirectoryAuthorizationRequest)
+        #expect(request.directory == target.standardizedFileURL)
+        #expect(request.agentID == custom.id)
+        await fixture.controller.completeAgentDirectoryAuthorization(requestID: request.id, directory: nil)
+        store.stalePaths.remove(target.path)
+        try FileManager.default.removeItem(at: target)
+        await fixture.controller.performUserAgentAction(agentID: custom.id) {}
+        #expect(fixture.controller.agentDirectoryAuthorizationRequest == nil)
+        #expect(fixture.controller.errorMessage == "The Agent skills target is missing.")
+        #expect(fixture.controller.agentDirectoryAccessFailures[custom.id] == nil)
+        #expect(!fixture.controller.agentDirectoryNeedsAuthorization(custom.id))
+        fixture.controller.requestAgentDirectoryAuthorization(agentID: custom.id)
+        #expect(fixture.controller.agentDirectoryAuthorizationRequest == nil)
+    }
+
     @Test func explicitDefaultAgentDirectoryRefreshKeepsExternalNodesAndRootMetadataUnchanged() async throws {
         let root = try temporaryDirectory()
         let home = try temporaryDirectory()
@@ -1330,7 +1462,8 @@ private func skillText(name: String, description: String) -> String {
 @MainActor
 func makeControllerRelationFixture(
     agents: [AgentKind], linkService: AgentLinkService = AgentLinkService(),
-    startupAccessStore: (any StartupAccessStoring)? = nil
+    startupAccessStore: (any StartupAccessStoring)? = nil,
+    securityScopedAccessProvider: SecurityScopedAccessProvider = SecurityScopedAccessProvider()
 ) async throws -> (
     controller: SkillsHubLibraryController,
     root: URL,
@@ -1375,7 +1508,8 @@ func makeControllerRelationFixture(
         agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation),
         agentHomeDirectory: home,
         agentEnvironment: [:],
-        startupAccessStore: startupAccessStore ?? accessStore
+        startupAccessStore: startupAccessStore ?? accessStore,
+        securityScopedAccessProvider: securityScopedAccessProvider
     )
     try await connectInitializedTestRoot(controller, at: root)
     await controller.refreshAgentLightScan(checkInstallation: true)
@@ -1385,6 +1519,7 @@ func makeControllerRelationFixture(
 
 private final class InMemoryStartupAccessStore: StartupAccessStoring {
     var restorablePaths: Set<String>
+    var stalePaths: Set<String> = []
     var restoredPaths: [String] = []
     var savedPaths: [String] = []
 
@@ -1398,7 +1533,7 @@ private final class InMemoryStartupAccessStore: StartupAccessStoring {
             return nil
         }
         restoredPaths.append(path)
-        return StartupAccessBookmarkResolution(url: url.standardizedFileURL, isStale: false)
+        return StartupAccessBookmarkResolution(url: url.standardizedFileURL, isStale: stalePaths.contains(path))
     }
 
     func saveAccess(to url: URL) throws {

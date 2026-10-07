@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 extension SkillsHubLibraryController {
@@ -161,8 +162,16 @@ extension SkillsHubLibraryController {
             if error is CancellationError { throw error }
             if case let AgentTargetAccessError.qualificationFailed(reason) = error {
                 agentDirectoryAuditFailures[agentID] = LocalizedMessage(agentQualificationFailureDescription(reason))
+                if [.permissionRequired, .bookmarkStale, .authorizationTargetMismatch].contains(reason) {
+                    agentDirectoryAccessFailures[agentID] = .authorizationRequired
+                } else {
+                    agentDirectoryAccessFailures.removeValue(forKey: agentID)
+                }
             } else {
                 agentDirectoryAuditFailures[agentID] = errorPresentation(for: error)
+                if case AgentTargetAccessError.leaseUnavailable = error {
+                    agentDirectoryAccessFailures[agentID] = .accessFailed(errorPresentation(for: error))
+                }
             }
             if let agent = AgentKind(rawValue: agentID), defaultAgentDirectoryRefresh[agent] != nil {
                 defaultAgentDirectoryRefresh[agent] = .unverifiable
@@ -202,21 +211,44 @@ extension SkillsHubLibraryController {
         guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
               rootSnapshot == snapshot, installedSkills == inputSkills, agentPathOverrides == inputOverrides,
               generation == agentObservationGeneration else { throw CancellationError() }
+        agentDirectoryAccessFailures.removeValue(forKey: agentID)
+        agentDirectoryAuditFailures.removeValue(forKey: agentID)
         await mergeAgentAuditResult(result, agentID: agentID)
         await waitForPresentationObservation()
         guard !Task.isCancelled, self.rootURL == rootURL, rootSessionLease?.id == sessionID,
               rootSnapshot == snapshot, generation == agentObservationGeneration else { throw CancellationError() }
-        setStatus("Audited %@.", agentDisplayName(for: agentID))
-        errorMessage = nil
+        let unverifiable = localState.verificationRecords.filter {
+            $0.relation.agentID == agentID && $0.conclusion == .currentlyUnverifiable
+        }.count
+        if let failure = agentDirectoryAccessFailures[agentID] {
+            errorMessage = failure.message
+        } else if unverifiable > 0 {
+            setStatus("Checked %@: %@ relationships could not be verified.", agentDisplayName(for: agentID), String(unverifiable))
+            errorMessage = nil
+        } else {
+            setStatus("Audited %@.", agentDisplayName(for: agentID))
+            errorMessage = nil
+        }
         try saveLocalState()
     }
 
     func auditAllDetectedAgentDirectories() async throws {
         guard hasRoot else { throw SkillsHubLibraryFailure.missingRoot }
+        var checkedIDs = Set<String>()
         for descriptor in visibleInstalledAgentDescriptors where agentDetections.contains(where: { $0.agentID == descriptor.id && $0.detected }) {
             try await auditAgentDirectory(agentID: descriptor.id)
+            checkedIDs.insert(descriptor.id)
         }
-        setStatus("Audited detected agent directories.")
+        let unverifiable = localState.verificationRecords.filter {
+            checkedIDs.contains($0.relation.agentID) && $0.conclusion == .currentlyUnverifiable
+        }.count
+        if let failure = checkedIDs.compactMap({ agentDirectoryFailure($0) }).first {
+            errorMessage = failure
+        } else if unverifiable > 0 {
+            setStatus("Checked Agent directories: %@ relationships could not be verified.", String(unverifiable))
+        } else {
+            setStatus("Audited detected agent directories.")
+        }
     }
 
     func prepareBrokenLinkDeletion(findingID: String) throws -> BrokenLinkDeletionPlan {
@@ -361,8 +393,22 @@ extension SkillsHubLibraryController {
         let previousState = localState
         var updates: [(observation: TargetObservation, verification: VerificationRecord?)] = []
         var capabilities: [String: AgentCapabilityPresentation] = [:]
+        var directoryAccess: [String: Result<SecurityScopedAccessLease, Error>] = [:]
+        defer {
+            for case .success(let lease) in directoryAccess.values {
+                do { try endSecurityScopedAccessLease(lease) } catch { handle(error) }
+            }
+        }
         let targetURLs = installedAgentDescriptors.compactMap { $0.skillsDirectory.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL } }
-        let authorizations = (try? await startupAccessStore.resolvePresentationAccess(to: targetURLs)) ?? [:]
+        let authorizations: [String: StartupAccessBookmarkResolution]
+        let authorizationError: Error?
+        do {
+            authorizations = try await startupAccessStore.resolvePresentationAccess(to: targetURLs)
+            authorizationError = nil
+        } catch {
+            authorizations = [:]
+            authorizationError = error
+        }
         guard !Task.isCancelled, rootURL == root, rootSessionLease?.id == sessionID,
               rootSnapshot == expected, generation == agentObservationGeneration else { return }
         for previous in previousState.targetObservations where assetIDs?.contains(previous.relation.assetID) ?? true {
@@ -375,19 +421,43 @@ extension SkillsHubLibraryController {
             else { continue }
 
             let target = URL(fileURLWithPath: targetPath, isDirectory: true).standardizedFileURL
+            if directoryAccess[target.path] == nil {
+                directoryAccess[target.path] = Result {
+                    var node = stat()
+                    if lstat(target.path, &node) == -1, errno == ENOENT || errno == ENOTDIR {
+                        throw AgentTargetAccessError.qualificationFailed(.targetMissing)
+                    }
+                    if let authorizationError { throw authorizationError }
+                    guard let authorization = authorizations[target.path], !authorization.isStale,
+                          authorization.url.standardizedFileURL == target else {
+                        throw AgentTargetAccessError.qualificationFailed(.permissionRequired)
+                    }
+                    return try securityScopedAccessProvider.acquire(url: authorization.url, owner: .inspection(UUID()))
+                }
+            }
+            do {
+                _ = try directoryAccess[target.path]!.get()
+                agentDirectoryAccessFailures.removeValue(forKey: relation.agentID)
+            } catch {
+                if case AgentTargetAccessError.qualificationFailed(.targetMissing) = error {
+                    agentDirectoryAccessFailures.removeValue(forKey: relation.agentID)
+                    agentDirectoryAuditFailures[relation.agentID] = errorPresentation(for: error)
+                } else if case AgentTargetAccessError.qualificationFailed(.permissionRequired) = error {
+                    agentDirectoryAccessFailures[relation.agentID] = .authorizationRequired
+                } else {
+                    agentDirectoryAccessFailures[relation.agentID] = .accessFailed(errorPresentation(for: error))
+                }
+                // Keep the last observation and its timestamp; it is no longer current evidence.
+                continue
+            }
             let observation: TargetObservation
             do {
-                guard let authorization = authorizations[target.path],
-                      !authorization.isStale, authorization.url.standardizedFileURL == target
-                else { throw AgentTargetAccessError.qualificationFailed(.permissionRequired) }
                 let linkURL = try relationActionRuntime.linkURL(
                     linkName: relationLinkName(asset: skill),
                     targetDirectory: target
                 )
-                let lease = try securityScopedAccessProvider.acquire(url: authorization.url, owner: .inspection(UUID()))
                 let inspection = await Self.inspectRelationNode(linkURL: linkURL, relation: relation,
                     canonicalTargetPath: skill.installedPath)
-                try endSecurityScopedAccessLease(lease)
                 guard !Task.isCancelled, rootURL == root, rootSessionLease?.id == sessionID,
                       rootSnapshot == expected, generation == agentObservationGeneration else { return }
                 observation = try inspection.get()
