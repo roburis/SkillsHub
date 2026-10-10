@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import XCTest
 
 final class SkillsHubUITests: XCTestCase {
@@ -2437,10 +2438,48 @@ final class SkillsHubUITests: XCTestCase {
     @MainActor
     func testGitHubImportConsumesFixedHTTPThroughTheAppFlow() throws {
         let fixture = try makeFixture()
-        let app = try launch(
+        var app = try launch(fixture: fixture, empty: true)
+        openEstablishRootPanel(in: app)
+        chooseDirectory(fixture.root, in: app)
+        XCTAssertTrue(waitForText("root-initialized", at: fixture.journal))
+        app.terminate()
+
+        var records = try Data(contentsOf: fixture.journal).split(separator: 0x0A).map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+        }
+        var plan = try XCTUnwrap(records[0]["operationPlan"] as? [String: Any])
+        var state = try XCTUnwrap(plan["initialLocalState"] as? [String: Any])
+        state["managedRelationEvidence"] = [] as [String]
+        plan["initialLocalState"] = state
+        plan["planDigest"] = ""
+        func canonicalJSON(_ value: Any) throws -> String {
+            if let object = value as? [String: Any] {
+                return try "{" + object.keys.sorted().map {
+                    try canonicalJSON($0) + ":" + canonicalJSON(object[$0]!)
+                }.joined(separator: ",") + "}"
+            }
+            if let array = value as? [Any] {
+                return try "[" + array.map(canonicalJSON).joined(separator: ",") + "]"
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]), as: UTF8.self)
+        }
+        let digest = SHA256.hash(data: Data(try canonicalJSON(plan).utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        plan["planDigest"] = digest
+        records[0]["operationPlan"] = plan
+        for index in records.indices { records[index]["planDigest"] = digest }
+        let retainedJournal = try records.reduce(into: Data()) {
+            $0 += try JSONSerialization.data(withJSONObject: $1, options: [.sortedKeys]) + Data([0x0A])
+        }
+        try retainedJournal.write(to: fixture.journal)
+
+        app = try launch(
             fixture: fixture,
+            empty: true,
             additionalArguments: ["--skillshub-ui-github-import-fixture"]
         )
+        openConnectRootPanel(in: app)
+        chooseDirectory(fixture.root, in: app)
 
         selectNavigation("github-sources", in: app)
         app.buttons["add-github-source"].click()
@@ -2470,6 +2509,11 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { ($0["method"] as? String) == "GET" })
         XCTAssertTrue(requests.allSatisfy { ($0["authorization"] as? Bool) == false })
         XCTAssertTrue(app.descendants(matching: .any)["source-detail"].waitForExistence(timeout: 3))
+        XCTAssertTrue(try Data(contentsOf: fixture.journal).starts(with: retainedJournal))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "GitHub import after legacy initialization journal"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     @MainActor

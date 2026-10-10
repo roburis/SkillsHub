@@ -424,11 +424,6 @@ extension SkillsHubLibraryController {
             configuration: configuration,
             languagePreferences: languagePreferences
         )
-        if configuration.githubImportFixture {
-            controller.githubHTTPDataClientOverride = Phase1UITestGitHubHTTPClient(
-                traceURL: configuration.runRoot.appending(path: "github-requests.jsonl")
-            )
-        }
         try controller.acquireUIFixtureAccess(configuration: configuration)
         let requiredFiles = [
             sourceRoot.appending(path: "review-fixture/SKILL.md"),
@@ -881,7 +876,7 @@ extension SkillsHubLibraryController {
         configuration: Phase1UITestFixtureConfiguration,
         languagePreferences: AppLanguagePreferences?
     ) -> SkillsHubLibraryController {
-        SkillsHubLibraryController(
+        let controller = SkillsHubLibraryController(
             agentLinkService: configuration.creationMaterialFixture
                 ? AgentLinkService(relationPrimitiveHook: { point, _ in
                     if point == .afterMaterialIsolation { throw CocoaError(.fileWriteUnknown) }
@@ -925,6 +920,12 @@ extension SkillsHubLibraryController {
                 )
             )
         )
+        if configuration.githubImportFixture {
+            controller.githubHTTPDataClientOverride = Phase1UITestGitHubHTTPClient(
+                traceURL: configuration.runRoot.appending(path: "github-requests.jsonl")
+            )
+        }
+        return controller
     }
 
     private static func fixtureTask(
