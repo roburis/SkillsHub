@@ -1,3 +1,4 @@
+import CoreFoundation
 import Darwin
 import Foundation
 
@@ -1616,6 +1617,36 @@ actor Phase1OperationCoordinator {
 
 }
 
+nonisolated struct Phase1RecordedJSON: Encodable {
+    let value: Any
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let object as [String: Any]:
+            try container.encode(object.mapValues { Self(value: $0) })
+        case let array as [Any]:
+            try container.encode(array.map { Self(value: $0) })
+        case let string as String:
+            try container.encode(string)
+        case let number as NSNumber:
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                try container.encode(number.boolValue)
+            } else if String(cString: number.objCType) == "d" || String(cString: number.objCType) == "f" {
+                try container.encode(number.doubleValue)
+            } else if number.stringValue.hasPrefix("-") {
+                try container.encode(number.int64Value)
+            } else {
+                try container.encode(number.uint64Value)
+            }
+        case is NSNull:
+            try container.encodeNil()
+        default:
+            throw EncodingError.invalidValue(value, .init(codingPath: encoder.codingPath, debugDescription: "Invalid recorded JSON value."))
+        }
+    }
+}
+
 nonisolated final class Phase1OperationJournal {
     private let rootURL: URL
     private let fileManager: FileManager
@@ -1662,7 +1693,7 @@ nonisolated final class Phase1OperationJournal {
     func verifyCompletedPlan(_ plan: Phase1OperationPlan) throws {
         let records = try validatedRecords().filter { $0.operationID == plan.id }
         guard records.first?.event == .plan,
-              try records.first?.operationPlan?.computedDigest() == plan.planDigest,
+              records.first?.planDigest == plan.planDigest,
               records.contains(where: { $0.event == .confirmation && $0.confirmationTokenID != nil }),
               records.last?.event == .final,
               records.last?.phase == .completed,
@@ -1856,7 +1887,18 @@ nonisolated final class Phase1OperationJournal {
         var corrupted = !data.isEmpty && data.last != 0x0A
         for line in data.split(separator: 0x0A) {
             do {
-                records.append(try decoder.decode(Phase1JournalRecord.self, from: Data(line)))
+                let record = try decoder.decode(Phase1JournalRecord.self, from: Data(line))
+                records.append(record)
+                if record.event == .plan, record.operationPlan?.compensationPaths != nil {
+                    guard let object = try JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                          var plan = object["operationPlan"] as? [String: Any] else {
+                        throw Phase1OperationError.journalUnavailable
+                    }
+                    // Keep retired fields and the original JSONEncoder key ordering in the integrity check.
+                    plan["planDigest"] = ""
+                    let canonical = try encoder.encode(Phase1RecordedJSON(value: plan))
+                    if SHA256Digest.hex(canonical) != record.planDigest { corrupted = true }
+                }
             } catch {
                 corrupted = true
             }
@@ -1889,7 +1931,6 @@ nonisolated final class Phase1OperationJournal {
                           == rootURL.standardizedFileURL.appendingPathComponent("local")
                   }() else { return false }
         }
-        if plan.compensationPaths != nil, (try? plan.computedDigest()) != first.planDigest { return false }
         guard records.enumerated().allSatisfy({ index, record in
             record.sequence == index + 1 && record.kind == first.kind && record.planDigest == first.planDigest
                 && (index == 0 || record.event != .plan)

@@ -3,9 +3,41 @@ import Testing
 @testable import SkillsHub
 
 struct Phase1OperationTests {
-    @Test func githubSourceImportPublishesCompleteRepositoryAndLeavesEverySkillDisabled() async throws {
-        let fixture = try Phase1Fixture()
+    @Test func recordedJSONPreservesEncoderOrderingAndScalarTypes() throws {
+        struct Sample: Encodable {
+            let initializationFacts = [Int64.min, 0, 1]
+            let initialLocalState = ["日本語": true, "a/b": false]
+            let initialMetadata = [UInt64.max]
+            let fractions = [0.5, -1.25, 1e-20]
+            let absent: String? = nil
+            let text = "中文 / 日本語\n\"quoted\""
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let expected = try encoder.encode(Sample())
+        let object = try JSONSerialization.jsonObject(with: expected)
+        #expect(try encoder.encode(Phase1RecordedJSON(value: object)) == expected)
+    }
+
+    @Test(arguments: [false, true])
+    func githubSourceImportPublishesCompleteRepositoryAndLeavesEverySkillDisabled(legacyJournal: Bool) async throws {
+        let fixture = try RootInitializationFixture()
         defer { fixture.remove() }
+        let initializationPlan = try fixture.plan()
+        let initialized = await fixture.coordinator.commit(
+            plan: initializationPlan,
+            confirmation: fixture.planner.confirmation(for: initializationPlan)
+        )
+        try #require(initialized.succeeded)
+        let originalJournal = try Data(contentsOf: fixture.journal)
+        let retainedJournal = legacyJournal ? try historicalInitializationJournal(originalJournal) : originalJournal
+        try retainedJournal.write(to: fixture.journal)
+        let journal = Phase1OperationJournal(rootURL: fixture.root)
+        let recoveredInitialization = try #require(journal.recoverTasks().first)
+        #expect(recoveredInitialization.phase == .completed)
+        #expect(recoveredInitialization.operationPlan?.id == initializationPlan.id)
+        try journal.verifyCompletedPlan(try #require(recoveredInitialization.operationPlan))
+        #expect(try Data(contentsOf: fixture.journal) == retainedJournal)
         let stagedDirectory = fixture.root.deletingLastPathComponent()
             .appendingPathComponent("github-stage", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -62,7 +94,7 @@ struct Phase1OperationTests {
         let plan = try fixture.planner.githubSourceImportPlan(
             result: result,
             rootURL: fixture.root,
-            snapshot: fixture.initialSnapshot()
+            snapshot: fixture.store.loadCurrentSnapshot(from: fixture.root)
         )
 
         let committed = await fixture.coordinator.commit(
@@ -84,6 +116,7 @@ struct Phase1OperationTests {
         #expect(snapshot.metadata.installedSkills.map(\.sourceKind) == [.githubRepository, .githubRepository])
         #expect(snapshot.metadata.enablementIntents.isEmpty)
         #expect(try ContentManifestBuilder().build(for: target, authorizedRoot: target).digest == manifest.digest)
+        #expect(try Data(contentsOf: fixture.journal).starts(with: retainedJournal))
 
         let recovered = try #require(
             Phase1OperationJournal(rootURL: fixture.root).recoverTasks().first { $0.id == plan.id }
@@ -93,6 +126,25 @@ struct Phase1OperationTests {
         #expect(recovered.recoveryEvidence?.components.first { $0.kind == "metadata" }?.state == .completed)
         #expect(recovered.recoveryEvidence?.components.first { $0.kind == "success-baseline" }?.state == .completed)
         #expect(recovered.recoveryEvidence?.components.first { $0.kind == "relationships" }?.state == .completed)
+    }
+
+    @Test(arguments: ["retired-field", "current-field"])
+    func historicalJournalTamperingStillBlocksWrites(tampering: String) async throws {
+        let fixture = try RootInitializationFixture()
+        defer { fixture.remove() }
+        let plan = try fixture.plan()
+        let initialized = await fixture.coordinator.commit(plan: plan, confirmation: fixture.planner.confirmation(for: plan))
+        try #require(initialized.succeeded)
+        let bytes = try historicalInitializationJournal(Data(contentsOf: fixture.journal), tampering: tampering)
+        try bytes.write(to: fixture.journal)
+        let journal = Phase1OperationJournal(rootURL: fixture.root)
+        #expect(throws: Phase1OperationError.journalUnavailable) {
+            try journal.containsSubmission(planID: UUID(), confirmationID: UUID())
+        }
+        let recovered = try #require(journal.recoverTasks().first)
+        #expect(recovered.phase == .needsAttention)
+        #expect(recovered.operationPlan?.id == plan.id)
+        #expect(try Data(contentsOf: fixture.journal) == bytes)
     }
 
     @Test func localSourceImportCopiesTheCompleteTreeAndLeavesEverySkillDisabled() async throws {
@@ -1237,4 +1289,30 @@ private func phase1SkillText(name: String, description: String) -> String {
     ---
     Body.
     """
+}
+
+private func historicalInitializationJournal(_ data: Data, tampering: String? = nil) throws -> Data {
+    var records = try data.split(separator: 0x0A).map {
+        try #require(JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])
+    }
+    var plan = try #require(records[0]["operationPlan"] as? [String: Any])
+    var state = try #require(plan["initialLocalState"] as? [String: Any])
+    state["managedRelationEvidence"] = [] as [String]
+    plan["initialLocalState"] = state
+    plan["planDigest"] = ""
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let digest = SHA256Digest.hex(try encoder.encode(Phase1RecordedJSON(value: plan)))
+    plan["planDigest"] = digest
+    if tampering == "retired-field" {
+        state["managedRelationEvidence"] = ["changed"]
+        plan["initialLocalState"] = state
+    } else if tampering == "current-field" {
+        plan["expectedGeneration"] = 42
+    }
+    records[0]["operationPlan"] = plan
+    for index in records.indices { records[index]["planDigest"] = digest }
+    return try records.reduce(into: Data()) {
+        $0 += try JSONSerialization.data(withJSONObject: $1, options: [.sortedKeys]) + Data([0x0A])
+    }
 }
