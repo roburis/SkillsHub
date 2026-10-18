@@ -4,6 +4,176 @@ import Testing
 @testable import SkillsHub
 
 struct SourceAndLifecycleServicesTests {
+    #if DEBUG
+    @MainActor
+    @Test func githubUpdateCheckOnlyResolvesIdentityAndRecordedBranch() async throws {
+        let fixture = try sourceUpdateFixture()
+        defer { fixture.remove() }
+        var metadata = try fixture.store.loadCurrentSnapshot(from: fixture.root).metadata
+        metadata.sources[0].kind = .githubRepository
+        metadata.sources[0].urlString = "https://github.com/fixture-owner/lifecycle"
+        metadata.sources[0].githubRepositoryID = 42
+        metadata.sources[0].ref = "main"
+        metadata.sources[0].resolvedVersion = String(repeating: "1", count: 40)
+        _ = try fixture.store.commit(at: fixture.root, expected: fixture.store.loadCurrentSnapshot(from: fixture.root)) { $0 = metadata }
+        let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        let http = MockHTTPDataClient()
+        controller.githubHTTPDataClientOverride = http
+        // A missing local copy must not turn a remote revision check into a file scan.
+        try FileManager.default.removeItem(at: fixture.managed)
+        let before = try Data(contentsOf: fixture.store.rootLayout(for: fixture.root).skillshubMetadataFile)
+        for revision in [String(repeating: "1", count: 40), String(repeating: "2", count: 40)] {
+            http.enqueue(data: Data(#"{"id":42,"name":"lifecycle","owner":{"login":"fixture-owner"},"default_branch":"release"}"#.utf8), statusCode: 200)
+            http.enqueue(data: Data("{\"ref\":\"refs/heads/main\",\"object\":{\"type\":\"commit\",\"sha\":\"\(revision)\"}}".utf8), statusCode: 200)
+            await controller.checkSourceUpdates([fixture.sourceID, fixture.sourceID])
+            #expect(controller.sourceUpdateChecks[fixture.sourceID] == (revision.first == "2"))
+        }
+        #expect(http.requests.map { $0.url!.path } == [
+            "/repos/fixture-owner/lifecycle", "/repos/fixture-owner/lifecycle/git/ref/heads/main",
+            "/repos/fixture-owner/lifecycle", "/repos/fixture-owner/lifecycle/git/ref/heads/main"
+        ])
+        #expect(controller.sourceUpdateReferences[fixture.sourceID]?.commitSHA == String(repeating: "2", count: 40))
+        let checkedAt = try #require(controller.sourceUpdateCheckDates[fixture.sourceID])
+        http.enqueue(data: Data(), statusCode: 403, headers: ["X-RateLimit-Remaining": "0"])
+        await controller.checkSourceUpdates([fixture.sourceID, UUID()])
+        #expect(http.requests.count == 5)
+        #expect(controller.sourceUpdateChecks[fixture.sourceID] == true)
+        #expect(controller.sourceUpdateCheckDates[fixture.sourceID] == checkedAt)
+        #expect(controller.sourceUpdateFailures[fixture.sourceID] != nil)
+        #expect(controller.sourceUpdatePreview == nil)
+        #expect(try Data(contentsOf: fixture.store.rootLayout(for: fixture.root).skillshubMetadataFile) == before)
+        #expect(!FileManager.default.fileExists(atPath: fixture.appSupport.appendingPathComponent("GitHubStaging").path))
+    }
+
+    @MainActor
+    @Test(arguments: ["cancel", "source", "root"])
+    func githubCheckRejectsCancelledOrReplacedIdentity(_ event: String) async throws {
+        let controller = SkillsHubLibraryController()
+        controller.rootURL = URL(fileURLWithPath: "/isolated/root")
+        let source = SkillSource(kind: .githubRepository, name: "fixture-owner/lifecycle",
+            urlString: "https://github.com/fixture-owner/lifecycle", githubRepositoryID: 42,
+            ref: "main", resolvedVersion: String(repeating: "1", count: 40))
+        controller.sources = [source]
+        let http = MockHTTPDataClient()
+        http.enqueue(data: Data(#"{"id":42,"name":"lifecycle","owner":{"login":"fixture-owner"},"default_branch":"main"}"#.utf8), statusCode: 200)
+        http.enqueue(data: Data(#"{"ref":"refs/heads/main","object":{"type":"commit","sha":"2222222222222222222222222222222222222222"}}"#.utf8), statusCode: 200)
+        http.beforeResponse = { [weak controller] in
+            guard let controller else { return }
+            switch event {
+            case "cancel": controller.sourceUpdateCheckTask?.task.cancel()
+            case "source": controller.sources[0].ref = "release"
+            default: controller.rootURL = nil
+            }
+        }
+        controller.githubHTTPDataClientOverride = http
+        await controller.checkSourceUpdates([source.id])
+        #expect(controller.sourceUpdateChecks[source.id] == nil)
+        #expect(controller.sourceUpdateReferences[source.id] == nil)
+        #expect(controller.sourceUpdateFailures[source.id] == nil)
+        #expect(controller.checkingSourceIDs.isEmpty)
+    }
+
+    @MainActor
+    @Test func updateQueueStopsRequestingAfterGitHubRateLimit() async throws {
+        let fixture = try sourceUpdateFixture()
+        defer { fixture.remove() }
+        let snapshot = try fixture.store.loadCurrentSnapshot(from: fixture.root)
+        _ = try fixture.store.commit(at: fixture.root, expected: snapshot) {
+            $0.sources[0].kind = .githubRepository
+            $0.sources[0].urlString = "https://github.com/fixture-owner/lifecycle"
+            $0.sources[0].githubRepositoryID = 42
+            $0.sources[0].ref = "main"
+            $0.sources[0].resolvedVersion = String(repeating: "1", count: 40)
+        }
+        let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        controller.language = .english
+        let http = MockHTTPDataClient()
+        http.enqueue(data: Data(), statusCode: 403, headers: ["X-RateLimit-Remaining": "0"])
+        controller.githubHTTPDataClientOverride = http
+        await controller.updateSources([fixture.sourceID, UUID()])
+        #expect(http.requests.count == 1)
+        #expect(controller.sourceUpdateBatch == nil)
+        #expect(controller.localized(try #require(controller.updateCheckSummary)) == "Source updates: 0 updated, 0 unchanged, 1 failures, 1 skipped.")
+        #expect(try ContentManifestBuilder().build(for: fixture.managed, authorizedRoot: fixture.managed).digest == fixture.baseline.digest)
+    }
+    #endif
+
+    @MainActor
+    @Test func updateQueueStopsWhenItsRootSessionIsReplaced() async throws {
+        let fixture = try sourceUpdateFixture()
+        defer { fixture.remove() }
+        let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        controller.sourceUpdateBatch = SourceUpdateBatch(sessionID: UUID(), remainingSourceIDs: [fixture.sourceID])
+        await controller.resumeSourceUpdates()
+        #expect(controller.sourceUpdateBatch == nil)
+        #expect(controller.sourceUpdatePreview == nil)
+        #expect(try ContentManifestBuilder().build(for: fixture.managed, authorizedRoot: fixture.managed).digest == fixture.baseline.digest)
+    }
+
+    @MainActor
+    @Test func updateQueueAppliesSafeSourceOnceAndContinuesAfterFailure() async throws {
+        let fixture = try sourceUpdateFixture()
+        defer { fixture.remove() }
+        let service = SourceUpdateService(trashItem: { retained in
+            let destination = fixture.trash.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.moveItem(at: retained, to: destination)
+            return destination
+        })
+        let controller = SkillsHubLibraryController(sourceUpdateService: service, appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        controller.language = .english
+        await controller.updateSources([UUID(), fixture.sourceID, fixture.sourceID])
+        #expect(controller.sourceUpdatePreview == nil)
+        #expect(controller.sourceUpdateBatch == nil)
+        #expect(try String(contentsOf: fixture.managed.appendingPathComponent("SKILL.md"), encoding: .utf8).contains("Upstream"))
+        let updated = try fixture.store.loadCurrentSnapshot(from: fixture.root).metadata.sources[0]
+        #expect(updated.baselineManifest?.digest != fixture.baseline.digest)
+        #expect(controller.localized(try #require(controller.updateCheckSummary)) == "Source updates: 1 updated, 0 unchanged, 1 failures, 0 skipped.")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.trash.path).count == 1)
+    }
+
+    @MainActor
+    @Test(arguments: ["local-change", "deletion", "unknown-baseline"])
+    func updateQueueRequiresConfirmationBeforeRiskyReplacement(_ risk: String) async throws {
+        let fixture = try sourceUpdateFixture()
+        defer { fixture.remove() }
+        if risk == "local-change" { try writeSkill(fixture.managed, name: "Stable", description: "Local edit") }
+        if risk == "deletion" {
+            try Data("preserve until confirmed".utf8).write(to: fixture.managed.appendingPathComponent("removed.txt"))
+            var metadata = try fixture.store.loadCurrentSnapshot(from: fixture.root).metadata
+            metadata.sources[0].baselineManifest = try ContentManifestBuilder().build(for: fixture.managed, authorizedRoot: fixture.managed)
+            _ = try fixture.store.commit(at: fixture.root, expected: fixture.store.loadCurrentSnapshot(from: fixture.root)) { $0 = metadata }
+        }
+        if risk == "unknown-baseline" {
+            var metadata = try fixture.store.loadCurrentSnapshot(from: fixture.root).metadata
+            metadata.sources[0].baselineManifest = nil
+            _ = try fixture.store.commit(at: fixture.root, expected: fixture.store.loadCurrentSnapshot(from: fixture.root)) { $0 = metadata }
+        }
+        let controller = SkillsHubLibraryController(appSupportURL: fixture.appSupport,
+            securityScopedAccessProvider: SecurityScopedAccessProvider(adapter: RecordingSecurityScopedResourceAccessAdapter()))
+        try await connectInitializedTestRoot(controller, at: fixture.root)
+        controller.language = .english
+        let before = try ContentManifestBuilder().build(for: fixture.managed, authorizedRoot: fixture.managed)
+        await controller.updateSources([fixture.sourceID, UUID()])
+        let preview = try #require(controller.sourceUpdatePreview)
+        #expect(preview.requiresUpdateConfirmation)
+        #expect(controller.sourceUpdateBatch?.remainingSourceIDs.count == 1)
+        #expect(try ContentManifestBuilder().build(for: fixture.managed, authorizedRoot: fixture.managed).digest == before.digest)
+        controller.finishSourceUpdateBatchItem(nil)
+        controller.cancelSourceUpdatePreview(preview)
+        await controller.resumeSourceUpdates()
+        #expect(controller.sourceUpdateBatch == nil)
+        #expect(controller.localized(try #require(controller.updateCheckSummary)) == "Source updates: 0 updated, 0 unchanged, 1 failures, 1 skipped.")
+        #expect(!FileManager.default.fileExists(atPath: try #require(preview.preparedPath)))
+    }
+
     @MainActor
     @Test func sourceRemovalRecoveryRechecksFactsWithoutReplaying() async throws {
         let fixture = try sourceRemovalFixture()
@@ -2009,6 +2179,7 @@ private final class MockHTTPDataClient: HTTPDataClient {
     }
 
     var requests: [URLRequest] = []
+    var beforeResponse: (() -> Void)?
     private var responses: [Response] = []
 
     func enqueue(data: Data, statusCode: Int, headers: [String: String] = [:]) {
@@ -2017,6 +2188,7 @@ private final class MockHTTPDataClient: HTTPDataClient {
 
     func data(for request: URLRequest, maximumByteCount: Int) async throws -> (Data, HTTPURLResponse) {
         requests.append(request)
+        beforeResponse?()
         let response = responses.removeFirst()
         guard response.data.count <= maximumByteCount else {
             throw GitHubAPIClientFailure.repositoryTooLarge

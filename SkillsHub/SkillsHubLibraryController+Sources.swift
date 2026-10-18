@@ -226,6 +226,18 @@ extension SkillsHubLibraryController {
     }
 
     func prepareSourceUpdate(sourceID: UUID, presentPreview: Bool = true) async throws {
+        let preview = try await makeSourceUpdatePreview(sourceID: sourceID)
+        if presentPreview {
+            sourceUpdatePreview = preview
+            setStatus(preview.hasIncomingChanges
+                ? "Prepared a complete source update preview. Managed content is unchanged."
+                : "No source update was found. Managed content and its success baseline are unchanged.")
+        } else {
+            discardSourceUpdatePreview(preview)
+        }
+    }
+
+    private func makeSourceUpdatePreview(sourceID: UUID) async throws -> SourceUpdatePreview {
         let sessionID = rootSessionLease?.id
         guard let snapshot = rootSnapshot,
               let source = snapshot.metadata.sources.first(where: { $0.id == sourceID }),
@@ -310,7 +322,8 @@ extension SkillsHubLibraryController {
                 rawURL: rawURL,
                 trackedBranch: source.ref,
                 repositoryID: source.githubRepositoryID,
-                sourceID: source.id
+                sourceID: source.id,
+                resolvedRepository: sourceUpdateReferences[source.id]
             )
             guard result.issue == nil, let staged = result.stagedRepository else {
                 if let issue = result.issue { throw issue }
@@ -366,43 +379,159 @@ extension SkillsHubLibraryController {
         }
         sourceUpdateChecks[sourceID] = preview.hasIncomingChanges
         sourceUpdateCheckDates[sourceID] = Date()
-        if !presentPreview {
-            discardSourceUpdatePreview(preview)
-            return
-        }
         retainedForPreview = true
-        sourceUpdatePreview = preview
-        setStatus(preview.hasIncomingChanges
-            ? "Prepared a complete source update preview. Managed content is unchanged."
-            : "No source update was found. Managed content and its success baseline are unchanged.")
         errorMessage = nil
+        return preview
     }
 
     /// Checks the captured page scope; never presents a confirmation or applies content.
     func checkSourceUpdates(_ sourceIDs: [UUID]) async {
-        guard checkingSourceIDs.isEmpty, sourceUpdatePreview == nil, !sourceIDs.isEmpty else { return }
-        checkingSourceIDs = Set(sourceIDs)
-        defer { checkingSourceIDs.removeAll() }
+        guard checkingSourceIDs.isEmpty, !isUpdatingSources, sourceUpdatePreview == nil, !sourceIDs.isEmpty else { return }
+        let ids = sourceIDs.reduce(into: [UUID]()) { if !$0.contains($1) { $0.append($1) } }
+        checkingSourceIDs = Set(ids)
         updateCheckSummary = "Checking updates…"
+        let id = UUID()
         let checkedRoot = rootURL
         let checkedSession = rootSessionLease?.id
+        let task = Task { await performSourceUpdateChecks(ids, checkedRoot: checkedRoot, checkedSession: checkedSession) }
+        sourceUpdateCheckTask = (id, task)
+        let deadline = Task {
+            do { try await Task.sleep(for: .seconds(60)); task.cancel() }
+            catch {}
+        }
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        deadline.cancel()
+        if sourceUpdateCheckTask?.id == id {
+            sourceUpdateCheckTask = nil
+            checkingSourceIDs.removeAll()
+        }
+    }
+
+    private func performSourceUpdateChecks(_ sourceIDs: [UUID], checkedRoot: URL?, checkedSession: UUID?) async {
+        let apiClient = gitHubAPIClient(resourceTimeout: 15, requestTimeout: 10)
         var updates = 0
         var failures = 0
+        var completed = 0
         for id in sourceIDs {
-            guard rootURL == checkedRoot, rootSessionLease?.id == checkedSession else { return }
+            guard !Task.isCancelled, rootURL == checkedRoot, rootSessionLease?.id == checkedSession else { break }
             do {
-                try await prepareSourceUpdate(sourceID: id, presentPreview: false)
+                if let source = sources.first(where: { $0.id == id }), source.kind == .githubRepository {
+                    guard let rawURL = source.urlString, let revision = source.resolvedVersion,
+                          source.githubRepositoryID != nil, source.ref != nil else {
+                        throw SourceUpdateError.invalidSource
+                    }
+                    var identity = try GitHubRepositoryParser().parse(rawURL)
+                    identity.repositoryID = source.githubRepositoryID
+                    let reference = try await apiClient.resolve(identity, trackedBranch: source.ref)
+                    try Task.checkCancellation()
+                    guard rootURL == checkedRoot, rootSessionLease?.id == checkedSession else { return }
+                    guard let current = sources.first(where: { $0.id == id }),
+                          current.urlString == source.urlString, current.githubRepositoryID == source.githubRepositoryID,
+                          current.ref == source.ref, current.resolvedVersion == source.resolvedVersion,
+                          current.localPath == source.localPath else { continue }
+                    sourceUpdateReferences[id] = reference
+                    sourceUpdateChecks[id] = reference.commitSHA.caseInsensitiveCompare(revision) != .orderedSame
+                    sourceUpdateCheckDates[id] = Date()
+                    sourceUpdateFailures[id] = nil
+                } else {
+                    try await prepareSourceUpdate(sourceID: id, presentPreview: false)
+                }
                 if sourceUpdateChecks[id] == true { updates += 1 }
             } catch {
                 guard rootURL == checkedRoot, rootSessionLease?.id == checkedSession else { return }
+                if Task.isCancelled { break }
                 failures += 1
                 recordSourceUpdateFailure(sourceID: id, error: error)
+                if case GitHubAPIClientFailure.rateLimited = error { completed += 1; break }
             }
+            completed += 1
         }
+        guard rootURL == checkedRoot, rootSessionLease?.id == checkedSession else { return }
         updateCheckSummary = LocalizedMessage(
-            "Checked %@ sources: %@ updates, %@ failures.",
-            arguments: [String(sourceIDs.count), String(updates), String(failures)]
+            completed == sourceIDs.count ? "Checked %@ sources: %@ updates, %@ failures."
+                : "Checked %@ sources: %@ updates, %@ failures. Remaining sources were not checked.",
+            arguments: [String(completed), String(updates), String(failures)]
         )
+    }
+
+    func updateSources(_ sourceIDs: [UUID]) async {
+        guard !isUpdatingSources, checkingSourceIDs.isEmpty, sourceUpdatePreview == nil, !sourceIDs.isEmpty else { return }
+        let ids = sourceIDs.reduce(into: [UUID]()) { if !$0.contains($1) { $0.append($1) } }
+        sourceUpdateBatch = SourceUpdateBatch(sessionID: rootSessionLease?.id, remainingSourceIDs: ids)
+        await resumeSourceUpdates()
+    }
+
+    func resumeSourceUpdates() async {
+        guard let batch = sourceUpdateBatch, !batch.isRunning, sourceUpdatePreview == nil else { return }
+        guard batch.sessionID == rootSessionLease?.id else {
+            sourceUpdateBatch = nil
+            updateCheckSummary = "Source updates stopped because the management directory changed."
+            return
+        }
+        sourceUpdateBatch?.isRunning = true
+        defer { if sourceUpdateBatch?.id == batch.id { sourceUpdateBatch?.isRunning = false } }
+        while sourceUpdateBatch?.id == batch.id,
+              rootSessionLease?.id == batch.sessionID,
+              let sourceID = sourceUpdateBatch?.remainingSourceIDs.first {
+            sourceUpdateBatch?.remainingSourceIDs.removeFirst()
+            sourceUpdateBatch?.currentSourceID = sourceID
+            updateCheckSummary = LocalizedMessage("Updating source %@…", arguments: [sources.first { $0.id == sourceID }?.name ?? sourceID.uuidString])
+            do {
+                let preview = try await makeSourceUpdatePreview(sourceID: sourceID)
+                guard sourceUpdateBatch?.id == batch.id, rootSessionLease?.id == batch.sessionID else {
+                    discardSourceUpdatePreview(preview)
+                    if sourceUpdateBatch?.id == batch.id {
+                        sourceUpdateBatch = nil
+                        updateCheckSummary = "Source updates stopped because the management directory changed."
+                    }
+                    return
+                }
+                if !preview.hasIncomingChanges {
+                    discardSourceUpdatePreview(preview)
+                    sourceUpdateBatch?.unchanged += 1
+                } else if preview.requiresUpdateConfirmation {
+                    sourceUpdatePreview = preview
+                    return
+                } else {
+                    defer { discardSourceUpdatePreview(preview) }
+                    let result = try await applyPreparedSourceUpdate(preview)
+                    guard sourceUpdateBatch?.id == batch.id else { return }
+                    finishSourceUpdateBatchItem(result)
+                }
+            } catch {
+                guard sourceUpdateBatch?.id == batch.id else { return }
+                sourceUpdateBatch?.failed += 1
+                recordSourceUpdateFailure(sourceID: sourceID, error: error)
+                if error as? GitHubSourceIssue == .rateLimited {
+                    let remaining = sourceUpdateBatch?.remainingSourceIDs.count ?? 0
+                    sourceUpdateBatch?.skipped += remaining
+                    sourceUpdateBatch?.remainingSourceIDs.removeAll()
+                }
+            }
+            sourceUpdateBatch?.currentSourceID = nil
+        }
+        guard let finished = sourceUpdateBatch, finished.id == batch.id else { return }
+        updateCheckSummary = LocalizedMessage(
+            "Source updates: %@ updated, %@ unchanged, %@ failures, %@ skipped.",
+            arguments: [String(finished.updated), String(finished.unchanged), String(finished.failed), String(finished.skipped)]
+        )
+        sourceUpdateBatch = nil
+        sourceUpdateResult = nil
+    }
+
+    func finishSourceUpdateBatchItem(_ result: SourceUpdateResult?) {
+        guard sourceUpdateBatch?.currentSourceID != nil else { return }
+        if let result {
+            guard result.sourceID == sourceUpdateBatch?.currentSourceID else { return }
+            if result.updateSucceeded { sourceUpdateBatch?.updated += 1 }
+            else {
+                sourceUpdateBatch?.failed += 1
+                sourceUpdateFailures[result.sourceID] = result.detail
+            }
+        } else {
+            sourceUpdateBatch?.skipped += 1
+        }
+        sourceUpdateBatch?.currentSourceID = nil
     }
 
     func cancelSourceUpdatePreview(_ preview: SourceUpdatePreview) {
@@ -440,6 +569,7 @@ extension SkillsHubLibraryController {
         sourceUpdateChecks[sourceID] = nil
         sourceUpdateCheckDates[sourceID] = nil
         sourceUpdateFailures[sourceID] = nil
+        sourceUpdateReferences[sourceID] = nil
     }
 
     func invalidateSourceUpdatePreviews() {
@@ -450,7 +580,12 @@ extension SkillsHubLibraryController {
     }
 
     func applySourceUpdate(using preview: SourceUpdatePreview) async throws -> SourceUpdateResult {
-        guard sourceUpdatePreview == preview, preview.hasIncomingChanges,
+        guard sourceUpdatePreview == preview else { throw SourceUpdateError.confirmationChanged }
+        return try await applyPreparedSourceUpdate(preview)
+    }
+
+    private func applyPreparedSourceUpdate(_ preview: SourceUpdatePreview) async throws -> SourceUpdateResult {
+        guard preview.hasIncomingChanges,
               let rootURL else { throw SourceUpdateError.confirmationChanged }
         try validateSourceUpdateConfirmation(preview, rootURL: rootURL)
         let (exchangeRecord, initialRecord) = try await sourceUpdateService.prepareExchange(

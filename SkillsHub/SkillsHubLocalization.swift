@@ -76,6 +76,12 @@ nonisolated enum LocalizationKey: String, CaseIterable {
 nonisolated struct SkillsHubLocalization {
     private static let uiStrings: [AppLanguage: [String: String]] = [
         .chinese: [
+            "Update All": "更新全部",
+            "Source updates stopped because the management directory changed.": "管理目录连接已变化，已停止后续来源更新。",
+            "Update all GitHub sources with available updates": "更新全部已发现有更新的 GitHub 仓库，不受搜索筛选影响",
+            "Updating source %@…": "正在更新来源 %@…",
+            "Source updates: %@ updated, %@ unchanged, %@ failures, %@ skipped.": "来源更新：%@ 个已更新，%@ 个无内容变化，%@ 个失败，%@ 个已跳过。",
+            "Checked %@ sources: %@ updates, %@ failures. Remaining sources were not checked.": "已检查 %@ 个来源：%@ 个有更新，%@ 个失败。其余来源尚未检查。",
             "Authorize directory": "授权目录",
             "Authorize directory…": "授权目录…",
             "Directory authorization required": "目录需要授权",
@@ -623,6 +629,12 @@ nonisolated struct SkillsHubLocalization {
             "The last re-check failed. Managed facts are unknown until the next successful re-check.": "上次重检失败。在下次成功重检前，受管事实状态未知。"
         ],
         .japanese: [
+            "Update All": "すべて更新",
+            "Source updates stopped because the management directory changed.": "管理ディレクトリへの接続が変わったため、残りのソース更新を停止しました。",
+            "Update all GitHub sources with available updates": "検索条件に関係なく、更新があるすべての GitHub リポジトリを更新",
+            "Updating source %@…": "ソース %@ を更新中…",
+            "Source updates: %@ updated, %@ unchanged, %@ failures, %@ skipped.": "ソース更新：更新 %@ 件、内容変更なし %@ 件、失敗 %@ 件、スキップ %@ 件。",
+            "Checked %@ sources: %@ updates, %@ failures. Remaining sources were not checked.": "%@ 件のソースを確認：更新 %@ 件、失敗 %@ 件。残りのソースは未確認です。",
             "Authorize directory": "フォルダを許可",
             "Authorize directory…": "フォルダを許可…",
             "Directory authorization required": "フォルダへの許可が必要です",

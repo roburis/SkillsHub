@@ -618,6 +618,28 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testGitHubUpdateToolbarFitsNarrowAndWideWindows() throws {
+        let fixture = try makeFixture()
+        let app = try launch(fixture: fixture, windowWidth: 1040)
+        let window = app.windows.firstMatch
+        selectNavigation("github-sources", in: app)
+        for width in [1040, 1200] {
+            if width == 1200 {
+                let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
+                corner.click(forDuration: 0.1, thenDragTo: corner.withOffset(CGVector(dx: 160, dy: 0)))
+            }
+            XCTAssertEqual(window.frame.width, CGFloat(width), accuracy: 2)
+            _ = assertToolbar(page: "github-sources", title: "GitHub Sources",
+                              order: ["add-github-source", "check-all-source-updates", "update-all-sources", "source-search"], in: app)
+            XCTAssertFalse(app.buttons["update-all-sources"].isEnabled)
+            let shot = XCTAttachment(screenshot: window.screenshot())
+            shot.name = "GitHub update toolbar \(width) points"
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
+    }
+
+    @MainActor
     func testToolbarKeepsPageOrderOnBothSidesOfNineHundredPoints() throws {
         let fixture = try makeFixture()
         let app = try launch(fixture: fixture, windowWidth: 1040)
@@ -1644,6 +1666,31 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
+    func testSkillUpdateIconUpdatesEntireSourceWithoutPreview() throws {
+        let fixture = try makeFixture()
+        try Data("---\nname: review-fixture\ndescription: Updated upstream.\n---\nUpdated.\n".utf8).write(
+            to: fixture.source.appending(path: "review-fixture/SKILL.md"), options: .atomic)
+        let externalBefore = try treeSnapshot(of: fixture.source)
+        let app = try launch(fixture: fixture, additionalArguments: ["--skillshub-ui-source-update-fixture"])
+        selectNavigation("local-sources", in: app)
+        app.descendants(matching: .any)[Phase1UITestFixture.sourceRowIdentifier].click()
+        app.buttons["check-source-update"].click()
+        let updateID = "update-source-11111111-1111-1111-1111-111111111111"
+        XCTAssertTrue(app.buttons[updateID].firstMatch.waitForExistence(timeout: 5))
+        selectNavigation("all-skills", in: app)
+        app.buttons[updateID].firstMatch.click()
+        XCTAssertTrue(app.staticTexts["Source updates: 1 updated, 0 unchanged, 0 failures, 0 skipped."].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["source-update-preview"].exists)
+        let managed = fixture.root.appending(path: "local/review-fixture/SKILL.md")
+        XCTAssertTrue(try String(contentsOf: managed, encoding: .utf8).contains("Updated upstream"))
+        XCTAssertEqual(try treeSnapshot(of: fixture.source), externalBefore)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Whole source update from Skill icon"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    @MainActor
     func testConfirmedSourceUpdateShowsComponentResultsAndRecordsTrashDestination() throws {
         let fixture = try makeFixture()
         try Data("---\nname: review-fixture\ndescription: Updated upstream.\n---\nUpdated.\n".utf8).write(
@@ -2514,6 +2561,46 @@ final class SkillsHubUITests: XCTestCase {
         screenshot.name = "GitHub import after legacy initialization journal"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+
+        // Simulate a previously imported revision with identical content in the isolated Root.
+        app.terminate()
+        var metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture.metadata)) as? [String: Any])
+        var sources = try XCTUnwrap(metadata["sources"] as? [[String: Any]])
+        let sourceIndex = try XCTUnwrap(sources.firstIndex { ($0["urlString"] as? String) == "https://github.com/fixture-owner/lifecycle" })
+        sources[sourceIndex]["resolvedVersion"] = String(repeating: "0", count: 40)
+        metadata["sources"] = sources
+        metadata["generation"] = (metadata["generation"] as? Int ?? 0) + 1
+        try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]).write(to: fixture.metadata, options: .atomic)
+        let trace = fixture.runRoot.appending(path: "github-requests.jsonl")
+        try Data().write(to: trace, options: .atomic)
+        let managedBefore = try treeSnapshot(of: repository)
+        app = try launch(fixture: fixture, empty: true, additionalArguments: ["--skillshub-ui-github-import-fixture"])
+        openConnectRootPanel(in: app)
+        chooseDirectory(fixture.root, in: app)
+        selectNavigation("github-sources", in: app)
+        app.buttons["check-all-source-updates"].click()
+        XCTAssertTrue(app.staticTexts["Checked 1 sources: 1 updates, 0 failures."].waitForExistence(timeout: 8))
+        let search = app.searchFields["source-search"]
+        search.click()
+        search.typeText("no-matching-source")
+        XCTAssertTrue(app.buttons["update-all-sources"].isEnabled)
+        app.buttons["update-all-sources"].click()
+        XCTAssertTrue(app.staticTexts["Source updates: 0 updated, 1 unchanged, 0 failures, 0 skipped."].waitForExistence(timeout: 10))
+        let updateRequests = try String(contentsOf: trace, encoding: .utf8).split(separator: "\n").map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+        XCTAssertEqual(updateRequests.compactMap { $0["path"] as? String }, [
+            "/repos/fixture-owner/lifecycle",
+            "/repos/fixture-owner/lifecycle/git/ref/heads/main",
+            "/repos/fixture-owner/lifecycle/git/trees/1111111111111111111111111111111111111111",
+            "/repos/fixture-owner/lifecycle/tarball/1111111111111111111111111111111111111111"
+        ])
+        XCTAssertFalse(app.descendants(matching: .any)["source-update-preview"].exists)
+        XCTAssertEqual(try treeSnapshot(of: repository), managedBefore)
+        let updatedScreenshot = XCTAttachment(screenshot: app.screenshot())
+        updatedScreenshot.name = "Update All ignores search and reuses the checked GitHub commit"
+        updatedScreenshot.lifetime = .keepAlways
+        add(updatedScreenshot)
     }
 
     @MainActor

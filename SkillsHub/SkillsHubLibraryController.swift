@@ -45,6 +45,9 @@ final class SkillsHubLibraryController {
                 sourceUpdateChecks.removeAll()
                 sourceUpdateCheckDates.removeAll()
                 sourceUpdateFailures.removeAll()
+                sourceUpdateReferences.removeAll()
+                sourceUpdateBatch = nil
+                sourceUpdateCheckTask?.task.cancel()
                 updateCheckSummary = nil
                 for job in agentDirectoryAuditTasks.values { job.task.cancel() }
                 agentDirectoryAuditTasks = [:]
@@ -169,6 +172,10 @@ final class SkillsHubLibraryController {
     var sourceUpdateChecks: [UUID: Bool] = [:]
     var sourceUpdateCheckDates: [UUID: Date] = [:]
     var checkingSourceIDs: Set<UUID> = []
+    @ObservationIgnored var sourceUpdateReferences: [UUID: GitHubRepositoryReference] = [:]
+    @ObservationIgnored var sourceUpdateCheckTask: (id: UUID, task: Task<Void, Never>)?
+    var sourceUpdateBatch: SourceUpdateBatch?
+    var isUpdatingSources: Bool { sourceUpdateBatch != nil }
     var updateCheckSummary: LocalizedMessage?
     var sourceUpdatePreview: SourceUpdatePreview?
     var sourceUpdateResult: SourceUpdateResult?

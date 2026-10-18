@@ -150,8 +150,10 @@ nonisolated enum GitHubAPIClientFailure: Error, Equatable {
 nonisolated final class URLSessionHTTPDataClient: HTTPDataClient {
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil, resourceTimeout: TimeInterval = 180) {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForResource = resourceTimeout
+        self.session = session ?? URLSession(configuration: configuration)
     }
 
     func data(for request: URLRequest, maximumByteCount: Int) async throws -> (Data, HTTPURLResponse) {
@@ -968,12 +970,23 @@ nonisolated final class GitHubSourceIndexer {
         rawURL: String,
         trackedBranch: String? = nil,
         repositoryID: Int64? = nil,
-        sourceID: UUID = UUID()
+        sourceID: UUID = UUID(),
+        resolvedRepository: GitHubRepositoryReference? = nil
     ) async -> GitHubIndexResult {
         do {
             var identity = try parser.parse(rawURL)
             identity.repositoryID = repositoryID
-            let repository = try await apiClient.resolve(identity, trackedBranch: trackedBranch)
+            let repository: GitHubRepositoryReference
+            if let resolvedRepository {
+                guard resolvedRepository.repositoryID == repositoryID,
+                      resolvedRepository.branch == trackedBranch,
+                      resolvedRepository.sourceName.caseInsensitiveCompare(identity.sourceName) == .orderedSame else {
+                    throw GitHubSourceIssue.repositoryChanged
+                }
+                repository = resolvedRepository
+            } else {
+                repository = try await apiClient.resolve(identity, trackedBranch: trackedBranch)
+            }
             var source = SkillSource(
                 id: sourceID,
                 kind: .githubRepository,

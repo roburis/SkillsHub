@@ -5,6 +5,23 @@ import zlib
 @testable import SkillsHub
 
 struct GitHubSourceIndexingTests {
+    @Test func updateReusesCheckedCommitWithoutResolvingBranchAgain() async throws {
+        let fixture = repositoryFixture()
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let api = MockGitHubAPIClient(treeResult: fixture.tree, archiveData: try tarGzip(fixture.archiveEntries), commitSHA: commitB)
+        let reference = GitHubRepositoryReference(repositoryID: 42, owner: "fixture-owner", repo: "lifecycle", branch: "main", commitSHA: commitA)
+        let result = await GitHubSourceIndexer(apiClient: api, stager: FileSystemGitHubSourceStager(stagingRoot: root))
+            .index(rawURL: "fixture-owner/lifecycle", trackedBranch: "main", repositoryID: 42, resolvedRepository: reference)
+        #expect(result.issue == nil)
+        #expect(result.source.resolvedVersion == commitA)
+        #expect(api.resolveCount == 0)
+        #expect(api.requestedReferences.allSatisfy { $0.commitSHA == commitA })
+        let mismatch = await GitHubSourceIndexer(apiClient: api, stager: FileSystemGitHubSourceStager(stagingRoot: root))
+            .index(rawURL: "fixture-owner/other", trackedBranch: "main", repositoryID: 42, resolvedRepository: reference)
+        #expect(mismatch.issue == .repositoryChanged)
+    }
+
     @Test func completeArchiveMatchesTreeAndUsesLocalDiscovery() async throws {
         let fixture = repositoryFixture()
         let stagingRoot = try temporaryDirectory()
@@ -350,6 +367,7 @@ nonisolated private final class MockGitHubAPIClient: GitHubAPIClient {
     var commitSHA: String
     var requestedReferences: [GitHubRepositoryReference] = []
     var requestedBlobIDs: [String] = []
+    var resolveCount = 0
 
     init(treeResult: GitHubTreeSnapshot = GitHubTreeSnapshot(entries: [], isTruncated: false), archiveData: Data = Data(), blobs: [String: Data] = [:], failure: GitHubAPIClientFailure? = nil, commitSHA: String = commitA) {
         self.treeResult = treeResult
@@ -360,6 +378,7 @@ nonisolated private final class MockGitHubAPIClient: GitHubAPIClient {
     }
 
     func resolve(_ identity: GitHubRepositoryIdentity, trackedBranch: String?) async throws -> GitHubRepositoryReference {
+        resolveCount += 1
         if let failure { throw failure }
         return GitHubRepositoryReference(repositoryID: identity.repositoryID ?? 42, owner: identity.owner, repo: identity.repo, branch: trackedBranch ?? "main", commitSHA: commitSHA)
     }

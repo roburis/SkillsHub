@@ -68,6 +68,22 @@ nonisolated struct SourceUpdatePreview: Identifiable, Equatable {
     var hasIncomingChanges: Bool { !incomingChanges.isEmpty }
     var hasLocalChanges: Bool { !localChanges.isEmpty }
     var hasUnknownBaseline: Bool { source.baselineManifest == nil }
+    var requiresUpdateConfirmation: Bool {
+        hasUnknownBaseline || hasLocalChanges || incomingChanges.contains { $0.kind == .deleted }
+            || !removedRelationPlans.isEmpty
+    }
+}
+
+struct SourceUpdateBatch {
+    let id = UUID()
+    let sessionID: UUID?
+    var remainingSourceIDs: [UUID]
+    var currentSourceID: UUID?
+    var updated = 0
+    var unchanged = 0
+    var failed = 0
+    var skipped = 0
+    var isRunning = false
 }
 
 nonisolated enum SourceUpdateError: Error, Equatable {
