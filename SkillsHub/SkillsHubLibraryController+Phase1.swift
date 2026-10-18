@@ -112,25 +112,31 @@ extension SkillsHubLibraryController {
         rawURL: String,
         trackedBranch: String? = nil,
         repositoryID: Int64? = nil,
-        sourceID: UUID = UUID()
+        sourceID: UUID = UUID(),
+        resolvedRepository: GitHubRepositoryReference? = nil
     ) async throws -> GitHubIndexResult {
         let stagingRoot = appSupportURL.appendingPathComponent("GitHubStaging", isDirectory: true)
         try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
-        let apiClient: GitHubRESTAPIClient
-        #if DEBUG
-        apiClient = GitHubRESTAPIClient(httpClient: githubHTTPDataClientOverride ?? URLSessionHTTPDataClient())
-        #else
-        apiClient = GitHubRESTAPIClient()
-        #endif
         return await GitHubSourceIndexer(
-            apiClient: apiClient,
+            apiClient: gitHubAPIClient(),
             stager: FileSystemGitHubSourceStager(stagingRoot: stagingRoot, fileManager: fileManager)
         ).index(
             rawURL: rawURL,
             trackedBranch: trackedBranch,
             repositoryID: repositoryID,
-            sourceID: sourceID
+            sourceID: sourceID,
+            resolvedRepository: resolvedRepository
         )
+    }
+
+    func gitHubAPIClient(resourceTimeout: TimeInterval = 180, requestTimeout: TimeInterval = 30) -> GitHubRESTAPIClient {
+        let httpClient: HTTPDataClient
+        #if DEBUG
+        httpClient = githubHTTPDataClientOverride ?? URLSessionHTTPDataClient(resourceTimeout: resourceTimeout)
+        #else
+        httpClient = URLSessionHTTPDataClient(resourceTimeout: resourceTimeout)
+        #endif
+        return GitHubRESTAPIClient(httpClient: httpClient, requestTimeout: requestTimeout)
     }
 
     @discardableResult

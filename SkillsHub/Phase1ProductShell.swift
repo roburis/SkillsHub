@@ -140,7 +140,11 @@ struct Phase1ProductShell: View {
                             Text(library.localized(summary)).font(.callout)
                             Spacer()
                             Button(appLocalized("Dismiss status", language: library.language)) { library.updateCheckSummary = nil }
-                                .disabled(!library.checkingSourceIDs.isEmpty)
+                                .disabled(!library.checkingSourceIDs.isEmpty || library.isUpdatingSources)
+                            if !library.checkingSourceIDs.isEmpty {
+                                Button(appLocalized("Cancel", language: library.language)) { library.sourceUpdateCheckTask?.task.cancel() }
+                                    .accessibilityIdentifier("cancel-source-update-check")
+                            }
                         }.padding(8)
                         Divider()
                     }
@@ -167,6 +171,14 @@ struct Phase1ProductShell: View {
         }
         .frame(minWidth: 1040, minHeight: 560)
         .environment(\.appLanguage, library.language)
+        .sheet(item: $library.sourceUpdatePreview, onDismiss: {
+            if library.sourceUpdatePreview == nil, library.sourceUpdateBatch?.isRunning == false {
+                library.finishSourceUpdateBatchItem(nil)
+            }
+            Task { await library.resumeSourceUpdates() }
+        }) { preview in
+            Phase1SourceUpdateSheet(library: library, preview: preview, focusPath: library.sourceUpdateFocusPath)
+        }
         .onChange(of: library.sidebarAgentDescriptors.map(\.id)) { _, ids in
             if case .agent(let id) = selection, !ids.contains(id) { selection = .allSkills }
         }
@@ -803,7 +815,7 @@ private struct Phase1SkillsWorkspace: View {
                         }
                         .help(localized("Check for Updates…"))
                         .accessibilityLabel(localized("Check for Updates…"))
-                        .disabled(!library.checkingSourceIDs.isEmpty || checkSourceIDs.isEmpty || library.sourceUpdatePreview != nil)
+                        .disabled(!library.checkingSourceIDs.isEmpty || library.isUpdatingSources || checkSourceIDs.isEmpty || library.sourceUpdatePreview != nil)
                         .accessibilityIdentifier("check-all-source-updates")
                     }
                     if returnSourceID == nil {
@@ -946,11 +958,9 @@ private struct Phase1SkillRow: View {
                         .accessibilityLabel(localized("Not connected to an Agent") + " · " + item.name)
                         .accessibilityIdentifier("skill-not-connected-\(item.id)")
                 }
-                if let sourceID = item.source?.id, library.sourceHasPreparedUpdate(sourceID) {
-                    Button(action: openSource) { Image(systemName: "arrow.up.circle") }
-                        .buttonStyle(.borderless).frame(minWidth: 24, minHeight: 24)
-                        .help(localized("Source Update Available"))
-                        .accessibilityLabel(localized("Source Update Available") + " · " + item.name)
+                if let sourceID = item.source?.id,
+                   library.sourceHasPreparedUpdate(sourceID) || library.sourceUpdateBatch?.currentSourceID == sourceID {
+                    Phase1SourceUpdateButton(library: library, sourceID: sourceID, name: item.source?.name ?? item.name)
                 }
                 if needsAttention {
                     Button(action: openProblem) { Image(systemName: "exclamationmark.triangle") }
@@ -1252,8 +1262,8 @@ private struct Phase1SourcesWorkspace: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(source.name).font(.headline).lineLimit(1).help(source.name)
-                            if library.sourceHasPreparedUpdate(source.id) {
-                                Image(systemName: "arrow.up.circle").accessibilityLabel(localized("Source Update Available"))
+                            if library.sourceHasPreparedUpdate(source.id) || library.sourceUpdateBatch?.currentSourceID == source.id {
+                                Phase1SourceUpdateButton(library: library, sourceID: source.id, name: source.name)
                             }
                             if source.registrationState != .registered {
                                 Image(systemName: "exclamationmark.triangle").accessibilityLabel(localized("Needs Attention"))
@@ -1322,8 +1332,18 @@ private struct Phase1SourcesWorkspace: View {
                     }
                     .help(localized("Check for Updates…"))
                     .accessibilityLabel(localized("Check for Updates…"))
-                    .disabled(sources.isEmpty || !library.checkingSourceIDs.isEmpty || isPreparingPreview)
+                    .disabled(sources.isEmpty || !library.checkingSourceIDs.isEmpty || library.isUpdatingSources || isPreparingPreview || library.sourceUpdatePreview != nil)
                     .accessibilityIdentifier("check-all-source-updates")
+                    Button {
+                        Task { await library.updateSources(sources.filter { library.sourceHasPreparedUpdate($0.id) }.map(\.id)) }
+                    } label: {
+                        if library.isUpdatingSources { ProgressView().controlSize(.small) }
+                        else { Label(localized("Update All"), systemImage: "arrow.up.circle") }
+                    }
+                    .help(localized("Update all GitHub sources with available updates"))
+                    .accessibilityLabel(localized("Update All"))
+                    .disabled(!sources.contains { library.sourceHasPreparedUpdate($0.id) } || !library.checkingSourceIDs.isEmpty || library.isUpdatingSources || isPreparingPreview || library.sourceUpdatePreview != nil)
+                    .accessibilityIdentifier("update-all-sources")
                 }
             }
             ToolbarItem(placement: .primaryAction) {
@@ -1335,9 +1355,6 @@ private struct Phase1SourcesWorkspace: View {
         }
         .sheet(item: $removalPlan) { plan in
             Phase1SourceRemovalSheet(library: library, plan: plan) { result in if result.succeeded { selectedSourceID = nil } }
-        }
-        .sheet(item: $library.sourceUpdatePreview) { preview in
-            Phase1SourceUpdateSheet(library: library, preview: preview, focusPath: library.sourceUpdateFocusPath)
         }
     }
 
@@ -1368,7 +1385,7 @@ private struct Phase1SourcesWorkspace: View {
                         Button(localized(library.checkingSourceIDs.contains(source.id) ? "Checking…" : "Check for Updates…")) {
                             Task { await library.checkSourceUpdates([source.id]) }
                         }
-                        .disabled(!library.checkingSourceIDs.isEmpty || isPreparingPreview)
+                        .disabled(!library.checkingSourceIDs.isEmpty || library.isUpdatingSources || isPreparingPreview)
                         .accessibilityIdentifier("check-source-update")
                         Button(localized(isPreparingPreview ? "Preparing…" : "Preview Update…")) {
                             isPreparingPreview = true
@@ -1382,7 +1399,7 @@ private struct Phase1SourcesWorkspace: View {
                                 }
                             }
                         }
-                        .disabled(!library.checkingSourceIDs.isEmpty || isPreparingPreview)
+                        .disabled(!library.checkingSourceIDs.isEmpty || library.isUpdatingSources || isPreparingPreview)
                         .accessibilityIdentifier("preview-source-update")
                     }
                     Menu(localized("More")) {
@@ -1404,6 +1421,25 @@ private struct Phase1SourcesWorkspace: View {
     }
     private func skills(in source: SkillSource) -> [Phase1SkillPresentation] {
         library.catalogItemsBySource[source.id] ?? []
+    }
+}
+
+private struct Phase1SourceUpdateButton: View {
+    @Bindable var library: SkillsHubLibraryController
+    let sourceID: UUID
+    let name: String
+
+    var body: some View {
+        Button { Task { await library.updateSources([sourceID]) } } label: {
+            if library.sourceUpdateBatch?.currentSourceID == sourceID { ProgressView().controlSize(.small) }
+            else { Image(systemName: "arrow.up.circle") }
+        }
+        .buttonStyle(.borderless)
+        .frame(minWidth: 24, minHeight: 24)
+        .help(appLocalized("Update Entire Source", language: library.language) + " · " + name)
+        .accessibilityLabel(appLocalized("Update Entire Source", language: library.language) + " · " + name)
+        .accessibilityIdentifier("update-source-\(sourceID.uuidString)")
+        .disabled(library.isUpdatingSources || !library.checkingSourceIDs.isEmpty || library.sourceUpdatePreview != nil)
     }
 }
 
@@ -1517,6 +1553,7 @@ private struct Phase1SourceUpdateSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(localized(result == nil && preview.hasIncomingChanges ? "Cancel and Keep Current Content" : "Done")) {
+                        library.finishSourceUpdateBatchItem(result)
                         if result == nil {
                             library.cancelSourceUpdatePreview(preview)
                         } else {
