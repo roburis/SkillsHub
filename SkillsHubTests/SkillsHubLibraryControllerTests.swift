@@ -1,9 +1,54 @@
+import Darwin
 import Foundation
 import Testing
 @testable import SkillsHub
 
 @MainActor
 struct SkillsHubLibraryControllerTests {
+    @Test func defaultDirectoryRefreshIgnoresHistoricalDeviceNumberAfterRestart() async throws {
+        let access = InMemoryStartupAccessStore()
+        let fixture = try await makeControllerRelationFixture(agents: [.codex], startupAccessStore: access)
+        let target = try #require(fixture.targets[.codex])
+        let home = target.deletingLastPathComponent().deletingLastPathComponent()
+        defer {
+            try? FileManager.default.removeItem(at: home)
+            try? FileManager.default.removeItem(at: fixture.root)
+        }
+        try access.saveAccess(to: target)
+        let controller = fixture.controller
+        _ = try await controller.setGlobalAgentEnablement(agentID: "codex", assetID: fixture.assetID, enabled: true)
+        await controller.waitForPendingRechecks()
+        await controller.waitForPresentationObservation()
+        let link = target.appendingPathComponent("Writer")
+        let linkIdentity = try LinkNodeIdentity.read(at: link)
+        let directoryIdentity = try LinkNodeIdentity.read(at: target)
+
+        // Change only the saved device number, simulating a remount between sessions.
+        var savedDirectory = stat()
+        let status = lstat(target.path, &savedDirectory)
+        try #require(status == 0)
+        savedDirectory.st_dev ^= 1
+        let observationIndex = try #require(controller.localState.targetObservations.firstIndex { $0.relation.agentID == "codex" })
+        controller.localState.targetObservations[observationIndex].parentIdentity = LinkNodeIdentity(savedDirectory)
+        try controller.saveLocalState()
+
+        let restarted = SkillsHubLibraryController(
+            agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation),
+            agentHomeDirectory: home, agentEnvironment: [:], startupAccessStore: access)
+        try await connectInitializedTestRoot(restarted, at: fixture.root)
+        await restarted.refreshDefaultAgentDirectories()
+
+        let skill = try #require(restarted.installedSkills.first)
+        let relation = try #require(restarted.relationPresentations(for: skill).first { $0.relation.agentID == "codex" })
+        #expect(restarted.defaultAgentDirectoryRefresh[.codex] == .manageable)
+        #expect(restarted.agentDirectoryFailure("codex") == nil)
+        #expect(restarted.agentDirectoryAuthorizationRequest == nil)
+        #expect(relation.intendedEnabled == true)
+        #expect(relation.verification == .verifiedConsistent)
+        #expect(restarted.localState.targetObservations.first { $0.relation.agentID == "codex" }?.parentIdentity == directoryIdentity)
+        #expect(try LinkNodeIdentity.read(at: link) == linkIdentity)
+    }
+
     @Test func missingClaudeDirectoryDoesNotPreventCodexVerificationAfterRestart() async throws {
         let files = FileManager.default
         let access = InMemoryStartupAccessStore()
@@ -79,8 +124,12 @@ struct SkillsHubLibraryControllerTests {
         await restarted.recheckAgentDirectory(agentID: "claudeCode")
         let replaced = try #require(restarted.agentDirectoryAuthorizationRequest)
         await restarted.completeAgentDirectoryAuthorization(requestID: replaced.id, directory: claude)
-        #expect(restarted.agentDirectoryAccessFailures["claudeCode"] == .directoryReplaced)
-        #expect(!access.restorablePaths.contains(claude.path))
+        let currentClaude = try #require(restarted.relationPresentations(for: asset).first { $0.relation.agentID == "claudeCode" })
+        #expect(restarted.agentDirectoryFailure("claudeCode") == nil)
+        #expect(access.restorablePaths.contains(claude.path))
+        #expect(currentClaude.intendedEnabled == true)
+        #expect(currentClaude.observation == .vacant)
+        #expect(currentClaude.verification == .drifted)
         #expect(restarted.relationPresentations(for: asset).first { $0.relation.agentID == "codex" }?.verification == .verifiedConsistent)
         #expect(try files.contentsOfDirectory(atPath: claude.path).isEmpty)
     }

@@ -100,7 +100,7 @@ extension SkillsHubLibraryController {
                 for descriptor in descriptors {
                     guard let target = targets[descriptor.id] else { continue }
                     let access = Result {
-                        try self.acquireAgentDirectoryLease(at: target, agentID: descriptor.id, owner: .inspection(UUID())) {
+                        try self.acquireAgentDirectoryLease(at: target, owner: .inspection(UUID())) {
                             try authorizations[target.path]?.get()
                         }
                     }
