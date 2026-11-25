@@ -36,6 +36,10 @@ nonisolated struct InstalledAgentDescriptor: Equatable, Identifiable {
         !isUnresolved
     }
 
+    var isVisibleInSkillDetail: Bool {
+        isVisibleOnCards && (isCustom || installationCategory != .absent)
+    }
+
     var isVisibleInSidebar: Bool {
         isVisibleOnCards && (isCustom || [.cli, .desktop, .both].contains(installationCategory))
     }

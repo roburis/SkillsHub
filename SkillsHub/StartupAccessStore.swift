@@ -5,20 +5,31 @@ nonisolated struct StartupAccessBookmarkResolution: Equatable {
     var isStale: Bool
 }
 
+typealias StartupAccessBatch = [String: Result<StartupAccessBookmarkResolution?, any Error>]
+
 protocol StartupAccessStoring: AnyObject {
     func resolveAccess(to url: URL) throws -> StartupAccessBookmarkResolution?
     func saveAccess(to url: URL) throws
-    func resolvePresentationAccess(to urls: [URL]) async throws -> [String: StartupAccessBookmarkResolution]
+    func resolveAccessBatch(to urls: [URL]) async throws -> StartupAccessBatch
 }
 
 extension StartupAccessStoring {
-    func resolvePresentationAccess(to urls: [URL]) async throws -> [String: StartupAccessBookmarkResolution] {
-        var result: [String: StartupAccessBookmarkResolution] = [:]
-        for url in urls {
-            if let resolution = try resolveAccess(to: url) { result[url.standardizedFileURL.path] = resolution }
-        }
-        return result
+    func resolveAccessBatch(to urls: [URL]) async throws -> StartupAccessBatch {
+        try resolveAccessIndependently(urls, using: resolveAccess)
     }
+}
+
+nonisolated private func resolveAccessIndependently(
+    _ urls: [URL], using resolve: (URL) throws -> StartupAccessBookmarkResolution?
+) throws -> StartupAccessBatch {
+    var result: StartupAccessBatch = [:]
+    for url in urls.map(\.standardizedFileURL) where result[url.path] == nil {
+        try Task.checkCancellation()
+        do { result[url.path] = .success(try resolve(url)) }
+        catch is CancellationError { throw CancellationError() }
+        catch { result[url.path] = .failure(error) }
+    }
+    return result
 }
 
 final class SecurityScopedStartupAccessStore: StartupAccessStoring {
@@ -42,20 +53,15 @@ final class SecurityScopedStartupAccessStore: StartupAccessStoring {
         try Self.resolve(url, bookmarks: loadBookmarks())
     }
 
-    func resolvePresentationAccess(to urls: [URL]) async throws -> [String: StartupAccessBookmarkResolution] {
-        try await Self.resolvePresentationAccess(to: urls, storeURL: storeURL, fileManager: fileManager)
+    func resolveAccessBatch(to urls: [URL]) async throws -> StartupAccessBatch {
+        try await Self.resolveAccessBatch(to: urls, storeURL: storeURL)
     }
 
-    @concurrent nonisolated private static func resolvePresentationAccess(
-        to urls: [URL], storeURL: URL, fileManager: FileManager
-    ) async throws -> [String: StartupAccessBookmarkResolution] {
-        let bookmarks = try loadBookmarks(at: storeURL, fileManager: fileManager)
-        var result: [String: StartupAccessBookmarkResolution] = [:]
-        for url in urls {
-            try Task.checkCancellation()
-            if let resolution = try resolve(url, bookmarks: bookmarks) { result[url.standardizedFileURL.path] = resolution }
-        }
-        return result
+    @concurrent nonisolated private static func resolveAccessBatch(
+        to urls: [URL], storeURL: URL
+    ) async throws -> StartupAccessBatch {
+        let bookmarks = try loadBookmarks(at: storeURL)
+        return try resolveAccessIndependently(urls) { try resolve($0, bookmarks: bookmarks) }
     }
 
     nonisolated private static func resolve(_ url: URL, bookmarks: [String: StoredBookmark]) throws -> StartupAccessBookmarkResolution? {
@@ -71,10 +77,7 @@ final class SecurityScopedStartupAccessStore: StartupAccessStoring {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         )
-        let resolved = resolvedURL.standardizedFileURL
-        guard resolved.path == path else {
-            return nil
-        }
+        guard resolvedURL.standardizedFileURL.path == path else { return nil }
         return StartupAccessBookmarkResolution(url: resolvedURL, isStale: isStale)
     }
 
@@ -94,15 +97,19 @@ final class SecurityScopedStartupAccessStore: StartupAccessStoring {
     }
 
     private func loadBookmarks() throws -> [String: StoredBookmark] {
-        try Self.loadBookmarks(at: storeURL, fileManager: fileManager)
+        try Self.loadBookmarks(at: storeURL)
     }
 
-    nonisolated private static func loadBookmarks(at storeURL: URL, fileManager: FileManager) throws -> [String: StoredBookmark] {
-        guard fileManager.fileExists(atPath: storeURL.path) else {
-            return [:]
+    nonisolated private static func loadBookmarks(at storeURL: URL) throws -> [String: StoredBookmark] {
+        let data: Data
+        do { data = try Data(contentsOf: storeURL) }
+        catch let error as CocoaError where [.fileNoSuchFile, .fileReadNoSuchFile].contains(error.code) { return [:] }
+        var bookmarks: [String: StoredBookmark] = [:]
+        for bookmark in try JSONDecoder().decode([StoredBookmark].self, from: data) {
+            guard bookmarks.updateValue(bookmark, forKey: bookmark.path) == nil else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
         }
-        let data = try Data(contentsOf: storeURL)
-        let bookmarks = try JSONDecoder().decode([StoredBookmark].self, from: data)
-        return Dictionary(uniqueKeysWithValues: bookmarks.map { ($0.path, $0) })
+        return bookmarks
     }
 }

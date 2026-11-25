@@ -131,7 +131,6 @@ nonisolated struct SkillsHubLocalization {
             "Refresh default Agent directories": "刷新默认 Agent 目录",
             "Connect a Management Directory to refresh Agent directories.": "先连接管理目录，才能刷新 Agent 目录。",
             "Authorize default directory…": "授权默认目录…",
-            "Choose the exact default Agent skills directory.": "请选择准确的 Agent 默认 skills 目录。",
             "Default directory verified": "默认目录已核实",
             "Agent directory has not been verified.": "Agent 目录尚未核实。",
             "Agent skills directory is not readable or writable.": "Agent skills 目录不可读或不可写。请在设置中重新授权并检查。",
@@ -162,6 +161,7 @@ nonisolated struct SkillsHubLocalization {
             "Reset State Filters": "重置状态筛选",
             "Other Agent relationships": "其他 Agent 关系",
             "Paths and check details": "路径与检查详情",
+            "Diagnostic details": "诊断详情",
             "Skill address": "Skill 地址",
             "Relative to the management directory": "相对于管理目录",
             "Relative to %@ skills directory": "相对于 %@ 的 skills 目录",
@@ -703,6 +703,7 @@ nonisolated struct SkillsHubLocalization {
             "Reset State Filters": "状態フィルターをリセット",
             "Other Agent relationships": "他の Agent との関係",
             "Paths and check details": "パスと確認の詳細",
+            "Diagnostic details": "診断の詳細",
             "Skill address": "Skillアドレス",
             "Relative to the management directory": "管理ディレクトリからの相対パス",
             "Relative to %@ skills directory": "%@のskillsディレクトリからの相対パス",
@@ -1245,6 +1246,7 @@ nonisolated struct SkillsHubLocalization {
             "Operation record (original): %@": "操作记录原文：%@",
             "No current supported capability profile is available.": "当前没有可用的受支持能力配置。",
             "The Agent skills target is missing.": "Agent 的 skills 目标目录不存在。",
+            "The Agent skills directory was replaced. Resolve the directory change before managing links.": "Agent 的 skills 目录已被替换。请先处理目录变更，再管理链接。",
             "More than one Agent target is eligible.": "存在多个符合条件的 Agent 目标，无法唯一确定。",
             "Authorize the exact Agent skills target in Settings.": "请在设置中授权准确的 Agent skills 目标目录。",
             "The saved target authorization is stale. Reauthorize it in Settings.": "保存的目标授权已失效。请在设置中重新授权。",
@@ -1796,6 +1798,7 @@ nonisolated struct SkillsHubLocalization {
             "Operation record (original): %@": "操作記録の原文：%@",
             "No current supported capability profile is available.": "現在、対応する有効な機能プロファイルはありません。",
             "The Agent skills target is missing.": "Agent の skills 対象ディレクトリがありません。",
+            "The Agent skills directory was replaced. Resolve the directory change before managing links.": "Agent の skills ディレクトリが置き換えられました。リンクを管理する前にディレクトリの変更を解決してください。",
             "More than one Agent target is eligible.": "条件を満たす Agent の対象が複数あり、一意に特定できません。",
             "Authorize the exact Agent skills target in Settings.": "設定で正確な Agent の skills 対象ディレクトリを許可してください。",
             "The saved target authorization is stale. Reauthorize it in Settings.": "保存された対象の許可は期限切れです。設定で再度許可してください。",
@@ -1873,7 +1876,6 @@ nonisolated struct SkillsHubLocalization {
             "Refresh default Agent directories": "既定のAgentディレクトリを更新",
             "Connect a Management Directory to refresh Agent directories.": "Agentディレクトリを更新するには、管理ディレクトリに接続してください。",
             "Authorize default directory…": "既定のディレクトリを許可…",
-            "Choose the exact default Agent skills directory.": "Agentの既定のskillsディレクトリを正確に選択してください。",
             "Default directory verified": "既定のディレクトリを確認済み",
             "Agent directory has not been verified.": "Agentディレクトリはまだ確認されていません。",
             "Agent skills directory is not readable or writable.": "Agentのskillsディレクトリを読み書きできません。設定で再度許可して確認してください。",
@@ -2481,6 +2483,8 @@ nonisolated struct SkillsHubLocalization {
             return "The Skill or Agent scope changed after confirmation. Review a new preview before clearing."
         case let failure as AgentTargetAccessError:
             switch failure {
+            case .directoryReplaced:
+                return "The Agent skills directory was replaced. Resolve the directory change before managing links."
             case .leaseUnavailable:
                 return "Saved directory access could not be activated. Retry checking or authorize this directory again."
             case .qualificationFailed(.targetMissing): return "The Agent skills target is missing."

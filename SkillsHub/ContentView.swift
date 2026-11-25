@@ -111,8 +111,7 @@ struct ContentView: View {
             connectRoot: connectRoot,
             addLocalSource: addLocalSource,
             addGitHubSource: showGitHubSourceSheet,
-            chooseAgentTarget: chooseAgentTarget,
-            chooseExactAgentTarget: chooseExactAgentTarget
+            chooseAgentTarget: chooseAgentTarget
         )
         .task {
             await bootstrapDefaultRoot()
@@ -341,22 +340,8 @@ struct ContentView: View {
         } else { completion(panel.runModal()) }
     }
 
-    private func chooseExactAgentTarget(
-        agent: AgentKind,
-        selected: @escaping () -> Void
-    ) {
-        let target = library.agentPathResolver.globalSkillsDirectory(
-            for: agent, environment: library.agentEnvironment, homeDirectory: library.agentHomeDirectory
-        ).standardizedFileURL
-        chooseDirectory(defaultDirectoryURL: target, requiredDirectoryURL: target, allowCreation: false) { _ in
-            selected()
-        }
-    }
-
     private func chooseDirectory(
         defaultDirectoryURL: URL? = nil,
-        requiredDirectoryURL: URL? = nil,
-        allowCreation: Bool = true,
         action: @escaping (URL) throws -> Void,
         onCancel: @escaping () -> Void = {}
     ) {
@@ -364,7 +349,7 @@ struct ContentView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = allowCreation
+        panel.canCreateDirectories = true
         panel.resolvesAliases = true
         panel.directoryURL = defaultDirectoryURL
         NSApp.activate(ignoringOtherApps: true)
@@ -372,10 +357,6 @@ struct ContentView: View {
         let completion: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .OK, let url = panel.url else {
                 onCancel()
-                return
-            }
-            if let requiredDirectoryURL, url.standardizedFileURL != requiredDirectoryURL {
-                library.handle(SkillsHubLibraryFailure.invalidSource("Choose the exact default Agent skills directory."))
                 return
             }
             handleSelectedURL(url, action: action)

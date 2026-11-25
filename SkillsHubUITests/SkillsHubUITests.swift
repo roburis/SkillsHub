@@ -402,7 +402,7 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
-    func testInstallationEvidenceControlsSidebarButKeepsSettingsAndRelations() throws {
+    func testAbsentAgentIsHiddenFromSkillDetailsAndKeepsSettingsAndLinks() throws {
         let fixture = try makeFixture()
         let status = fixture.runRoot.appendingPathComponent("installation-status")
         try "desktop".write(to: status, atomically: true, encoding: .utf8)
@@ -414,7 +414,13 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(app.buttons["configure-agent-claudeCode"].exists)
         selectNavigation("all-skills", in: app)
         app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
-        XCTAssertTrue(app.descendants(matching: .any)["relation-detail-claudeCode-review-fixture"].waitForExistence(timeout: 2))
+        let codexRelation = app.descendants(matching: .any)["relation-detail-codex-review-fixture"]
+        let claudeRelation = app.descendants(matching: .any)["relation-detail-claudeCode-review-fixture"]
+        XCTAssertTrue(codexRelation.waitForExistence(timeout: 2))
+        XCTAssertFalse(claudeRelation.exists)
+        let codexLink = fixture.home.appending(path: ".codex/skills/Review Fixture")
+        app.buttons["relation-action-codex-review-fixture-detail"].click()
+        XCTAssertTrue(waitForFile(at: codexLink))
 
         selectNavigation("agent-codex", in: app)
         try "absent".write(to: status, atomically: true, encoding: .utf8)
@@ -428,12 +434,22 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(app.buttons["configure-agent-codex"].exists)
         selectNavigation("all-skills", in: app)
         app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
-        XCTAssertTrue(app.descendants(matching: .any)["relation-detail-codex-review-fixture"].waitForExistence(timeout: 2))
+        XCTAssertTrue(codexRelation.waitForNonExistence(timeout: 2))
+        XCTAssertFalse(claudeRelation.exists)
+        XCTAssertFalse(app.buttons["Needs Attention · Review Fixture"].exists)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: codexLink.path))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Absent agents hidden from managed Skill details"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         try "unknown".write(to: status, atomically: true, encoding: .utf8)
         selectNavigation("settings", in: app)
         app.buttons["refresh-default-agent-directories"].click()
         XCTAssertTrue(app.staticTexts["Installation could not be verified"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["nav-agent-codex"].exists)
+        selectNavigation("all-skills", in: app)
+        app.descendants(matching: .any)[Phase1UITestFixture.reviewRowIdentifier].click()
+        XCTAssertTrue(codexRelation.waitForExistence(timeout: 2))
     }
 
     @MainActor
@@ -1560,10 +1576,11 @@ final class SkillsHubUITests: XCTestCase {
     }
 
     @MainActor
-    func testAuthorizedAgentEntriesReturnAfterAppRestart() throws {
+    func testAgentAuthorizationSurvivesRestartWithAnotherDirectoryMissing() throws {
         let fixture = try makeFixture()
         let root = fixture.home.appending(path: "skills-hub", directoryHint: .isDirectory)
         let target = fixture.home.appending(path: ".claude/skills", directoryHint: .isDirectory)
+        let codex = fixture.home.appending(path: ".codex/skills", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: target.appending(path: "outside-skill"), withIntermediateDirectories: true)
         try Data("---\nname: outside-skill\ndescription: A valid external skill.\n---\nBody.\n".utf8)
@@ -1575,22 +1592,48 @@ final class SkillsHubUITests: XCTestCase {
         XCTAssertTrue(waitForConfiguredRoot(in: app, expectedCount: 1))
         selectNavigation("settings", in: app)
         app.buttons["refresh-default-agent-directories"].click()
-        let authorize = app.buttons["authorize-default-agent-directory-claudeCode"]
-        XCTAssertTrue(authorize.waitForExistence(timeout: 3))
-        authorize.click()
-        chooseDirectory(target, in: app)
-        selectNavigation("agent-claudeCode", in: app)
-        XCTAssertTrue(app.staticTexts["outside-skill"].waitForExistence(timeout: 3))
+        for (id, directory) in [("claudeCode", target), ("codex", codex)] {
+            let authorize = app.buttons["authorize-default-agent-directory-\(id)"]
+            XCTAssertTrue(authorize.waitForExistence(timeout: 3))
+            authorize.click()
+            XCTAssertTrue(app.sheets["open-panel"].waitForExistence(timeout: 3))
+            chooseDirectory(directory, in: app)
+            XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-verified-\(id)"].waitForExistence(timeout: 5))
+        }
         let metadataURL = root.appending(path: ".skillshub.json")
         let before = try Data(contentsOf: metadataURL)
         app.terminate()
         activeApp = nil
 
         app = launchPlatformRootApp(fixture: fixture, scenario: "restart", appSupportName: supportName, expectEmpty: false)
-        selectNavigation("agent-claudeCode", in: app)
-        XCTAssertTrue(app.staticTexts["outside-skill"].waitForExistence(timeout: 5))
+        selectNavigation("settings", in: app)
+        app.buttons["refresh-default-agent-directories"].click()
+        for id in ["claudeCode", "codex"] {
+            XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-verified-\(id)"].waitForExistence(timeout: 5))
+        }
         XCTAssertEqual(try Data(contentsOf: metadataURL), before)
         XCTAssertTrue(FileManager.default.fileExists(atPath: target.appending(path: "outside-skill").path))
+
+        app.terminate()
+        activeApp = nil
+        try FileManager.default.moveItem(at: target, to: target.deletingLastPathComponent().appending(path: "offline-skills"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+
+        app = launchPlatformRootApp(fixture: fixture, scenario: "restart", appSupportName: supportName, expectEmpty: false)
+        selectNavigation("settings", in: app)
+        app.buttons["refresh-default-agent-directories"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["default-agent-directory-verified-codex"].waitForExistence(timeout: 5))
+        let missing = app.descendants(matching: .any)["default-agent-directory-status-claudeCode"]
+        XCTAssertTrue(missing.waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Codex verified while Claude Code directory is missing"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        let status = missing.value as? String ?? missing.label
+        // The signed App may be unable to stat the old path after losing its scope.
+        XCTAssertTrue(["Directory does not exist", "Authorization required", "Unable to verify directory"].contains(status), status)
+        XCTAssertFalse(app.descendants(matching: .any)["default-agent-directory-verified-claudeCode"].exists)
+        XCTAssertEqual(try Data(contentsOf: metadataURL), before)
     }
 
     @MainActor

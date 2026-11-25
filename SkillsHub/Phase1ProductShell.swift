@@ -78,7 +78,6 @@ struct Phase1ProductShell: View {
     var addLocalSource: () -> Void
     var addGitHubSource: () -> Void
     var chooseAgentTarget: (AgentKind?, @escaping (URL) -> Void) -> Void
-    var chooseExactAgentTarget: (AgentKind, @escaping () -> Void) -> Void
     @State private var skillsWorkspaceStates: [String: SkillsWorkspaceState] = [:]
     @State private var sourceReturnDestination: Phase1NavigationDestination?
     @State private var selectedSkillID: String?
@@ -298,7 +297,6 @@ struct Phase1ProductShell: View {
                 establishRoot: establishRoot,
                 connectRoot: connectRoot,
                 chooseAgentTarget: chooseAgentTarget,
-                chooseExactAgentTarget: chooseExactAgentTarget,
                 openAgent: { requestNavigation(.agent($0)) },
                 openTasks: { requestNavigation(.tasks) },
                 openManagementDirectory: { requestNavigation(.managementDirectory) },
@@ -751,7 +749,7 @@ private struct Phase1SkillsWorkspace: View {
         library.catalogItems
     }
     private func needsAttention(_ item: Phase1SkillPresentation) -> Bool {
-        item.needsAttention || item.managed.map { library.relationPresentations(for: $0).contains(where: \.hasPresentationIssue) } == true
+        item.needsAttention || item.managed.map { library.skillRelationPresentations(for: $0).contains(where: \.hasPresentationIssue) } == true
     }
     private var visibleItems: [Phase1SkillPresentation] {
         library.presentationService.filteredPhase1Items(allItems, query: library.searchText, filter: filter, sourceID: selectedSourceID)
@@ -928,7 +926,7 @@ private struct Phase1SkillRow: View {
     var openRelationships: () -> Void = {}
     var showsSource = true
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
-    private var relations: [AgentRelationPresentation] { item.managed.map(library.relationPresentations) ?? [] }
+    private var relations: [AgentRelationPresentation] { item.managed.map(library.skillRelationPresentations) ?? [] }
     private var needsAttention: Bool { item.needsAttention || relations.contains(where: \.hasPresentationIssue) }
     private var problemSummary: String {
         let messages = item.validationMessages.map(library.localized) + relations.filter(\.hasPresentationIssue).map {
@@ -938,8 +936,11 @@ private struct Phase1SkillRow: View {
     }
     private var enablementSummary: String {
         item.isEnabled
-            ? library.localized(LocalizedMessage("Enabled for %@ Agents", arguments: [String(relations.filter { $0.intendedEnabled == true }.count)]))
+            ? library.localized(LocalizedMessage("Enabled for %@ Agents", arguments: [String(enabledAgentCount)]))
             : localized("Not Enabled")
+    }
+    private var enabledAgentCount: Int {
+        item.managed.map { library.enabledAgentCount(for: $0.assetID) } ?? 0
     }
     private var accessibilitySummary: String {
         ([item.detail] + (showsSource ? [library.localized(item.sourceName)] : [])
@@ -998,7 +999,7 @@ private struct Phase1SkillDetail: View {
     @State private var clearPlanError: LocalizedMessage?
     @State private var showsPaths = false
     private func localized(_ text: String) -> String { appLocalized(text, language: library.language) }
-    private var relations: [AgentRelationPresentation] { item.managed.map(library.relationPresentations) ?? [] }
+    private var relations: [AgentRelationPresentation] { item.managed.map(library.skillRelationPresentations) ?? [] }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1718,9 +1719,14 @@ private struct Phase1AgentDirectoryAccessNotice: View {
                     if let path = library.visibleInstalledAgentDescriptors.first(where: { $0.id == agentID })?.skillsDirectory {
                         Text(path).font(.caption)
                     }
+                    if case .accessFailed(let diagnostic) = library.agentDirectoryAccessFailures[agentID] {
+                        DisclosureGroup(library.localized("Diagnostic details")) {
+                            Text(library.localized(diagnostic)).font(.caption).textSelection(.enabled)
+                        }
+                    }
                 }
                 Spacer()
-                if library.agentDirectoryAccessFailures[agentID] != nil {
+                if library.agentDirectoryAccessFailures[agentID]?.canRequestAuthorization == true {
                     Button(library.localized("Authorize directory…")) {
                         library.requestAgentDirectoryAuthorization(agentID: agentID)
                     }
@@ -1903,7 +1909,7 @@ private struct Phase1AgentWorkspace: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     guard let id = descriptor?.id else { return }
-                    Task { await library.performUserAgentAction(agentID: id) { try await library.auditAgentDirectory(agentID: id) } }
+                    Task { await library.recheckAgentDirectory(agentID: id) }
                 } label: {
                     if isChecking { ProgressView().controlSize(.small) }
                     else { Image(systemName: "arrow.clockwise") }
@@ -1937,7 +1943,7 @@ private struct Phase1AgentWorkspace: View {
                   !library.agentFindings.contains(where: {
                       $0.agentID == id && $0.domain == .agentDirectory && $0.type != .pendingAudit
                   }) else { return }
-            Task { do { try await library.auditAgentDirectory(agentID: id) } catch { library.handle(error) } }
+            Task { await library.recheckAgentDirectory(agentID: id, allowAuthorization: false) }
         }
         .accessibilityIdentifier("agent-workspace")
         .alert(localized("Delete this link node?"), item: $pendingBrokenLinkDeletion) { plan in
@@ -2056,7 +2062,6 @@ private struct Phase1SettingsWorkspace: View {
     var establishRoot: () -> Void
     var connectRoot: () -> Void
     var chooseAgentTarget: (AgentKind?, @escaping (URL) -> Void) -> Void
-    var chooseExactAgentTarget: (AgentKind, @escaping () -> Void) -> Void
     var openAgent: (String) -> Void
     var openTasks: () -> Void
     var openManagementDirectory: () -> Void
@@ -2088,8 +2093,9 @@ private struct Phase1SettingsWorkspace: View {
                             capability: library.agentCapabilityPresentation(descriptor),
                             refreshStatus: descriptor.agent.flatMap { library.defaultAgentDirectoryRefresh[$0] },
                             authorize: descriptor.agent.flatMap { agent in
-                                agent == .codex || agent == .claudeCode ? {
-                                    chooseExactAgentTarget(agent) { Task { await library.refreshDefaultAgentDirectories() } }
+                                (agent == .codex || agent == .claudeCode)
+                                    && library.agentDirectoryAccessFailures[descriptor.id]?.canRequestAuthorization != false ? {
+                                    library.requestAgentDirectoryAuthorization(agentID: descriptor.id)
                                 } : nil
                             }
                         ) {
@@ -2671,9 +2677,7 @@ private struct Phase1RelationDetail: View {
             }
             if relation.verification != .verifiedConsistent || relation.unavailableReason != nil {
                 Button(localized("Re-check")) {
-                    Task { await library.performUserAgentAction(agentID: relation.relation.agentID) {
-                        try await library.auditAgentDirectory(agentID: relation.relation.agentID)
-                    } }
+                    Task { await library.recheckAgentDirectory(agentID: relation.relation.agentID) }
                 }
                 .disabled(relation.isInFlight)
                 .accessibilityIdentifier("relation-recheck-\(relation.id)")
