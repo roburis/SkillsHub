@@ -1246,7 +1246,6 @@ nonisolated struct SkillsHubLocalization {
             "Operation record (original): %@": "操作记录原文：%@",
             "No current supported capability profile is available.": "当前没有可用的受支持能力配置。",
             "The Agent skills target is missing.": "Agent 的 skills 目标目录不存在。",
-            "The Agent skills directory was replaced. Resolve the directory change before managing links.": "Agent 的 skills 目录已被替换。请先处理目录变更，再管理链接。",
             "More than one Agent target is eligible.": "存在多个符合条件的 Agent 目标，无法唯一确定。",
             "Authorize the exact Agent skills target in Settings.": "请在设置中授权准确的 Agent skills 目标目录。",
             "The saved target authorization is stale. Reauthorize it in Settings.": "保存的目标授权已失效。请在设置中重新授权。",
@@ -1798,7 +1797,6 @@ nonisolated struct SkillsHubLocalization {
             "Operation record (original): %@": "操作記録の原文：%@",
             "No current supported capability profile is available.": "現在、対応する有効な機能プロファイルはありません。",
             "The Agent skills target is missing.": "Agent の skills 対象ディレクトリがありません。",
-            "The Agent skills directory was replaced. Resolve the directory change before managing links.": "Agent の skills ディレクトリが置き換えられました。リンクを管理する前にディレクトリの変更を解決してください。",
             "More than one Agent target is eligible.": "条件を満たす Agent の対象が複数あり、一意に特定できません。",
             "Authorize the exact Agent skills target in Settings.": "設定で正確な Agent の skills 対象ディレクトリを許可してください。",
             "The saved target authorization is stale. Reauthorize it in Settings.": "保存された対象の許可は期限切れです。設定で再度許可してください。",
@@ -2483,8 +2481,6 @@ nonisolated struct SkillsHubLocalization {
             return "The Skill or Agent scope changed after confirmation. Review a new preview before clearing."
         case let failure as AgentTargetAccessError:
             switch failure {
-            case .directoryReplaced:
-                return "The Agent skills directory was replaced. Resolve the directory change before managing links."
             case .leaseUnavailable:
                 return "Saved directory access could not be activated. Retry checking or authorize this directory again."
             case .qualificationFailed(.targetMissing): return "The Agent skills target is missing."

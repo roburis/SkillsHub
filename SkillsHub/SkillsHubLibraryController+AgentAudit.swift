@@ -51,7 +51,7 @@ extension SkillsHubLibraryController {
               rootSnapshot == snapshot, generation == agentObservationGeneration else { return }
         for descriptor in descriptors {
             let directory = descriptor.skillsDirectory.standardizedFileURL
-            if let lease = try? acquireAgentDirectoryLease(at: directory, agentID: descriptor.agentID, owner: .inspection(UUID()), resolve: {
+            if let lease = try? acquireAgentDirectoryLease(at: directory, owner: .inspection(UUID()), resolve: {
                 try authorizations[directory.path]?.get()
             }) { leases.append(lease) }
         }
@@ -425,7 +425,7 @@ extension SkillsHubLibraryController {
             let target = URL(fileURLWithPath: targetPath, isDirectory: true).standardizedFileURL
             if directoryAccess[relation.agentID] == nil {
                 let access = Result {
-                    try acquireAgentDirectoryLease(at: target, agentID: relation.agentID, owner: .inspection(UUID())) {
+                    try acquireAgentDirectoryLease(at: target, owner: .inspection(UUID())) {
                         if let authorizationError { throw authorizationError }
                         return try authorizations[target.path]?.get()
                     }

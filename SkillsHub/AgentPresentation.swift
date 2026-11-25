@@ -3,14 +3,12 @@ import Foundation
 enum AgentDirectoryAccessFailure: Equatable {
     case authorizationRequired
     case directoryMissing
-    case directoryReplaced
     case accessFailed(LocalizedMessage)
 
     var message: LocalizedMessage {
         switch self {
         case .authorizationRequired: "Authorize this Agent’s skills directory to check its relationships."
         case .directoryMissing: "The Agent skills target is missing."
-        case .directoryReplaced: "The Agent skills directory was replaced. Resolve the directory change before managing links."
         case .accessFailed: "The Agent directory could not be completely checked."
         }
     }
@@ -18,7 +16,7 @@ enum AgentDirectoryAccessFailure: Equatable {
     var canRequestAuthorization: Bool {
         switch self {
         case .authorizationRequired, .accessFailed: true
-        case .directoryMissing, .directoryReplaced: false
+        case .directoryMissing: false
         }
     }
 }

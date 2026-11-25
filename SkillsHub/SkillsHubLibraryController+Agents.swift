@@ -52,7 +52,6 @@ extension SkillsHubLibraryController {
     func agentDirectoryAccessFailure(for error: any Error) -> AgentDirectoryAccessFailure {
         switch error {
         case AgentTargetAccessError.qualificationFailed(.targetMissing): .directoryMissing
-        case AgentTargetAccessError.directoryReplaced: .directoryReplaced
         case AgentTargetAccessError.qualificationFailed(.permissionRequired),
              AgentTargetAccessError.qualificationFailed(.bookmarkStale),
              AgentTargetAccessError.qualificationFailed(.authorizationTargetMismatch): .authorizationRequired
@@ -123,7 +122,7 @@ extension SkillsHubLibraryController {
         }
         do {
             try rememberUserSelectedAccess(to: directory) {
-                try validateAgentDirectoryIdentity(at: request.directory, agentID: request.agentID)
+                try validateAgentDirectory(at: request.directory)
             }
             defer { do { try endSelectedInspectionAccess(to: directory) } catch { handle(error) } }
             try await auditAgentDirectory(agentID: request.agentID)
@@ -187,7 +186,7 @@ extension SkillsHubLibraryController {
         switch agentDirectoryAccessFailures[agentID] {
         case .directoryMissing: .missing
         case .authorizationRequired: .authorizationRequired
-        case .directoryReplaced, .accessFailed: .unverifiable
+        case .accessFailed: .unverifiable
         case nil:
             agentDirectoryAuditFailures[agentID] == nil ? .manageable : .unverifiable
         }
@@ -662,29 +661,22 @@ extension SkillsHubLibraryController {
         return lstat(target.path, &node) == -1 && (errno == ENOENT || errno == ENOTDIR)
     }
 
-    private func validateAgentDirectoryIdentity(at target: URL, agentID: String) throws {
+    private func validateAgentDirectory(at target: URL) throws {
         var node = stat()
         guard lstat(target.path, &node) == 0 else {
             let code = errno
             if code == ENOENT || code == ENOTDIR { throw AgentTargetAccessError.qualificationFailed(.targetMissing) }
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
         }
-        let current = LinkNodeIdentity(node)
-        guard current.kind == S_IFDIR else {
-            throw SkillsHubLibraryFailure.invalidSource(current.kind == S_IFLNK
+        let kind = node.st_mode & mode_t(S_IFMT)
+        guard kind == S_IFDIR else {
+            throw SkillsHubLibraryFailure.invalidSource(kind == S_IFLNK
                 ? "The Agent skills target cannot be a symbolic link." : "The selected Agent skills target is not a directory.")
-        }
-        let previous = localState.targetObservations.lazy.filter {
-            $0.relation.agentID == agentID && $0.limitation == nil && $0.parentIdentity != nil
-                && URL(fileURLWithPath: $0.linkPath).deletingLastPathComponent().standardizedFileURL.path == target.path
-        }.max { $0.observedAt < $1.observedAt }
-        if let expected = previous?.parentIdentity, expected != current {
-            throw AgentTargetAccessError.directoryReplaced
         }
     }
 
     func acquireAgentDirectoryLease(
-        at target: URL, agentID: String, owner: SecurityScopedAccessOwner,
+        at target: URL, owner: SecurityScopedAccessOwner,
         resolve: () throws -> StartupAccessBookmarkResolution?
     ) throws -> SecurityScopedAccessLease {
         if agentDirectoryIsMissing(target) { throw AgentTargetAccessError.qualificationFailed(.targetMissing) }
@@ -701,7 +693,7 @@ extension SkillsHubLibraryController {
         let lease: SecurityScopedAccessLease
         do { lease = try securityScopedAccessProvider.acquire(url: bookmark.url, owner: owner) }
         catch SecurityScopedAccessError.startDenied { throw AgentTargetAccessError.leaseUnavailable }
-        do { try validateAgentDirectoryIdentity(at: target, agentID: agentID) }
+        do { try validateAgentDirectory(at: target) }
         catch {
             _ = lease.end(by: owner)
             throw error
@@ -718,7 +710,7 @@ extension SkillsHubLibraryController {
         let owner = descriptor.agent.map {
             SecurityScopedAccessOwner.agentTarget(actionID: actionID, agent: $0)
         } ?? .configuredAgentTarget(actionID: actionID, agentID: agentID)
-        let lease = try acquireAgentDirectoryLease(at: target, agentID: agentID, owner: owner) {
+        let lease = try acquireAgentDirectoryLease(at: target, owner: owner) {
             try startupAccessStore.resolveAccess(to: target)
         }
         let detection = agentDetections.first { $0.agentID == agentID }
