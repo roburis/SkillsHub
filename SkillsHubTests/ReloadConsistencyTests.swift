@@ -71,10 +71,14 @@ struct ReloadConsistencyTests {
             #expect(controller.relationOwnershipSnapshot.isEmpty)
         } else if let newer {
             #expect(controller.presentationObservations[relation.id] == newer)
+        } else if scenario == "permission-lost" {
+            let current = controller.relationPresentations(for: skill).first { $0.id == relation.id }
+            #expect(controller.presentationObservations[relation.id] == observation)
+            #expect(current?.verification == .currentlyUnverifiable)
+            #expect(current?.lastObservation == observation)
         } else {
             #expect(controller.presentationObservations[relation.id]?.observedAt != observation.observedAt)
-            let expected: VerificationConclusion = scenario == "removed" ? .drifted
-                : scenario == "permission-lost" ? .currentlyUnverifiable : .verifiedConsistent
+            let expected: VerificationConclusion = scenario == "removed" ? .drifted : .verifiedConsistent
             #expect(controller.relationPresentations(for: skill).first { $0.id == relation.id }?.verification == expected)
         }
     }
@@ -996,9 +1000,9 @@ private final class PausingAgentAccessStore: StartupAccessStoring {
         denied ? nil : StartupAccessBookmarkResolution(url: url.standardizedFileURL, isStale: false)
     }
     func saveAccess(to url: URL) throws {}
-    func resolvePresentationAccess(to urls: [URL]) async throws -> [String: StartupAccessBookmarkResolution] {
+    func resolveAccessBatch(to urls: [URL]) async throws -> StartupAccessBatch {
         if let failure { throw failure }
-        if pauseNextQualification && urls.count == 1 {
+        if pauseNextQualification && !urls.isEmpty {
             pauseNextQualification = false
             await withCheckedContinuation { continuation in
                 response = continuation
@@ -1006,9 +1010,8 @@ private final class PausingAgentAccessStore: StartupAccessStoring {
                 waiter = nil
             }
         }
-        if denied { return [:] }
         return Dictionary(uniqueKeysWithValues: Set(urls.map(\.standardizedFileURL)).map {
-            ($0.path, StartupAccessBookmarkResolution(url: $0, isStale: false))
+            ($0.path, .success(denied ? nil : StartupAccessBookmarkResolution(url: $0, isStale: false)))
         })
     }
     func waitUntilPaused() async {
@@ -1024,7 +1027,7 @@ private final class DelayedPresentationAccessStore: StartupAccessStoring {
     private var requested = false
     func resolveAccess(to url: URL) throws -> StartupAccessBookmarkResolution? { nil }
     func saveAccess(to url: URL) throws {}
-    func resolvePresentationAccess(to urls: [URL]) async throws -> [String: StartupAccessBookmarkResolution] {
+    func resolveAccessBatch(to urls: [URL]) async throws -> StartupAccessBatch {
         if !requested {
             requested = true
             await withCheckedContinuation { continuation in

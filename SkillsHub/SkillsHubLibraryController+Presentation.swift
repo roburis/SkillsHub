@@ -84,7 +84,6 @@ extension SkillsHubLibraryController {
                     ?? descriptor.agent.map { self.resolvedAgentSkillsDirectory(for: $0) }
                 if let target { result[descriptor.id] = target.standardizedFileURL }
             }
-            let detections = Set(self.agentDetections.filter(\.detected).map(\.agentID))
             let items = Array(self.catalogItemsByID.values)
             let iconPaths = Set(descriptors.compactMap(\.desktopAppPath)).subtracting(self.observedDesktopIconPaths)
             var leases: [SecurityScopedAccessLease] = []
@@ -95,24 +94,24 @@ extension SkillsHubLibraryController {
                     && self.rootSnapshot?.generation == rootGeneration
             }
             do {
-                var authorizations = try await self.startupAccessStore.resolvePresentationAccess(to: Array(targets.values))
+                let authorizations = try await self.startupAccessStore.resolveAccessBatch(to: Array(targets.values))
                 guard contextIsCurrent() else { return }
-                for target in Set(targets.values) {
-                    if let authorization = authorizations[target.path], !authorization.isStale,
-                       authorization.url.standardizedFileURL == target {
-                        do {
-                            leases.append(try self.securityScopedAccessProvider.acquire(url: authorization.url, owner: .inspection(UUID())))
-                        } catch {
-                            authorizations.removeValue(forKey: target.path)
-                            for (id, url) in targets where url == target {
-                                self.agentDirectoryAccessFailures[id] = .accessFailed(self.errorPresentation(for: error))
-                            }
-                        }
-                    } else if self.fileManager.fileExists(atPath: target.path) {
-                        for (id, url) in targets where url == target {
-                            self.agentDirectoryAccessFailures[id] = .authorizationRequired
+                var capabilities: [String: AgentCapabilityPresentation] = [:]
+                for descriptor in descriptors {
+                    guard let target = targets[descriptor.id] else { continue }
+                    let access = Result {
+                        try self.acquireAgentDirectoryLease(at: target, agentID: descriptor.id, owner: .inspection(UUID())) {
+                            try authorizations[target.path]?.get()
                         }
                     }
+                    switch access {
+                    case .success(let lease):
+                        leases.append(lease)
+                        self.agentDirectoryAccessFailures.removeValue(forKey: descriptor.id)
+                    case .failure(let error):
+                        self.agentDirectoryAccessFailures[descriptor.id] = self.agentDirectoryAccessFailure(for: error)
+                    }
+                    capabilities[descriptor.id] = self.observedAgentCapability(descriptor, target: target, access: access)
                 }
                 var authorizedRoot: URL?
                 if let accessURL = self.rootSessionLease?.url {
@@ -120,18 +119,13 @@ extension SkillsHubLibraryController {
                     authorizedRoot = root
                 }
                 let result = try await Self.observePresentation(
-                    root: authorizedRoot, items: items, descriptors: descriptors,
-                    targets: targets, detections: detections, authorizations: authorizations,
-                    fileManager: self.fileManager, iconPaths: iconPaths, resolvedRootPath: self.resolvedRootPath,
+                    root: authorizedRoot, items: items, targets: targets,
+                    iconPaths: iconPaths, resolvedRootPath: self.resolvedRootPath,
                     observations: authorizedRoot == nil ? [] : self.localState.targetObservations,
                     assets: Dictionary(self.installedSkills.map { ($0.assetID, $0) }, uniquingKeysWith: { first, _ in first })
                 )
                 guard contextIsCurrent() else { return }
-                self.agentCapabilitySnapshot = descriptors.reduce(into: [:]) { capabilities, descriptor in
-                    if let qualification = result.qualifications[descriptor.id] {
-                        capabilities[descriptor.id] = self.capabilityPresentation(for: descriptor, qualification: qualification)
-                    }
-                }
+                self.agentCapabilitySnapshot = capabilities
                 self.contentObservationSnapshot = result.content
                 self.relationOwnershipSnapshot = result.ownership
                 for (path, data) in result.icons {
@@ -158,26 +152,10 @@ extension SkillsHubLibraryController {
     }
 
     @concurrent nonisolated static func observePresentation(
-        root: URL?, items: [Phase1SkillPresentation], descriptors: [InstalledAgentDescriptor],
-        targets: [String: URL], detections: Set<String>,
-        authorizations: [String: StartupAccessBookmarkResolution], fileManager: FileManager,
+        root: URL?, items: [Phase1SkillPresentation], targets: [String: URL],
         iconPaths: Set<String>, resolvedRootPath: String? = nil,
         observations: [TargetObservation], assets: [UUID: InstalledSkill]
-    ) async throws -> (qualifications: [String: AgentTargetQualification], content: [String: TargetObservation], icons: [String: Data], ownership: [String: RelationOwnershipClassification]) {
-        var qualifications: [String: AgentTargetQualification] = [:]
-        for descriptor in descriptors {
-            try Task.checkCancellation()
-            let target = targets[descriptor.id]
-            var directory: ObjCBool = false
-            let candidates = target.flatMap { fileManager.fileExists(atPath: $0.path, isDirectory: &directory) && directory.boolValue ? [$0] : nil } ?? []
-            let authorization = target.flatMap { authorizations[$0.path] }
-            let qualifier = AgentTargetQualifier()
-            qualifications[descriptor.id] = if let agent = descriptor.agent {
-                qualifier.qualify(agent: agent, detected: detections.contains(descriptor.id), candidates: candidates, authorization: authorization)
-            } else {
-                qualifier.qualify(customAgentID: descriptor.id, detected: detections.contains(descriptor.id), candidates: candidates, authorization: authorization)
-            }
-        }
+    ) async throws -> (content: [String: TargetObservation], icons: [String: Data], ownership: [String: RelationOwnershipClassification]) {
         var content: [String: TargetObservation] = [:]
         if let root {
             let rootPaths = [root.path] + (resolvedRootPath.map { [$0] } ?? [])
@@ -209,7 +187,7 @@ extension SkillsHubLibraryController {
                 observation: observation, expectedLinkPath: target.appendingPathComponent(linkName).path,
                 canonicalTargetPath: asset.installedPath)
         }
-        return (qualifications, content, icons, ownership)
+        return (content, icons, ownership)
 
     }
 

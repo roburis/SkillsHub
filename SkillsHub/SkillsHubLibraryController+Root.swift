@@ -18,9 +18,9 @@ extension SkillsHubLibraryController {
         guard rootURL == nil else {
             return
         }
-        let resolutions = try await startupAccessStore.resolvePresentationAccess(to: [defaultRootURL])
+        let resolutions = try await startupAccessStore.resolveAccessBatch(to: [defaultRootURL])
         guard rootURL == nil, !Task.isCancelled,
-              let resolution = resolutions[defaultRootURL.standardizedFileURL.path] else {
+              let resolution = try resolutions[defaultRootURL.standardizedFileURL.path]?.get() else {
             return
         }
         let inspectionLease = try securityScopedAccessProvider.acquire(

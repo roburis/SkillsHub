@@ -286,7 +286,7 @@ final class SkillsHubLibraryController {
         self.pendingManagedRootReload = false
     }
 
-    func rememberUserSelectedAccess(to url: URL) throws {
+    func rememberUserSelectedAccess(to url: URL, validate: () throws -> Void = {}) throws {
         let normalizedURL = url.standardizedFileURL
         let key = normalizedURL.path
         if let staleLease = pendingInspectionLeases.removeValue(forKey: key) {
@@ -302,6 +302,7 @@ final class SkillsHubLibraryController {
             throw SkillsHubLibraryFailure.invalidSource("Folder authorization was not granted.")
         }
         do {
+            try validate()
             try startupAccessStore.saveAccess(to: url)
             requestPresentationObservation()
             pendingInspectionLeases[key] = lease

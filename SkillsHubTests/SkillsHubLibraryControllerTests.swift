@@ -4,6 +4,87 @@ import Testing
 
 @MainActor
 struct SkillsHubLibraryControllerTests {
+    @Test func missingClaudeDirectoryDoesNotPreventCodexVerificationAfterRestart() async throws {
+        let files = FileManager.default
+        let access = InMemoryStartupAccessStore()
+        let fixture = try await makeControllerRelationFixture(agents: [.codex, .claudeCode], startupAccessStore: access)
+        let codex = try #require(fixture.targets[.codex])
+        let claude = try #require(fixture.targets[.claudeCode])
+        let home = codex.deletingLastPathComponent().deletingLastPathComponent()
+        defer {
+            try? files.removeItem(at: home)
+            try? files.removeItem(at: fixture.root)
+        }
+        for target in [codex, claude] { try access.saveAccess(to: target) }
+        for agent in [AgentKind.codex, .claudeCode] {
+            _ = try await fixture.controller.setGlobalAgentEnablement(agentID: agent.rawValue, assetID: fixture.assetID, enabled: true)
+        }
+        await fixture.controller.waitForPendingRechecks()
+        await fixture.controller.waitForPresentationObservation()
+        let codexLink = codex.appendingPathComponent("Writer")
+        let codexLinkIdentity = try LinkNodeIdentity.read(at: codexLink)
+        let offlineDirectory = claude.deletingLastPathComponent().appendingPathComponent("offline-skills")
+        try files.moveItem(at: claude, to: offlineDirectory)
+        access.missingPathsThrow = true
+
+        let restarted = SkillsHubLibraryController(
+            agentAuditService: AgentDirectoryAuditService(installationPresence: fixtureAgentInstallation),
+            agentHomeDirectory: home, agentEnvironment: [:], startupAccessStore: access)
+        try await connectInitializedTestRoot(restarted, at: fixture.root)
+        await restarted.refreshAgentLightScan(checkInstallation: true)
+        let asset = try #require(restarted.installedSkills.first)
+        let relations = restarted.relationPresentations(for: asset)
+        let codexRelation = try #require(relations.first { $0.relation.agentID == "codex" })
+        let claudeRelation = try #require(relations.first { $0.relation.agentID == "claudeCode" })
+        #expect(codexRelation.verification == .verifiedConsistent)
+        #expect(codexRelation.canPerformAction)
+        #expect(codexRelation.checkFailure == nil)
+        #expect(claudeRelation.verification == .currentlyUnverifiable)
+        #expect(claudeRelation.intendedEnabled == true)
+        #expect(claudeRelation.lastObservation != nil)
+        #expect(restarted.skillRelationPresentations(for: asset).first { $0.relation.agentID == "claudeCode" }?.hasPresentationIssue == true)
+        #expect(restarted.agentDirectoryFailure("claudeCode") == "The Agent skills target is missing.")
+        #expect(codexRelation.unavailableReason != "Checking…")
+        #expect(claudeRelation.unavailableReason != "Checking…")
+        #expect(restarted.errorMessage == nil)
+        #expect(try LinkNodeIdentity.read(at: codexLink) == codexLinkIdentity)
+
+        let detectedAgents = restarted.agentDetections
+        restarted.agentDetections = detectedAgents.map { detection in
+            guard detection.agentID == "claudeCode" else { return detection }
+            var absent = detection
+            absent.detected = false
+            absent.installationEvidence = nil
+            absent.installationCategory = .absent
+            return absent
+        }
+        let visible = restarted.skillRelationPresentations(for: asset)
+        #expect(visible.map { $0.relation.agentID } == ["codex"])
+        let hasIssue = visible.contains(where: \.hasPresentationIssue)
+        #expect(!hasIssue)
+        #expect(restarted.relationPresentations(for: asset).first { $0.relation.agentID == "claudeCode" }?.intendedEnabled == true)
+        #expect(restarted.enabledAgentCount(for: asset.assetID) == 2)
+        restarted.agentDetections = detectedAgents
+
+        try files.moveItem(at: offlineDirectory, to: claude)
+        access.restorablePaths.remove(claude.path)
+        await restarted.recheckAgentDirectory(agentID: "claudeCode")
+        let request = try #require(restarted.agentDirectoryAuthorizationRequest)
+        await restarted.completeAgentDirectoryAuthorization(requestID: request.id, directory: claude)
+        #expect(restarted.relationPresentations(for: asset).first { $0.relation.agentID == "claudeCode" }?.verification == .verifiedConsistent)
+
+        try files.moveItem(at: claude, to: offlineDirectory)
+        try files.createDirectory(at: claude, withIntermediateDirectories: false)
+        access.restorablePaths.remove(claude.path)
+        await restarted.recheckAgentDirectory(agentID: "claudeCode")
+        let replaced = try #require(restarted.agentDirectoryAuthorizationRequest)
+        await restarted.completeAgentDirectoryAuthorization(requestID: replaced.id, directory: claude)
+        #expect(restarted.agentDirectoryAccessFailures["claudeCode"] == .directoryReplaced)
+        #expect(!access.restorablePaths.contains(claude.path))
+        #expect(restarted.relationPresentations(for: asset).first { $0.relation.agentID == "codex" }?.verification == .verifiedConsistent)
+        #expect(try files.contentsOfDirectory(atPath: claude.path).isEmpty)
+    }
+
     @Test func relationshipBatchHoldsOneDirectoryAccessAndPreservesFactsWhenAccessFails() async throws {
         let adapter = RecordingSecurityScopedResourceAccessAdapter()
         let fixture = try await makeControllerRelationFixture(agents: [.codex],
@@ -130,7 +211,7 @@ struct SkillsHubLibraryControllerTests {
         await fixture.controller.performUserAgentAction(agentID: custom.id) {}
         #expect(fixture.controller.agentDirectoryAuthorizationRequest == nil)
         #expect(fixture.controller.errorMessage == "The Agent skills target is missing.")
-        #expect(fixture.controller.agentDirectoryAccessFailures[custom.id] == nil)
+        #expect(fixture.controller.agentDirectoryAccessFailures[custom.id] == .directoryMissing)
         #expect(!fixture.controller.agentDirectoryNeedsAuthorization(custom.id))
         fixture.controller.requestAgentDirectoryAuthorization(agentID: custom.id)
         #expect(fixture.controller.agentDirectoryAuthorizationRequest == nil)
@@ -1522,6 +1603,7 @@ private final class InMemoryStartupAccessStore: StartupAccessStoring {
     var stalePaths: Set<String> = []
     var restoredPaths: [String] = []
     var savedPaths: [String] = []
+    var missingPathsThrow = false
 
     init(restorablePaths: Set<String> = []) {
         self.restorablePaths = restorablePaths
@@ -1531,6 +1613,9 @@ private final class InMemoryStartupAccessStore: StartupAccessStoring {
         let path = url.standardizedFileURL.path
         guard restorablePaths.contains(path) else {
             return nil
+        }
+        if missingPathsThrow && !FileManager.default.fileExists(atPath: path) {
+            throw CocoaError(.fileNoSuchFile)
         }
         restoredPaths.append(path)
         return StartupAccessBookmarkResolution(url: url.standardizedFileURL, isStale: stalePaths.contains(path))

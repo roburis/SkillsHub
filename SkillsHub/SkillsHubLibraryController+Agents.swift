@@ -49,6 +49,17 @@ extension SkillsHubLibraryController {
         return agentCapabilitySnapshot[agentID].map { $0.authorizationStatus != .current } ?? false
     }
 
+    func agentDirectoryAccessFailure(for error: any Error) -> AgentDirectoryAccessFailure {
+        switch error {
+        case AgentTargetAccessError.qualificationFailed(.targetMissing): .directoryMissing
+        case AgentTargetAccessError.directoryReplaced: .directoryReplaced
+        case AgentTargetAccessError.qualificationFailed(.permissionRequired),
+             AgentTargetAccessError.qualificationFailed(.bookmarkStale),
+             AgentTargetAccessError.qualificationFailed(.authorizationTargetMismatch): .authorizationRequired
+        default: .accessFailed(errorPresentation(for: error))
+        }
+    }
+
     func performUserAgentAction(agentID: String, operation: @escaping @MainActor () async throws -> Void) async {
         guard agentDirectoryAuthorizationRequest == nil else { return }
         do {
@@ -56,18 +67,22 @@ extension SkillsHubLibraryController {
             guard access.endByOwningAction() == .stopped else { throw AgentTargetAccessError.leaseUnavailable }
             try await operation()
         } catch {
-            if case AgentTargetAccessError.qualificationFailed(let reason) = error,
-               [.permissionRequired, .bookmarkStale, .authorizationTargetMismatch].contains(reason) {
-                agentDirectoryAccessFailures[agentID] = .authorizationRequired
-                requestAgentDirectoryAuthorization(agentID: agentID, retry: operation)
-            } else {
-                if case AgentTargetAccessError.qualificationFailed(.targetMissing) = error {
-                    agentDirectoryAccessFailures.removeValue(forKey: agentID)
-                    agentDirectoryAuditFailures[agentID] = errorPresentation(for: error)
-                } else if case AgentTargetAccessError.leaseUnavailable = error {
-                    agentDirectoryAccessFailures[agentID] = .accessFailed(errorPresentation(for: error))
-                }
-                handle(error)
+            if error is AgentTargetAccessError {
+                let failure = agentDirectoryAccessFailure(for: error)
+                agentDirectoryAccessFailures[agentID] = failure
+                if failure == .authorizationRequired { requestAgentDirectoryAuthorization(agentID: agentID, retry: operation) }
+                else { handle(error) }
+            } else { handle(error) }
+        }
+    }
+
+    func recheckAgentDirectory(agentID: String, allowAuthorization: Bool = true) async {
+        let sessionID = rootSessionLease?.id
+        do { try await auditAgentDirectory(agentID: agentID) }
+        catch is CancellationError { return }
+        catch {
+            if allowAuthorization, rootSessionLease?.id == sessionID, agentDirectoryNeedsAuthorization(agentID) {
+                requestAgentDirectoryAuthorization(agentID: agentID)
             }
         }
     }
@@ -76,15 +91,14 @@ extension SkillsHubLibraryController {
         guard agentDirectoryAuthorizationRequest == nil, hasRoot,
               let descriptor = visibleInstalledAgentDescriptors.first(where: { $0.id == agentID }),
               let path = descriptor.skillsDirectory else { return }
-        var node = stat()
-        if lstat(path, &node) == -1, errno == ENOENT || errno == ENOTDIR {
-            agentDirectoryAccessFailures.removeValue(forKey: agentID)
-            agentDirectoryAuditFailures[agentID] = "The Agent skills target is missing."
+        let target = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        if agentDirectoryIsMissing(target) {
+            agentDirectoryAccessFailures[agentID] = .directoryMissing
             return
         }
         agentDirectoryAuthorizationRequest = AgentDirectoryAuthorizationRequest(
             agentID: agentID, displayName: descriptor.displayName,
-            directory: URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL,
+            directory: target,
             root: rootSnapshot, sessionID: rootSessionLease?.id,
             observations: localState.targetObservations.filter { $0.relation.agentID == agentID && $0.limitation == nil },
             retry: retry
@@ -108,7 +122,9 @@ extension SkillsHubLibraryController {
             return
         }
         do {
-            try rememberUserSelectedAccess(to: directory)
+            try rememberUserSelectedAccess(to: directory) {
+                try validateAgentDirectoryIdentity(at: request.directory, agentID: request.agentID)
+            }
             defer { do { try endSelectedInspectionAccess(to: directory) } catch { handle(error) } }
             try await auditAgentDirectory(agentID: request.agentID)
             guard rootSnapshot == request.root, rootSessionLease?.id == request.sessionID else {
@@ -126,16 +142,23 @@ extension SkillsHubLibraryController {
             }
             // Retry with fresh filesystem checks, never with an old destructive plan.
             try await request.retry?()
-        } catch { handle(error) }
+        } catch {
+            guard rootSnapshot == request.root, rootSessionLease?.id == request.sessionID else { return }
+            if error is AgentTargetAccessError {
+                agentDirectoryAccessFailures[request.agentID] = agentDirectoryAccessFailure(for: error)
+            } else { handle(error) }
+        }
     }
 
     func refreshDefaultAgentDirectories() async {
-        guard hasRoot else {
+        guard let rootURL else {
             defaultAgentDirectoryRefresh = [:]
             return
         }
+        let sessionID = rootSessionLease?.id
         let priorFindings = agentFindings
         await refreshAgentLightScan(checkInstallation: true)
+        guard self.rootURL == rootURL, rootSessionLease?.id == sessionID else { return }
         let unavailableIDs = Set(agentDetections.filter { !$0.skillsDirectoryExists || !$0.readable }.map(\.agentID))
         // Keep the last observed entries visible with the verification failure until access is restored.
         agentFindings += priorFindings.filter { finding in
@@ -144,78 +167,30 @@ extension SkillsHubLibraryController {
                 && !agentFindings.contains(where: { $0.id == finding.id })
         }
         for agent in [AgentKind.codex, .claudeCode] {
-            let status = inspectDefaultAgentDirectory(agent)
-            if status == .manageable {
-                do {
-                    try await auditAgentDirectory(agentID: agent.rawValue)
-                    defaultAgentDirectoryRefresh[agent] = .manageable
-                } catch {
-                    defaultAgentDirectoryRefresh[agent] = .unverifiable
-                    handle(error)
-                }
-            } else {
-                defaultAgentDirectoryRefresh[agent] = status
-                if status != .otherDirectoryConfigured {
-                    agentDirectoryAuditFailures[agent.rawValue] = "Agent directory has not been verified."
-                }
+            let target = agentPathResolver.globalSkillsDirectory(
+                for: agent, environment: agentEnvironment, homeDirectory: agentHomeDirectory
+            ).standardizedFileURL
+            let configuration = agentConfigurations.first { $0.id == agent.rawValue }
+            guard configuration.map(configuredSkillsDirectory(for:)) == target else {
+                defaultAgentDirectoryRefresh[agent] = .otherDirectoryConfigured
+                continue
             }
+            do { try await auditAgentDirectory(agentID: agent.rawValue) }
+            catch is CancellationError { return }
+            catch { /* The audit stores the failure on the Agent. */ }
+            guard self.rootURL == rootURL, rootSessionLease?.id == sessionID else { return }
+            defaultAgentDirectoryRefresh[agent] = defaultAgentStatusAfterAudit(agent.rawValue)
         }
     }
 
-    private func inspectDefaultAgentDirectory(_ agent: AgentKind) -> AgentDefaultDirectoryRefreshStatus {
-        let target = agentPathResolver.globalSkillsDirectory(
-            for: agent, environment: agentEnvironment, homeDirectory: agentHomeDirectory
-        ).standardizedFileURL
-        if resolvedAgentSkillsDirectory(for: agent).standardizedFileURL != target {
-            return .otherDirectoryConfigured
+    func defaultAgentStatusAfterAudit(_ agentID: String) -> AgentDefaultDirectoryRefreshStatus {
+        switch agentDirectoryAccessFailures[agentID] {
+        case .directoryMissing: .missing
+        case .authorizationRequired: .authorizationRequired
+        case .directoryReplaced, .accessFailed: .unverifiable
+        case nil:
+            agentDirectoryAuditFailures[agentID] == nil ? .manageable : .unverifiable
         }
-        if let configured = agentConfigurations.first(where: { $0.id == agent.rawValue })?.skillsDirectory,
-           URL(fileURLWithPath: configured, isDirectory: true).standardizedFileURL != target {
-            return .otherDirectoryConfigured
-        }
-        var node = stat()
-        if lstat(target.path, &node) == -1 {
-            return errno == ENOENT ? .missing : .unverifiable
-        }
-        if node.st_mode & mode_t(S_IFMT) == mode_t(S_IFLNK) {
-            return .unverifiable
-        }
-        let authorization: StartupAccessBookmarkResolution
-        do {
-            guard let resolved = try startupAccessStore.resolveAccess(to: target) else {
-                return .authorizationRequired
-            }
-            authorization = resolved
-        } catch {
-            return .unverifiable
-        }
-        guard !authorization.isStale,
-              authorization.url.standardizedFileURL == target else {
-            return .unverifiable
-        }
-        let lease: SecurityScopedAccessLease
-        do {
-            lease = try securityScopedAccessProvider.acquire(
-                url: authorization.url,
-                owner: .agentTarget(actionID: UUID(), agent: agent)
-            )
-        } catch {
-            return .unverifiable
-        }
-        defer { _ = lease.end(by: lease.owner) }
-        guard !FileAccessService(fileManager: fileManager).isSymlink(target) else {
-            return .unverifiable
-        }
-        guard isDirectory(target) else {
-            return .unverifiable
-        }
-        let qualification = AgentTargetQualifier().qualify(
-            agent: agent,
-            detected: false,
-            candidates: [target],
-            authorization: authorization
-        )
-        return qualification.allowsManagedWrite ? .manageable : .unverifiable
     }
 
     var agentConfigurations: [AgentConfigurationRecord] {
@@ -249,30 +224,39 @@ extension SkillsHubLibraryController {
         _ descriptor: InstalledAgentDescriptor
     ) -> AgentCapabilityPresentation {
         if let capability = agentCapabilitySnapshot[descriptor.id] { return capability }
+        var capability = unverifiedAgentCapability(descriptor)
+        capability.unavailableReason = agentDirectoryFailure(descriptor.id)?.template
+            ?? (isRefreshingPresentation ? "Checking…" : "Agent directory has not been verified.")
+        return capability
+    }
+
+    func observedAgentCapability(
+        _ descriptor: InstalledAgentDescriptor, target: URL, access: Result<SecurityScopedAccessLease, any Error>
+    ) -> AgentCapabilityPresentation {
+        switch access {
+        case .success(let lease):
+            let authorization = StartupAccessBookmarkResolution(url: lease.url, isStale: false)
+            let qualifier = AgentTargetQualifier()
+            let qualification = if let agent = descriptor.agent {
+                qualifier.qualify(agent: agent, detected: descriptor.isDetected, candidates: [target], authorization: authorization)
+            } else {
+                qualifier.qualify(customAgentID: descriptor.id, detected: descriptor.isDetected, candidates: [target], authorization: authorization)
+            }
+            return capabilityPresentation(for: descriptor, qualification: qualification)
+        case .failure(let error):
+            var capability = unverifiedAgentCapability(descriptor)
+            capability.unavailableReason = agentDirectoryAccessFailure(for: error).message.template
+            return capability
+        }
+    }
+
+    private func unverifiedAgentCapability(_ descriptor: InstalledAgentDescriptor) -> AgentCapabilityPresentation {
         let qualifier = AgentTargetQualifier()
         let qualification = if let agent = descriptor.agent {
             qualifier.qualify(agent: agent, detected: descriptor.isDetected, candidates: [], authorization: nil)
         } else {
             qualifier.qualify(customAgentID: descriptor.id, detected: descriptor.isDetected, candidates: [], authorization: nil)
         }
-        var capability = capabilityPresentation(
-            for: descriptor,
-            qualification: qualification
-        )
-        capability.unavailableReason = "Checking…"
-        return capability
-    }
-
-    // Observation consumers requalify current facts; display snapshots never authorize a write.
-    func inspectAgentCapabilityPresentation(_ descriptor: InstalledAgentDescriptor) async throws -> AgentCapabilityPresentation {
-        let target = descriptor.skillsDirectory.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL }
-            ?? descriptor.agent.map { resolvedAgentSkillsDirectory(for: $0).standardizedFileURL }
-        let targets = target.map { [descriptor.id: $0] } ?? [:]
-        let authorizations = try await startupAccessStore.resolvePresentationAccess(to: Array(targets.values))
-        let result = try await Self.observePresentation(root: nil, items: [], descriptors: [descriptor],
-            targets: targets, detections: Set(agentDetections.filter(\.detected).map(\.agentID)),
-            authorizations: authorizations, fileManager: fileManager, iconPaths: [], observations: [], assets: [:])
-        guard let qualification = result.qualifications[descriptor.id] else { throw CancellationError() }
         return capabilityPresentation(for: descriptor, qualification: qualification)
     }
 
@@ -294,7 +278,22 @@ extension SkillsHubLibraryController {
     }
 
     func relationPresentations(for skill: InstalledSkill) -> [AgentRelationPresentation] {
-        visibleInstalledAgentDescriptors.map { descriptor in
+        relationPresentations(for: skill, agents: visibleInstalledAgentDescriptors)
+    }
+
+    func skillRelationPresentations(for skill: InstalledSkill) -> [AgentRelationPresentation] {
+        relationPresentations(for: skill, agents: visibleInstalledAgentDescriptors.filter(\.isVisibleInSkillDetail))
+    }
+
+    func enabledAgentCount(for assetID: UUID) -> Int {
+        visibleInstalledAgentDescriptors.count { descriptor in
+            let relation = AgentRelationIdentity(assetID: assetID, agentID: descriptor.id, scope: .global)
+            return presentationIntents[relation.id]?.isEnabled == true
+        }
+    }
+
+    private func relationPresentations(for skill: InstalledSkill, agents: [InstalledAgentDescriptor]) -> [AgentRelationPresentation] {
+        agents.map { descriptor in
             let relation = AgentRelationIdentity(
                 assetID: skill.assetID,
                 agentID: descriptor.id,
@@ -335,7 +334,7 @@ extension SkillsHubLibraryController {
                 verification: verification,
                 isInFlight: inFlightRelationActionIDs.contains(relation.id),
                 canPerformAction: capability.canManageRelations && directoryFailure == nil,
-                unavailableReason: capability.unavailableReason,
+                unavailableReason: directoryFailure == nil ? capability.unavailableReason : nil,
                 lastOutcome: result?.outcome,
                 safeNextStep: safeNextStep,
                 linkPath: currentObservation?.linkPath,
@@ -658,18 +657,72 @@ extension SkillsHubLibraryController {
         } ?? URL(fileURLWithPath: "", isDirectory: true)
     }
 
+    private func agentDirectoryIsMissing(_ target: URL) -> Bool {
+        var node = stat()
+        return lstat(target.path, &node) == -1 && (errno == ENOENT || errno == ENOTDIR)
+    }
+
+    private func validateAgentDirectoryIdentity(at target: URL, agentID: String) throws {
+        var node = stat()
+        guard lstat(target.path, &node) == 0 else {
+            let code = errno
+            if code == ENOENT || code == ENOTDIR { throw AgentTargetAccessError.qualificationFailed(.targetMissing) }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        let current = LinkNodeIdentity(node)
+        guard current.kind == S_IFDIR else {
+            throw SkillsHubLibraryFailure.invalidSource(current.kind == S_IFLNK
+                ? "The Agent skills target cannot be a symbolic link." : "The selected Agent skills target is not a directory.")
+        }
+        let previous = localState.targetObservations.lazy.filter {
+            $0.relation.agentID == agentID && $0.limitation == nil && $0.parentIdentity != nil
+                && URL(fileURLWithPath: $0.linkPath).deletingLastPathComponent().standardizedFileURL.path == target.path
+        }.max { $0.observedAt < $1.observedAt }
+        if let expected = previous?.parentIdentity, expected != current {
+            throw AgentTargetAccessError.directoryReplaced
+        }
+    }
+
+    func acquireAgentDirectoryLease(
+        at target: URL, agentID: String, owner: SecurityScopedAccessOwner,
+        resolve: () throws -> StartupAccessBookmarkResolution?
+    ) throws -> SecurityScopedAccessLease {
+        if agentDirectoryIsMissing(target) { throw AgentTargetAccessError.qualificationFailed(.targetMissing) }
+        let bookmark: StartupAccessBookmarkResolution?
+        do { bookmark = try resolve() }
+        catch let error as CocoaError where [.fileNoSuchFile, .fileReadNoSuchFile].contains(error.code) {
+            throw AgentTargetAccessError.qualificationFailed(.permissionRequired)
+        }
+        guard let bookmark else { throw AgentTargetAccessError.qualificationFailed(.permissionRequired) }
+        guard !bookmark.isStale else { throw AgentTargetAccessError.qualificationFailed(.bookmarkStale) }
+        guard bookmark.url.standardizedFileURL.path == target.path else {
+            throw AgentTargetAccessError.qualificationFailed(.authorizationTargetMismatch)
+        }
+        let lease: SecurityScopedAccessLease
+        do { lease = try securityScopedAccessProvider.acquire(url: bookmark.url, owner: owner) }
+        catch SecurityScopedAccessError.startDenied { throw AgentTargetAccessError.leaseUnavailable }
+        do { try validateAgentDirectoryIdentity(at: target, agentID: agentID) }
+        catch {
+            _ = lease.end(by: owner)
+            throw error
+        }
+        return lease
+    }
+
     func acquireAgentTargetAccess(agentID: String, actionID: UUID) throws -> AgentTargetAccess {
         guard let descriptor = visibleInstalledAgentDescriptors.first(where: { $0.id == agentID }),
               let path = descriptor.skillsDirectory else {
             throw ControllerRelationActionError.unsupportedAgent(agentID)
         }
         let target = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-        var node = stat()
-        if lstat(target.path, &node) == -1, errno == ENOENT || errno == ENOTDIR {
-            throw AgentTargetAccessError.qualificationFailed(.targetMissing)
+        let owner = descriptor.agent.map {
+            SecurityScopedAccessOwner.agentTarget(actionID: actionID, agent: $0)
+        } ?? .configuredAgentTarget(actionID: actionID, agentID: agentID)
+        let lease = try acquireAgentDirectoryLease(at: target, agentID: agentID, owner: owner) {
+            try startupAccessStore.resolveAccess(to: target)
         }
         let detection = agentDetections.first { $0.agentID == agentID }
-        let authorization = try startupAccessStore.resolveAccess(to: target)
+        let authorization = StartupAccessBookmarkResolution(url: lease.url, isStale: false)
         let qualification = if let agent = descriptor.agent {
             AgentTargetQualifier().qualify(
                 agent: agent,
@@ -686,23 +739,8 @@ extension SkillsHubLibraryController {
             )
         }
         if let failure = qualification.failure {
-            throw AgentTargetAccessError.qualificationFailed(failure)
-        }
-        guard qualification.target != nil, let authorization else {
-            throw AgentTargetAccessError.qualificationFailed(.targetMissing)
-        }
-        let owner = descriptor.agent.map {
-            SecurityScopedAccessOwner.agentTarget(actionID: actionID, agent: $0)
-        } ?? .configuredAgentTarget(actionID: actionID, agentID: agentID)
-        let lease: SecurityScopedAccessLease
-        do {
-            lease = try securityScopedAccessProvider.acquire(url: authorization.url, owner: owner)
-        } catch SecurityScopedAccessError.startDenied {
-            throw AgentTargetAccessError.leaseUnavailable
-        }
-        guard isDirectory(target) else {
             _ = lease.end(by: owner)
-            throw AgentTargetAccessError.qualificationFailed(.targetMissing)
+            throw AgentTargetAccessError.qualificationFailed(failure)
         }
         return AgentTargetAccess(
             qualification: qualification,

@@ -118,6 +118,7 @@ nonisolated struct SecurityScopedAccessProvider {
 nonisolated enum AgentTargetAccessError: Error, Equatable {
     case qualificationFailed(AgentTargetQualificationFailure)
     case leaseUnavailable
+    case directoryReplaced
 }
 
 nonisolated final class AgentTargetAccess: @unchecked Sendable {
